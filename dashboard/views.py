@@ -2548,6 +2548,641 @@ class UploadExcelViewRoche(View):
             print(traceback.format_exc())
             return {"error": f"⚠️ Error while rendering the Outbound tab: {e}"}
 
+    def filter_outbound_shipments(
+        self, request, selected_month=None, selected_months=None
+    ):
+        """
+        🔹 يقرأ من شيت Outbound1: Order Nbr, Customer Name, Create Timestamp, Customer City,
+           Order Type, Status, Ship Date.
+        🔹 يقرأ من شيت Outbound2: Packed Timestamp (الربط على Order Nbr).
+        🔹 Hit/Miss: من Packed Timestamp إلى Ship Date — لو ≤24 ساعة = Hit وإلا Miss.
+        🔹 يعيد نفس هيكل Inbound (stats, sub_tables, chart_data) لعرضه بنفس التمبلت.
+        """
+        try:
+            import os
+
+            excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
+            if not excel_path or not os.path.exists(excel_path):
+                return {
+                    "detail_html": "<p class='text-danger'>⚠️ Excel file not found.</p>",
+                    "sub_tables": [],
+                    "chart_data": [],
+                    "stats": {},
+                }
+
+            xls = pd.ExcelFile(excel_path, engine="openpyxl")
+
+            # طباعة أسماء الشيتات في الملف عشان نعرف مين موجود
+            print("\n[Outbound] أسماء الشيتات في ملف الإكسل:", xls.sheet_names)
+
+            # إيجاد شيت Outbound1 و Outbound2 (أي تسمية تحتوي على outbound + 1 أو 2)
+            outbound1_name = None
+            outbound2_name = None
+            for i, name in enumerate(xls.sheet_names):
+                low = name.lower().strip()
+                if "outbound" in low and (
+                    "1" in low or "one" in low or low == "outbound1"
+                ):
+                    outbound1_name = name
+                if "outbound" in low and (
+                    "2" in low or "two" in low or low == "outbound2"
+                ):
+                    outbound2_name = name
+            if not outbound1_name:
+                outbound1_name = next(
+                    (
+                        s
+                        for s in xls.sheet_names
+                        if "outbound" in s.lower() and "2" not in s.lower()
+                    ),
+                    None,
+                )
+            if not outbound2_name:
+                outbound2_name = next(
+                    (
+                        s
+                        for s in xls.sheet_names
+                        if "outbound" in s.lower() and "1" not in s.lower()
+                    ),
+                    None,
+                )
+            # لو لسه مفيش Outbound2: نجرب أي شيت فيه عمود Packed Timestamp (أو Packed) + Order Nbr
+            if not outbound2_name and outbound1_name:
+                for sheet in xls.sheet_names:
+                    if sheet == outbound1_name:
+                        continue
+                    try:
+                        probe = pd.read_excel(
+                            excel_path, sheet_name=sheet, engine="openpyxl", nrows=2
+                        )
+                        probe.columns = probe.columns.astype(str).str.strip()
+                        has_order = any(
+                            "order" in c.lower() and "nbr" in c.lower()
+                            for c in probe.columns
+                        ) or any("order nbr" in c.lower() for c in probe.columns)
+                        has_packed = any("packed" in c.lower() for c in probe.columns)
+                        if has_order and has_packed:
+                            outbound2_name = sheet
+                            print(
+                                f"[Outbound] تم استخدام الشيت '{sheet}' كـ Outbound2 (فيه Order Nbr + Packed)"
+                            )
+                            break
+                    except Exception:
+                        continue
+            if not outbound2_name and outbound1_name:
+                print(
+                    "[Outbound] ⚠️ لم يتم العثور على شيت Outbound2. تأكدي أن اسم الشيت يحتوي على 'outbound' و '2' أو أن فيه عمود Packed Timestamp و Order Nbr."
+                )
+
+            if not outbound1_name:
+                return {
+                    "detail_html": "<p class='text-warning'>⚠️ Sheet 'Outbound1' (or similar) not found.</p>",
+                    "sub_tables": [],
+                    "chart_data": [],
+                    "stats": {},
+                }
+
+            df1 = pd.read_excel(
+                excel_path, sheet_name=outbound1_name, engine="openpyxl"
+            )
+            df1.columns = df1.columns.astype(str).str.strip()
+
+            def find_col(df, candidates):
+                for c in df.columns:
+                    if str(c).strip().lower() in [x.lower() for x in candidates]:
+                        return c
+                for cand in candidates:
+                    for c in df.columns:
+                        if cand.lower() in str(c).lower():
+                            return c
+                return None
+
+            # Outbound1 columns
+            order_nbr_col = find_col(
+                df1, ["Order Nbr", "Order Nbr.", "Order Number", "Order No", "Order #"]
+            )
+            customer_col = find_col(df1, ["Customer Name", "Customer"])
+            create_ts_col = find_col(
+                df1, ["Create Timestamp", "Create Date", "Order Date", "Created"]
+            )
+            city_col = find_col(df1, ["Customer City", "City"])
+            order_type_col = find_col(df1, ["Order Type", "Type"])
+            status_col = find_col(df1, ["Status"])
+            ship_date_col = find_col(
+                df1, ["Ship Date", "Shipment Date", "Shipped Date"]
+            )
+
+            required_ob1 = [
+                order_nbr_col,
+                customer_col,
+                create_ts_col,
+                status_col,
+                ship_date_col,
+            ]
+            if not all(required_ob1):
+                return {
+                    "detail_html": "<p class='text-danger'>⚠️ Outbound1: missing required columns (Order Nbr, Customer Name, Create Timestamp, Status, Ship Date).</p>",
+                    "sub_tables": [],
+                    "chart_data": [],
+                    "stats": {},
+                }
+
+            rename_ob1 = {
+                order_nbr_col: "Order Nbr",
+                customer_col: "Customer Name",
+                create_ts_col: "Create Timestamp",
+                status_col: "Status",
+                ship_date_col: "Ship Date",
+            }
+            if city_col and city_col in df1.columns:
+                rename_ob1[city_col] = "Customer City"
+            if order_type_col and order_type_col in df1.columns:
+                rename_ob1[order_type_col] = "Order Type"
+            df1 = df1.rename(columns=rename_ob1)
+            if "Customer City" not in df1.columns:
+                df1["Customer City"] = ""
+            if "Order Type" not in df1.columns:
+                df1["Order Type"] = ""
+
+            for dt_col in ["Create Timestamp", "Ship Date"]:
+                if dt_col in df1.columns:
+                    df1[dt_col] = pd.to_datetime(df1[dt_col], errors="coerce")
+
+            df1["Order Nbr"] = df1["Order Nbr"].astype(str).str.strip()
+            df1["Status"] = df1["Status"].astype(str).str.strip()
+
+            # مفتاح ربط موحّد (يحل اختلاف التنسيق مثل 001 vs 1)
+            def _order_key(ser):
+                def _norm(v):
+                    s = str(v).strip()
+                    try:
+                        return str(int(float(s)))
+                    except (ValueError, TypeError):
+                        return s
+
+                return ser.astype(str).str.strip().apply(_norm)
+
+            # Outbound2: Packed Timestamp + key to join (Order Nbr)
+            packed_series = None
+            if outbound2_name:
+                df2 = pd.read_excel(
+                    excel_path, sheet_name=outbound2_name, engine="openpyxl"
+                )
+                df2.columns = df2.columns.astype(str).str.strip()
+                order_nbr_col2 = find_col(
+                    df2,
+                    ["Order Nbr", "Order Nbr.", "Order Number", "Order No", "Order #"],
+                )
+                packed_col = find_col(
+                    df2, ["Packed Timestamp", "Packed Date", "Packed", "Packed Time"]
+                )
+                if order_nbr_col2 and packed_col:
+                    df2 = df2[[order_nbr_col2, packed_col]].copy()
+                    df2.columns = ["Order Nbr", "Packed Timestamp"]
+                    df2["Order Nbr"] = df2["Order Nbr"].astype(str).str.strip()
+                    df2["Packed Timestamp"] = pd.to_datetime(
+                        df2["Packed Timestamp"], errors="coerce"
+                    )
+                    # إزالة التكرار في Order Nbr عشان الـ map يشتغل (نحتفظ بأول صف لكل Order Nbr)
+                    df2_unique = df2.drop_duplicates(subset=["Order Nbr"], keep="first")
+                    packed_series = df2_unique.set_index("Order Nbr")[
+                        "Packed Timestamp"
+                    ]
+                    df1["Packed Timestamp"] = df1["Order Nbr"].map(packed_series)
+                    # طباعة عينة من Outbound2 للتأكد من الداتا
+                    print("\n[Outbound2] عينة من الشيت — Order Nbr و Packed Timestamp:")
+                    for idx, r in df2.head(8).iterrows():
+                        print(
+                            f"  Order Nbr: {r['Order Nbr']!r}  |  Packed: {r['Packed Timestamp']}"
+                        )
+                    print(f"  عدد صفوف Outbound2: {len(df2)}\n")
+                    # لو معظم القيم فاضية، نجرب المفتاح الموحّد (مثلاً 1 و 001 يتطابقان)
+                    if df1["Packed Timestamp"].notna().sum() < len(df1) // 2:
+                        df2["_ok"] = _order_key(df2["Order Nbr"])
+                        packed_by_ok = df2.drop_duplicates(
+                            subset=["_ok"], keep="first"
+                        ).set_index("_ok")["Packed Timestamp"]
+                        df1["_ok"] = _order_key(df1["Order Nbr"])
+                        df1["Packed Timestamp"] = df1["Packed Timestamp"].fillna(
+                            df1["_ok"].map(packed_by_ok)
+                        )
+                        df1.drop(columns=["_ok"], inplace=True, errors="ignore")
+                else:
+                    df1["Packed Timestamp"] = pd.NaT
+            else:
+                df1["Packed Timestamp"] = pd.NaT
+
+            if "Packed Timestamp" not in df1.columns:
+                df1["Packed Timestamp"] = pd.NaT
+
+            # طباعة في الترمينال: نتيجة الربط مع Outbound2
+            packed_filled = df1["Packed Timestamp"].notna().sum()
+            print("\n" + "=" * 70)
+            print("Outbound — نتيجة الربط (Packed Timestamp من Outbound2)")
+            print("=" * 70)
+            print(f"  إجمالي الصفوف (Outbound1): {len(df1)}")
+            print(f"  صفوف فيها Packed Timestamp غير فاضي: {packed_filled}")
+            print(f"  صفوف فاضية (مفيش ربط): {len(df1) - packed_filled}")
+            if outbound2_name:
+                print(f"  شيت Outbound2 المستخدم: {outbound2_name}")
+            else:
+                print("  ⚠️ مفيش شيت Outbound2 تم استخدامه")
+            print("  عينة من df1 (Order Nbr | Packed Timestamp | Ship Date):")
+            for i, row in df1.head(10).iterrows():
+                pt = row.get("Packed Timestamp")
+                pt_str = str(pt)[:19] if pd.notna(pt) and pt is not pd.NaT else "(فاضي)"
+                sd = row.get("Ship Date")
+                sd_str = str(sd)[:19] if pd.notna(sd) and sd is not pd.NaT else "(فاضي)"
+                print(
+                    f"    Order Nbr: {row.get('Order Nbr')!r}  |  Packed: {pt_str}  |  Ship: {sd_str}"
+                )
+            print("=" * 70 + "\n")
+
+            # لو لسه فاضي: نجرب نأخذ Packed من Outbound1 لو العمود موجود فيه
+            if df1["Packed Timestamp"].isna().all():
+                packed_in_ob1 = find_col(
+                    df1, ["Packed Timestamp", "Packed Date", "Packed", "Packed Time"]
+                )
+                if packed_in_ob1 and packed_in_ob1 in df1.columns:
+                    df1["Packed Timestamp"] = pd.to_datetime(
+                        df1[packed_in_ob1], errors="coerce"
+                    )
+
+            # ========== علاقة Outbound1 و Outbound2 — حساب Hit/Miss ==========
+            # المقارنة: Ship Date (من Outbound1) مع Packed Timestamp (من Outbound2).
+            # الفرق = كم يوم/ساعة من التعبئة (Packed) لحد الشحن (Ship).
+            #   • لو الفرق ≤ يوم واحد (أو ≤ 24 ساعة) → Hit
+            #   • لو الفرق > يوم واحد (أو > 24 ساعة) → Miss
+            #   • لو Packed Timestamp ناقص (مفيش ربط) → Pending
+            # ==========
+            # الفرق بالساعات: Ship Date - Packed Timestamp
+            df1["Cycle Hours"] = (
+                (df1["Ship Date"] - df1["Packed Timestamp"])
+                .dt.total_seconds()
+                .div(3600)
+            )
+            df1["Cycle Hours"] = df1["Cycle Hours"].round(2)
+            # الفرق بالأيام (للعرض في الجدول)
+            df1["Cycle Days"] = (df1["Cycle Hours"] / 24).round(2)
+            # Hit = فرق ≤ 24 ساعة (يعني ≤ يوم واحد)، Miss = أكتر من 24 ساعة
+            df1["is_hit"] = df1["Cycle Hours"].le(24) & df1["Cycle Hours"].notna()
+            df1["HIT or MISS"] = np.where(df1["is_hit"], "Hit", "Miss")
+            df1.loc[df1["Cycle Hours"].isna(), "HIT or MISS"] = "Pending"
+
+            # الشهر من Ship Date أو Create Timestamp
+            month_source = df1["Ship Date"].copy()
+            month_source = month_source.fillna(df1["Create Timestamp"])
+            df1["Month"] = month_source.dt.strftime("%b")
+
+            # فلتر الشهر
+            selected_months_norm = []
+            if selected_months:
+                if isinstance(selected_months, str):
+                    selected_months = [selected_months]
+                for m in selected_months:
+                    norm = self.normalize_month_label(m)
+                    if norm and norm not in selected_months_norm:
+                        selected_months_norm.append(norm)
+            selected_month_norm = (
+                self.normalize_month_label(selected_month)
+                if selected_month and not selected_months_norm
+                else None
+            )
+            if selected_months_norm:
+                df1 = df1[
+                    df1["Month"]
+                    .fillna("")
+                    .str.lower()
+                    .isin([m.lower() for m in selected_months_norm])
+                ]
+            elif selected_month_norm:
+                df1 = df1[
+                    df1["Month"].fillna("").str.lower() == selected_month_norm.lower()
+                ]
+
+            if df1.empty:
+                return {
+                    "detail_html": "<p class='text-warning'>⚠️ No outbound records for the selected period.</p>",
+                    "sub_tables": [],
+                    "chart_data": [],
+                    "stats": {},
+                }
+
+            df_summary = df1.dropna(subset=["Month"]).copy()
+            if df_summary.empty:
+                return {
+                    "detail_html": "<p class='text-warning'>⚠️ No valid month values in outbound data.</p>",
+                    "sub_tables": [],
+                    "chart_data": [],
+                    "stats": {},
+                }
+
+            def month_order_value(label):
+                if not label:
+                    return 999
+                label = str(label).strip()[:3].title()
+                for idx in range(1, 13):
+                    if month_abbr[idx] == label:
+                        return idx
+                return 999
+
+            total_per_month = (
+                df_summary.groupby("Month")["Order Nbr"]
+                .nunique()
+                .reset_index(name="Total_Shipments")
+            )
+            hits_df = (
+                df_summary[df_summary["is_hit"]]
+                .groupby("Month")["Order Nbr"]
+                .nunique()
+                .reset_index(name="Hits")
+            )
+            summary_df = total_per_month.merge(hits_df, on="Month", how="left")
+            summary_df["Hits"] = summary_df["Hits"].fillna(0).astype(int)
+            summary_df["Misses"] = summary_df["Total_Shipments"] - summary_df["Hits"]
+            summary_df["Hit %"] = (
+                summary_df["Hits"]
+                / summary_df["Total_Shipments"].replace(0, np.nan)
+                * 100
+            )
+            summary_df["Hit %"] = summary_df["Hit %"].fillna(0).round(2)
+            summary_df = summary_df.sort_values(
+                by="Month", key=lambda col: col.map(month_order_value)
+            )
+
+            months_with_miss = summary_df[summary_df["Misses"] > 0]["Month"].tolist()
+            months_with_hit_only_ob = summary_df[summary_df["Misses"] == 0][
+                "Month"
+            ].tolist()
+            ordered_months = months_with_miss + months_with_hit_only_ob
+
+            kpi_rows = []
+            for _, row in summary_df.iterrows():
+                m = row["Month"]
+                kpi_rows.append(
+                    {
+                        "Month": m,
+                        "Total Shipments": int(row["Total_Shipments"]),
+                        "Hit (≤24h)": int(row["Hits"]),
+                        "Miss (>24h)": int(row["Misses"]),
+                        "Hit %": float(row["Hit %"]),
+                    }
+                )
+
+            pivot_cols = ["KPI"] + ordered_months
+            if len(ordered_months) >= 2:
+                pivot_cols.append("2025")
+
+            hit_pct_row = {"KPI": "Hit %"}
+            total_row = {"KPI": "Total Shipments"}
+            hit_row = {"KPI": "Hit (≤24h)"}
+            miss_row = {"KPI": "Miss (>24h)"}
+            for m in ordered_months:
+                r = next((x for x in kpi_rows if x["Month"] == m), None)
+                if r:
+                    total_val = int(r["Total Shipments"])
+                    hit_val = int(r["Hit (≤24h)"])
+                    miss_val = int(r["Miss (>24h)"])
+                    total_row[m] = total_val
+                    hit_row[m] = hit_val
+                    miss_row[m] = miss_val
+                    hit_pct_row[m] = (
+                        int(round(hit_val / total_val * 100)) if total_val > 0 else 0
+                    )
+            if "2025" in pivot_cols:
+                total_2025 = sum(r["Total Shipments"] for r in kpi_rows)
+                hit_2025 = sum(r["Hit (≤24h)"] for r in kpi_rows)
+                hit_pct_row["2025"] = (
+                    int(round(hit_2025 / total_2025 * 100)) if total_2025 > 0 else 0
+                )
+                total_row["2025"] = int(sum(r["Total Shipments"] for r in kpi_rows))
+                hit_row["2025"] = int(sum(r["Hit (≤24h)"] for r in kpi_rows))
+                miss_row["2025"] = int(sum(r["Miss (>24h)"] for r in kpi_rows))
+
+            summary_data_pivot = [hit_pct_row, total_row, hit_row, miss_row]
+            summary_columns = pivot_cols
+            summary_data = summary_data_pivot
+
+            overall_total = int(df1.shape[0])
+            overall_hits = int(df1["is_hit"].sum())
+            overall_miss = overall_total - overall_hits
+            overall_hit_pct = (
+                round((overall_hits / overall_total) * 100, 2) if overall_total else 0
+            )
+
+            chart_data = []
+            hit_pct_for_chart = next(
+                (r for r in summary_data if r.get("KPI") == "Hit %"), None
+            )
+            if hit_pct_for_chart:
+                data_points = [
+                    {"label": m, "y": float(hit_pct_for_chart.get(m, 0))}
+                    for m in ordered_months
+                    if hit_pct_for_chart.get(m) is not None
+                ]
+                if "2025" in hit_pct_for_chart:
+                    data_points.append(
+                        {"label": "2025", "y": float(hit_pct_for_chart["2025"])}
+                    )
+                chart_data.append(
+                    {
+                        "type": "column",
+                        "name": "Outbound Hit %",
+                        "color": "#74c0fc",
+                        "related_table": "sub-table-outbound-hit-summary",
+                        "dataPoints": data_points,
+                    }
+                )
+
+            months_with_miss_label = (
+                " — Months with Miss: " + ", ".join(months_with_miss)
+                if months_with_miss
+                else " — All months Hit"
+            )
+            summary_table = {
+                "id": "sub-table-outbound-hit-summary",
+                "title": "Outbound KPI ≤ 24h" + months_with_miss_label,
+                "columns": summary_columns,
+                "data": summary_data,
+                "chart_data": chart_data,
+                "months_with_miss": months_with_miss,
+                "months_with_hit_only": months_with_hit_only_ob,
+            }
+
+            # جدول التفاصيل: الأعمدة المطلوبة
+            detail_columns = [
+                "Customer Name",
+                "Create Timestamp",
+                "Customer City",
+                "Order Type",
+                "Status",
+                "Packed Timestamp",
+                "Ship Date",
+                "Days",
+                "Month",
+                "HIT or MISS",
+            ]
+
+            detail_df = df1.copy()
+            detail_df["_sort_ts"] = detail_df["Ship Date"]
+
+            def _fmt_date(x):
+                if pd.isna(x) or x is pd.NaT:
+                    return ""
+                try:
+                    return pd.Timestamp(x).strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    return ""
+
+            for col in ["Create Timestamp", "Ship Date", "Packed Timestamp"]:
+                if col in detail_df.columns:
+                    detail_df[col] = detail_df[col].apply(_fmt_date)
+                else:
+                    detail_df[col] = ""
+
+            detail_df["Days"] = detail_df["Cycle Days"].apply(
+                lambda x: "" if pd.isna(x) else str(int(np.ceil(float(x))))
+            )
+
+            for col in detail_columns:
+                if col not in detail_df.columns:
+                    detail_df[col] = ""
+
+            drop_cols = [
+                c
+                for c in [
+                    "_sort_ts",
+                    "Cycle Hours",
+                    "Cycle Days",
+                    "is_hit",
+                    "Order Nbr",
+                ]
+                if c in detail_df.columns
+            ]
+            detail_rows_raw = (
+                detail_df.sort_values("_sort_ts", ascending=False)
+                .drop(columns=drop_cols)
+                .head(500)[detail_columns]
+                .to_dict(orient="records")
+            )
+
+            def _to_blank(val):
+                if val is None:
+                    return ""
+                if isinstance(val, float) and (pd.isna(val) or (val != val)):
+                    return ""
+                s = str(val).strip()
+                if s.lower() in ("nan", "nat", "none", "<nat>"):
+                    return ""
+                return s
+
+            detail_rows = [
+                {k: _to_blank(v) for k, v in row.items()} for row in detail_rows_raw
+            ]
+
+            # طباعة بيانات جدول Outbound Shipments Detail في الترمينال (مع Packed Timestamp)
+            print("\n" + "=" * 90)
+            print(
+                "Outbound Shipments Detail — بيانات الجدول المرسلة للقالب (أول 15 صف)"
+            )
+            print("=" * 90)
+            print("  الأعمدة:", detail_columns)
+            print("-" * 90)
+            for i, row in enumerate(detail_rows[:15], 1):
+                packed_val = row.get("Packed Timestamp", "")
+                ship_val = row.get("Ship Date", "")
+                cust = row.get("Customer Name", "")[:25]
+                print(
+                    f"  {i:2d} | Customer: {cust:25s} | Packed Timestamp: {str(packed_val):20s} | Ship Date: {str(ship_val):20s} | HIT or MISS: {row.get('HIT or MISS', '')}"
+                )
+            print("-" * 90)
+            print(f"  إجمالي الصفوف في الجدول: {len(detail_rows)}")
+            print("=" * 90 + "\n")
+
+            detail_df_for_options = detail_df.sort_values(
+                "_sort_ts", ascending=False
+            ).drop(columns=[c for c in drop_cols if c in detail_df.columns])
+            facility_options = sorted(
+                detail_df_for_options["Customer Name"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .replace("", None)
+                .dropna()
+                .unique()
+                .tolist()
+            )
+            status_options = sorted(
+                detail_df_for_options["Status"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .replace("", None)
+                .dropna()
+                .unique()
+                .tolist()
+            )
+            month_options = sorted(
+                detail_df_for_options["Month"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .replace("", None)
+                .dropna()
+                .unique()
+                .tolist()
+            )
+            city_options = sorted(
+                detail_df_for_options["Customer City"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .replace("", None)
+                .dropna()
+                .unique()
+                .tolist()
+            )
+            hit_miss_options = ["Hit", "Miss", "Pending"]
+
+            detail_table = {
+                "id": "sub-table-outbound-detail",
+                "title": "Outbound Shipments Detail",
+                "columns": detail_columns,
+                "data": detail_rows,
+                "chart_data": [],
+                "full_width": True,
+                "filter_options": {
+                    "facility_codes": facility_options,
+                    "statuses": status_options,
+                    "months": month_options,
+                    "customer_cities": city_options,
+                    "hit_miss": hit_miss_options,
+                },
+            }
+
+            return {
+                "detail_html": "",
+                "sub_tables": [summary_table, detail_table],
+                "chart_data": chart_data,
+                "stats": {
+                    "total": overall_total,
+                    "hit": overall_hits,
+                    "miss": overall_miss,
+                    "hit_pct": overall_hit_pct,
+                },
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(traceback.format_exc())
+            return {
+                "detail_html": f"<p class='text-danger'>⚠️ Error processing outbound shipments: {e}</p>",
+                "sub_tables": [],
+                "chart_data": [],
+                "stats": {},
+            }
+
     def filter_inbound(self, request, selected_month=None, selected_months=None):
         """
         🔹 يحسب KPI لشحنات الـ Inbound (≤24 ساعة بين Create Timestamp و Last LPN Rcv TS).
@@ -2942,6 +3577,7 @@ class UploadExcelViewRoche(View):
                 "Offloading Date",
                 "Last LPN Rcv TS",
                 "Days",
+                "Month",
                 "HIT or MISS",
             ]
 
@@ -3006,6 +3642,42 @@ class UploadExcelViewRoche(View):
                 {k: _to_blank(v) for k, v in row.items()} for row in detail_rows_raw
             ]
 
+            # خيارات الفلاتر لجدول Inbound Shipments Detail (من كل البيانات قبل head(500))
+            detail_df_for_options = detail_df.sort_values(
+                "_sort_ts", ascending=False
+            ).drop(columns=[c for c in drop_cols if c in detail_df.columns])
+            facility_options = sorted(
+                detail_df_for_options["Facility Code"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .replace("", None)
+                .dropna()
+                .unique()
+                .tolist()
+            )
+            status_options = sorted(
+                detail_df_for_options["Status"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .replace("", None)
+                .dropna()
+                .unique()
+                .tolist()
+            )
+            month_options = sorted(
+                detail_df_for_options["Month"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .replace("", None)
+                .dropna()
+                .unique()
+                .tolist()
+            )
+            hit_miss_options = ["Hit", "Miss", "Pending"]
+
             months_with_miss_label = (
                 " — Months with Miss: " + ", ".join(months_with_miss)
                 if months_with_miss
@@ -3043,6 +3715,12 @@ class UploadExcelViewRoche(View):
                 "data": detail_rows,
                 "chart_data": [],
                 "full_width": True,
+                "filter_options": {
+                    "facility_codes": facility_options,
+                    "statuses": status_options,
+                    "months": month_options,
+                    "hit_miss": hit_miss_options,
+                },
             }
 
             # طباعة جدول Inbound Shipments Detail في الترمينال
@@ -3942,88 +4620,27 @@ class UploadExcelViewRoche(View):
         self, request, selected_month=None, selected_months=None
     ):
         """
-        🔹 عرض 3 شيتات:
-            1️⃣ Rejection
-            2️⃣ Rejection breakdown
-            3️⃣ Return
-        🔹 الجداول تُعرض كما في الشيت (القيم، النسب، التنسيق كما هو)
-        🔹 شارت دائري يعرض نسب Booking orders من شيت Rejection
+        تاب Return & Refusal: عرض جدول Return فقط من شيت Inbound (Shipment Type = RMA).
+        بدون Rejection / Rejection breakdown / شارت — جدول فقط بعرض الصفحة.
         """
         import pandas as pd
         import os
         from django.template.loader import render_to_string
 
-        print("🟣 [DEBUG] ✅ دخل على filter_rejections_combined()")
-
         try:
             excel_path = self.get_excel_path()
-            print("📁 [DEBUG] excel_path:", excel_path)
-
             if not excel_path or not os.path.exists(excel_path):
-                print("❌ [DEBUG] لم يتم العثور على ملف Excel.")
                 return {
                     "detail_html": "<p class='text-danger'>⚠️ Excel file not found.</p>",
                     "chart_data": [],
                     "count": 0,
                 }
 
-            # ✅ قراءة الملف
             xls = pd.ExcelFile(excel_path, engine="openpyxl")
             sheet_names = [s.strip() for s in xls.sheet_names]
-            print("🧾 [DEBUG] الشيتات الموجودة:", sheet_names)
-
             sub_tables = []
             chart_data = []
-            color_palette = [
-                "#007fa3",
-                "#ff4d4d",
-                "#ffa500",
-                "#28a745",
-                "#6f42c1",
-                "#17a2b8",
-                "#ffc107",
-                "#fd7e14",
-                "#20c997",
-                "#6610f2",
-                "#e83e8c",
-                "#343a40",
-            ]
 
-            sheets_to_show = ["Rejection", "Rejection breakdown", "Return"]
-
-            # دالة لتحويل القيم الرقمية إلى نسب مئوية نصية (للعرض فقط)
-            # دالة لتحويل القيم الرقمية إلى نسب مئوية نصية (بدون كسور)
-            def to_percentage_display(val):
-                """تحويل رقم مثل 0.06 إلى '6%' أو 0.085 إلى '9%' بدون كسور"""
-                if val is None or str(val).strip() == "":
-                    return ""
-                try:
-                    num = float(val)
-                    if num <= 1:
-                        num = num * 100
-                    # 🔹 تحويل إلى عدد صحيح بدون فواصل
-                    num_int = int(round(num))
-                    return f"{num_int}%"
-                except:
-                    return str(val)
-
-            # دالة للحصول على القيمة الرقمية للشارت فقط (كعدد صحيح)
-            def to_percentage_number(val):
-                """تحويل القيمة إلى int بين 0 و100 بشكل آمن"""
-                try:
-                    if val is None:
-                        return None
-                    val_str = str(val).replace("%", "").strip()
-                    if val_str == "":
-                        return None
-                    num = float(val_str)
-                    if num <= 1:
-                        num *= 100
-                    return int(round(num))
-                except Exception:
-                    return None
-
-            # 🔁 قراءة كل شيت متوقع
             selected_months_norm = []
             if selected_months:
                 if isinstance(selected_months, str):
@@ -4035,229 +4652,173 @@ class UploadExcelViewRoche(View):
                         seen.add(norm)
                         selected_months_norm.append(norm)
 
-            for expected_name in sheets_to_show:
-                matched_sheet = next(
-                    (s for s in sheet_names if expected_name.lower() in s.lower()), None
-                )
+            # ✅ جدول Return فقط من شيت Inbound: فلتر Shipment Type = RMA
+            return_columns_display = [
+                "Shipment Nbr",
+                "Shipment Type",
+                "Status",
+                "Create Timestamp",
+                "Arrival Date",
+                "Offloading Date",
+                "Last LPN Rcv TS",
+            ]
 
-                if not matched_sheet:
-                    print(f"⚠️ [DEBUG] الشيت {expected_name} غير موجود.")
-                    sub_tables.append(
-                        {
-                            "title": expected_name,
-                            "columns": [],
-                            "data": [],
-                            "error": f"Sheet '{expected_name}' not found",
-                        }
-                    )
-                    continue
+            def _normalize_col(val):
+                return re.sub(r"[^a-z0-9]", "", str(val).strip().lower())
 
-                print(f"📄 [DEBUG] قراءة الشيت: {matched_sheet}")
+            def _find_col(df, possible_names):
+                norm_map = {_normalize_col(c): c for c in df.columns}
+                for name in possible_names:
+                    n = _normalize_col(name)
+                    if n in norm_map:
+                        return norm_map[n]
+                for col in df.columns:
+                    if any(
+                        _normalize_col(name) in _normalize_col(col)
+                        for name in possible_names
+                    ):
+                        return col
+                return None
+
+            inbound_sheet = next(
+                (s for s in sheet_names if "inbound" in s.lower()), None
+            )
+            if inbound_sheet:
                 try:
-                    df = pd.read_excel(
+                    df_in = pd.read_excel(
                         excel_path,
-                        sheet_name=matched_sheet,
+                        sheet_name=inbound_sheet,
                         engine="openpyxl",
                         dtype=str,
                         header=0,
                     ).fillna("")
+                    df_in.columns = df_in.columns.astype(str).str.strip()
 
-                    df.columns = df.columns.astype(str).str.strip()
-
-                    # ✅ إعادة تسمية الأعمدة في شيت Rejection
-                    if "rejection" in matched_sheet.lower():
-                        column_rename_map = {}
-                        for col in df.columns:
-                            col_lower = col.lower().strip()
-                            if "normal orders" in col_lower:
-                                column_rename_map[col] = "Number of Rejection"
-                            elif "booking orders" in col_lower:
-                                column_rename_map[col] = "% of Rejection"
-                        if column_rename_map:
-                            df = df.rename(columns=column_rename_map)
-
-                    # ✅ فلترة الشهر المختار (لو موجود)
-                    if selected_month or selected_months_norm:
-                        selected_month_norm = self.normalize_month_label(selected_month)
-                        # البحث عن عمود Month في الشيت
-                        month_col_candidates = [
-                            c
-                            for c in df.columns
-                            if c.strip().lower()
-                            in ["month", "monthabbr", "month abbreviation"]
-                        ]
-                        active_filters = set()
-                        if selected_months_norm:
-                            active_filters = {m.lower() for m in selected_months_norm}
-                        elif selected_month_norm:
-                            active_filters = {selected_month_norm.lower()}
-
-                        if month_col_candidates and active_filters:
-                            month_col = month_col_candidates[0]
-
-                            def _normalize_cell(val):
-                                result = self.normalize_month_label(val)
-                                return result
-
-                            df["_normalized_month"] = df[month_col].apply(
-                                _normalize_cell
-                            )
-                            df = df[
-                                df["_normalized_month"].notna()
-                                & (
-                                    df["_normalized_month"]
-                                    .str.lower()
-                                    .isin(active_filters)
-                                )
-                            ]
-                            df = df.drop(columns=["_normalized_month"])
-                            print(
-                                f"🔍 [DEBUG Rejections] فلترة {matched_sheet} للشهور: {active_filters}, عدد الصفوف: {len(df)}"
-                            )
-
-                    # ✅ تعديل عرض عمود % of Rejection في شيت Rejection فقط
-                    if (
-                        "rejection" in matched_sheet.lower()
-                        and "% of Rejection" in df.columns
-                    ):
-                        df["% of Rejection"] = df["% of Rejection"].apply(
-                            to_percentage_display
-                        )
-
-                    # ✅ تجهيز صف التوتال وبيانات شارت Return (إن وجد)
-                    if "return" in matched_sheet.lower():
-                        month_names = [
-                            "jan",
-                            "feb",
-                            "mar",
-                            "apr",
-                            "may",
-                            "jun",
-                            "jul",
-                            "aug",
-                            "sep",
-                            "oct",
-                            "nov",
-                            "dec",
-                        ]
-                        month_cols = [
-                            c
-                            for c in df.columns
-                            if str(c).strip().lower() in month_names
-                        ]
-
-                        if month_cols:
-                            total_row = {col: "" for col in df.columns}
-                            key_col = df.columns[0] if len(df.columns) else None
-                            if key_col:
-                                total_row[key_col] = "Total"
-
-                            chart_points = []
-                            allowed_months = (
-                                set(m.lower() for m in selected_months_norm)
-                                if selected_months_norm
-                                else None
-                            )
-                            for idx, col in enumerate(month_cols):
-                                if (
-                                    allowed_months
-                                    and str(col).lower() not in allowed_months
-                                ):
-                                    continue
-                                numeric_series = (
-                                    pd.to_numeric(df[col], errors="coerce")
-                                    .fillna(0)
-                                    .astype(float)
-                                )
-                                df[col] = numeric_series.round().astype(int)
-                                total_value = int(numeric_series.sum().round())
-                                total_row[col] = total_value
-                                chart_points.append(
-                                    {
-                                        "label": col,
-                                        "y": total_value,
-                                        "color": color_palette[
-                                            idx % len(color_palette)
-                                        ],
-                                    }
-                                )
-
-                            df = pd.concat(
-                                [df, pd.DataFrame([total_row])], ignore_index=True
-                            )
-
-                            if chart_points:
-                                chart_data.append(
-                                    {
-                                        "type": "column",
-                                        "name": "Return Totals",
-                                        "dataPoints": chart_points,
-                                        "color": "#007fa3",
-                                        "related_table": matched_sheet,
-                                    }
-                                )
-
-                    # ✅ حفظ الجدول كما هو (نفس الأعمدة الأصلية)
-                    sub_tables.append(
-                        {
-                            "title": matched_sheet,
-                            "columns": df.columns.tolist(),
-                            "data": df.to_dict(orient="records"),
-                        }
+                    col_ship_nbr = _find_col(
+                        df_in, ["shipment nbr", "shipment number", "shipment no"]
+                    )
+                    col_ship_type = _find_col(
+                        df_in, ["shipment type", "shipmenttype", "type"]
+                    )
+                    col_status = _find_col(df_in, ["status", "shipment status"])
+                    col_create = _find_col(
+                        df_in, ["create timestamp", "created timestamp"]
+                    )
+                    col_arrival = _find_col(
+                        df_in, ["arrival date", "arrival timestamp"]
+                    )
+                    col_offload = _find_col(df_in, ["offloading date", "offload date"])
+                    col_last_lpn = _find_col(
+                        df_in, ["last lpn rcv ts", "last lpn receive ts"]
                     )
 
-                    # ✅ تجهيز بيانات الشارت (لكن بدون تعديل الجدول)
-                    if (
-                        "rejection" in matched_sheet.lower()
-                        and "% of Rejection" in df.columns
+                    if col_ship_type is not None:
+                        df_in = df_in[
+                            df_in[col_ship_type].astype(str).str.strip().str.upper()
+                            == "RMA"
+                        ]
+                    else:
+                        df_in = df_in.iloc[0:0]
+
+                    if not df_in.empty and all(
+                        [
+                            col_ship_nbr,
+                            col_status,
+                            col_create,
+                            col_arrival,
+                            col_offload,
+                            col_last_lpn,
+                        ]
                     ):
-                        chart_points = []
-                        allowed_labels = (
-                            set(m.lower() for m in selected_months_norm)
-                            if selected_months_norm
-                            else None
-                        )
-                        for i, row in df.iterrows():
-                            label = str(row.get("Month", f"Row {i + 1}")).strip()
-                            raw_val = row.get("% of Rejection", "")
-                            value = to_percentage_number(raw_val)
-                            if (
-                                allowed_labels
-                                and label
-                                and label.lower() not in allowed_labels
-                            ):
-                                continue
-                            if value is not None:  # ✅ تأكد أن القيمة ليست None
-                                chart_points.append(
-                                    {
-                                        "label": label or f"Row {i + 1}",
-                                        "y": value,
-                                        "color": color_palette[i % len(color_palette)],
+                        rename = {
+                            col_ship_nbr: "Shipment Nbr",
+                            col_status: "Status",
+                            col_create: "Create Timestamp",
+                            col_arrival: "Arrival Date",
+                            col_offload: "Offloading Date",
+                            col_last_lpn: "Last LPN Rcv TS",
+                        }
+                        if col_ship_type is not None:
+                            rename[col_ship_type] = "Shipment Type"
+                        df_in = df_in.rename(columns=rename)
+
+                        for c in return_columns_display:
+                            if c not in df_in.columns:
+                                df_in[c] = ""
+
+                        df_in = df_in[return_columns_display]
+                        if selected_month or selected_months_norm:
+                            month_col = _find_col(df_in, ["month", "create timestamp"])
+                            if month_col and month_col in df_in.columns:
+                                if selected_months_norm:
+                                    active = {
+                                        self.normalize_month_label(m)
+                                        for m in selected_months_norm
                                     }
-                                )
+                                else:
+                                    active = {
+                                        self.normalize_month_label(selected_month)
+                                    }
+                                if "Create Timestamp" in df_in.columns:
+                                    try:
+                                        ts = pd.to_datetime(
+                                            df_in["Create Timestamp"],
+                                            errors="coerce",
+                                        )
+                                        df_in["_month"] = ts.dt.strftime("%b")
+                                        df_in = df_in[
+                                            df_in["_month"]
+                                            .fillna("")
+                                            .str.lower()
+                                            .isin([m.lower() for m in active])
+                                        ]
+                                        df_in = df_in.drop(
+                                            columns=["_month"], errors="ignore"
+                                        )
+                                    except Exception:
+                                        pass
 
-                        if chart_points:
-                            chart_data.append(
-                                {
-                                    "type": "doughnut",
-                                    "name": "Booking Orders %",
-                                    "showInLegend": True,
-                                    "dataPoints": chart_points,
-                                }
-                            )
-
-                except Exception as e:
+                        sub_tables.append(
+                            {
+                                "title": "Return",
+                                "columns": return_columns_display,
+                                "data": df_in.to_dict(orient="records"),
+                            }
+                        )
+                    else:
+                        sub_tables.append(
+                            {
+                                "title": "Return",
+                                "columns": return_columns_display,
+                                "data": [],
+                                "error": (
+                                    "Inbound sheet missing required columns or no RMA rows."
+                                    if col_ship_type is not None
+                                    else "Column 'Shipment Type' not found in Inbound."
+                                ),
+                            }
+                        )
+                except Exception as e_in:
                     import traceback
 
                     print(traceback.format_exc())
                     sub_tables.append(
                         {
-                            "title": matched_sheet,
-                            "columns": [],
+                            "title": "Return",
+                            "columns": return_columns_display,
                             "data": [],
-                            "error": str(e),
+                            "error": str(e_in),
                         }
                     )
+            else:
+                sub_tables.append(
+                    {
+                        "title": "Return",
+                        "columns": return_columns_display,
+                        "data": [],
+                        "error": "Sheet containing 'Inbound' was not found.",
+                    }
+                )
 
             # ✅ التحقق من وجود بيانات بعد الفلترة
             total_count = sum(len(st["data"]) for st in sub_tables)
@@ -5230,6 +5791,7 @@ class UploadExcelViewRoche(View):
             chart_data = []
             selected_month_norm = None
             selected_months_norm = []
+            actual_target = 0  # يُحدَّث من الشيت الرئيسي إن وُجد
 
             if selected_month:
                 raw_month = str(selected_month).strip()
@@ -5652,12 +6214,33 @@ class UploadExcelViewRoche(View):
                             }
                         )
 
-            outbound_html_result = self.filter_outbound(
-                request, selected_month if not selected_months_norm else None
+            # Outbound Shipments (Outbound1 + Outbound2, Hit/Miss) — نفس فكرة Inbound
+            outbound_result = self.filter_outbound_shipments(
+                request,
+                selected_month if not selected_months_norm else None,
+                selected_months_norm if selected_months_norm else None,
             )
-            outbound_html = outbound_html_result.get("detail_html", "")
+            if outbound_result.get("sub_tables"):
+                outbound_tab = {
+                    "name": "Outbound Shipments",
+                    "stats": outbound_result.get("stats", {}),
+                    "sub_tables": outbound_result["sub_tables"],
+                    "chart_data": outbound_result.get("chart_data", []),
+                }
+                outbound_html = render_to_string(
+                    "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
+                    {
+                        "tab": outbound_tab,
+                        "selected_month": selected_month
+                        or (selected_months_norm[0] if selected_months_norm else None),
+                    },
+                )
+            else:
+                outbound_html = outbound_result.get("detail_html", "")
 
-            if not sub_tables:
+            # لا نرجع "لا توجد بيانات" إلا لو مفيش جداول رئيسية ومفيش محتوى Outbound
+            has_outbound = bool(outbound_html and str(outbound_html).strip())
+            if not sub_tables and not has_outbound:
                 return {
                     "detail_html": "<p class='text-muted'>⚠️ No valid data was found in any sheets.</p>",
                     "chart_data": [],
