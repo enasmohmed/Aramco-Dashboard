@@ -1,0 +1,1183 @@
+{% load static %} {% load sass_tags %}
+
+<div
+  class="chart-container"
+  style="position: relative; height: 400px; width: 100%; margin-top: 40px"
+>
+  <!-- 🎯 Loader -->
+  <div
+    id="loader-{{ canvas_id }}"
+    class="absolute inset-0 flex items-center justify-center bg-white/70 z-10"
+    style="display: none"
+  >
+    <div
+      class="spinner-border text-primary"
+      role="status"
+      style="width: 3rem; height: 3rem"
+    >
+      <span class="visually-hidden">Loading...</span>
+    </div>
+  </div>
+
+  <!-- 🎯 Canvas -->
+  <canvas id="{{ canvas_id }}"></canvas>
+</div>
+
+{% block scriptcontent %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<link
+  href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+  rel="stylesheet"
+/>
+
+<script>
+  // ✅ استخدام IIFE لتنفيذ الكود مباشرة (يعمل مع AJAX أيضاً)
+  (function() {
+  // 🧩 حفظ كل الشارتات في ذاكرة عامة (لتدميرها أو إعادة رسمها)
+  window.chartInstances = window.chartInstances || {};
+  window.chartConfigs = window.chartConfigs || {};
+    window.notifyChartRendered =
+      window.notifyChartRendered ||
+      function (canvasId) {
+        document.dispatchEvent(
+          new CustomEvent("chart:rendered", { detail: { canvasId } })
+        );
+      };
+
+  // ✅ حفظ loadChartData functions لكل canvas
+  window.chartLoadFunctions = window.chartLoadFunctions || {};
+
+  // =====================================================
+  // 🎯 المتغيرات الأساسية (Canvas, Tab, Loader)
+  // =====================================================
+
+    const canvasId = "{{ canvas_id|default:chart.canvas_id }}";
+  const tabName = "{{ tab.name|safe }}";
+
+  // ✅ دالة للحصول على canvas element مع retry
+  function getCanvasElement() {
+    const el = document.getElementById(canvasId);
+    if (el && el.ownerDocument && el.ownerDocument.body.contains(el)) {
+      return el;
+    }
+    return null;
+  }
+
+  let ctxEl = getCanvasElement();
+  const loaderEl = document.getElementById("loader-" + canvasId);
+
+  // ✅ إذا لم يكن canvas موجوداً، نحاول مرة أخرى بعد قليل (مفيد للـ Accordion)
+  if (!ctxEl) {
+    console.warn("⚠️ [INIT] Canvas element not found yet:", canvasId, "- Will retry...");
+    // ✅ إعادة المحاولة بعد 500ms
+    setTimeout(() => {
+      ctxEl = getCanvasElement();
+      if (ctxEl) {
+        console.log("✅ [INIT] Canvas found after retry, initializing chart...");
+        initializeChart();
+      } else {
+        console.warn("⚠️ [INIT] Canvas still not found after retry:", canvasId);
+      }
+    }, 500);
+    return; // ✅ نخرج من الكود الآن وننتظر retry
+  }
+
+  // ✅ لا نعرف ctx هنا - سنحصل عليه داخل الدوال عند الحاجة
+
+  // =====================================================
+  // 🔹 1️⃣ دالة رسم الشارت الدائري Rejection
+  // =====================================================
+  function drawRejectionChart(chartData) {
+      console.log(
+        "📈 [DRAW CHART] Attempting to render Rejection chart:",
+        chartData
+      );
+
+      // ✅ الحصول على canvas element (مع retry)
+      let currentCtxEl = getCanvasElement();
+      if (!currentCtxEl) {
+        console.warn("⚠️ [drawRejectionChart] Canvas element not found yet:", canvasId);
+        setTimeout(() => {
+          currentCtxEl = getCanvasElement();
+          if (currentCtxEl) {
+            drawRejectionChart(chartData);
+          }
+        }, 300);
+        return;
+      }
+
+      // ✅ الحصول على context
+      const ctx = currentCtxEl.getContext("2d");
+      if (!ctx) {
+        console.error("❌ [drawRejectionChart] Cannot get 2d context from canvas:", canvasId);
+        return;
+      }
+
+    // 🚫 تحقق من وجود بيانات
+    if (!chartData || chartData.length === 0) {
+        if (currentCtxEl && currentCtxEl.parentElement) {
+          currentCtxEl.parentElement.insertAdjacentHTML('beforeend',
+            "<div class='text-center text-muted mt-3'>⚠️ Not enough data to render this chart.</div>"
+          );
+        }
+      return;
+    }
+
+    // 🏷️ تجهيز البيانات (labels & values)
+    const labels = chartData.map((i) => i.month || i.label);
+    const values = chartData.map((i) => {
+      const val = Number(i.percentage || i.y);
+      return val < 1 ? val * 100 : val;
+    });
+
+    // 🧹 تدمير الشارت القديم لو موجود
+      if (window.chartInstances[canvasId])
+        window.chartInstances[canvasId].destroy();
+
+    // ✅ تسجيل البلجنات المطلوبة
+    Chart.register(ChartDataLabels);
+    Chart.register(window["chartjs-plugin-annotation"]);
+
+    // 🎨 ألوان مميزة
+    // 🎨 ألوان مميزة (درجات رمادي × أزرق فاتح)
+    const backgroundColors = [
+      "#d0e7ff", // أزرق فاتح وواضح
+      "#c2e0ff", // أزرق باهت بسيط
+      "#e0e0e0", // رمادي فاتح جدًا
+      "#bdbdbd", // رمادي متوسط ناعم
+      "#cfd8dc", // رمادي أزرق خفيف
+      "#b3e5fc", // أزرق ثلجي جميل
+      "#d6d6d6", // رمادي متعادل
+    ];
+
+    // 🥧 إنشاء الشارت الدائري
+    const rejectionChart = new Chart(ctx, {
+      type: "pie",
+      data: {
+        labels: labels,
+          datasets: [
+            {
+          label: "Rejection %",
+          data: values,
+          backgroundColor: backgroundColors.slice(0, values.length),
+          borderWidth: 2,
+          borderColor: "#fff",
+          hoverOffset: 10,
+            },
+          ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "0%", // دائرة كاملة (مش دونات)
+        layout: { padding: { top: 20, bottom: 20 } },
+          animation: {
+            animateRotate: true,
+            duration: 1200,
+            easing: "easeOutQuart",
+          },
+        plugins: {
+          legend: { display: false }, // 🔕 إخفاء الليبلات أسفل الشارت
+          tooltip: {
+              callbacks: {
+                label: (ctx) => `${ctx.label}: ${ctx.parsed.toFixed(1)}%`,
+              },
+          },
+          datalabels: {
+            display: true,
+            anchor: "center",
+            align: "center",
+            color: "#000",
+            font: { weight: "bold", size: 12 },
+            backgroundColor: "rgba(255,255,255,0.9)",
+            borderColor: "#888",
+            borderWidth: 1,
+            borderRadius: 6,
+            padding: 5,
+            formatter: (value) => `${value.toFixed(1)}%`,
+          },
+        },
+      },
+      plugins: [ChartDataLabels],
+    });
+
+    window.chartInstances[canvasId] = rejectionChart;
+      window.notifyChartRendered(canvasId);
+      console.log("✅ [CHART DONE] Rejection Pie Chart ready");
+  }
+
+  // =====================================================
+  // 🧠 2️⃣ دالة عامة لتحميل البيانات من السيرفر ورسم الشارتات
+  // =====================================================
+  function loadChartData() {
+      // ✅ الحصول على canvas element (مع retry)
+      let currentCtxEl = getCanvasElement();
+      if (!currentCtxEl) {
+        console.warn("⚠️ [loadChartData] Canvas element not found yet:", canvasId);
+
+        // ✅ إذا كان canvas في Accordion، ننتظر حتى يفتح
+        const accordionItem = document.querySelector(`canvas[id="${canvasId}"]`)?.closest('.accordion-item') ||
+                              document.querySelector(`[id*="${canvasId}"]`)?.closest('.accordion-item');
+        if (accordionItem) {
+          const accordionButton = accordionItem.querySelector('.accordion-button');
+          const accordionCollapse = accordionItem.querySelector('.accordion-collapse');
+
+          // ✅ إذا كان Accordion مفتوحاً بالفعل، جرب مرة أخرى بعد قليل
+          if (accordionCollapse && accordionCollapse.classList.contains('show')) {
+            console.log("✅ [loadChartData] Accordion is open, retrying...");
+            setTimeout(() => {
+              currentCtxEl = getCanvasElement();
+              if (currentCtxEl) {
+                console.log("✅ [loadChartData] Canvas found after retry, proceeding...");
+                loadChartData();
+              } else {
+                console.warn("⚠️ [loadChartData] Canvas still not found after retry");
+              }
+            }, 500);
+          } else {
+            console.log("⚠️ [loadChartData] Accordion is closed, waiting for open event...");
+            // ✅ إضافة event listener لفتح Accordion
+            if (accordionButton) {
+              const handleAccordionOpen = function() {
+                setTimeout(() => {
+                  currentCtxEl = getCanvasElement();
+                  if (currentCtxEl) {
+                    console.log("✅ [loadChartData] Canvas found after accordion open, proceeding...");
+                    loadChartData();
+                  } else {
+                    console.warn("⚠️ [loadChartData] Canvas still not found after accordion open");
+                  }
+                }, 500);
+              };
+              accordionButton.addEventListener('click', handleAccordionOpen, { once: true });
+            }
+          }
+        } else {
+          // ✅ إذا لم يكن في Accordion، جرب مرة أخرى بعد قليل
+          setTimeout(() => {
+            currentCtxEl = getCanvasElement();
+            if (currentCtxEl) {
+              console.log("✅ [loadChartData] Canvas found after retry (not in accordion), proceeding...");
+              loadChartData();
+            }
+          }, 500);
+        }
+        return;
+      }
+
+      // ✅ تحديث ctxEl
+      ctxEl = currentCtxEl;
+
+      // ✅ التحقق من أن canvas موجود في DOM ومرئي
+      if (!ctxEl.ownerDocument || !ctxEl.ownerDocument.body.contains(ctxEl)) {
+        console.warn("⚠️ [loadChartData] Canvas not in DOM yet:", canvasId);
+        setTimeout(loadChartData, 300);
+        return;
+      }
+
+      // ✅ الحصول على context
+      let ctx;
+      try {
+        ctx = ctxEl.getContext("2d");
+        if (!ctx) {
+          console.error("❌ [loadChartData] Cannot get 2d context from canvas:", canvasId);
+          return;
+        }
+      } catch (e) {
+        console.error("❌ [loadChartData] Error getting context:", e);
+        return;
+      }
+
+      if (loaderEl) {
+    $(loaderEl).fadeIn(200);
+      }
+
+      // ✅ محاولة الحصول على البيانات مباشرة من الـ context (chart_data)
+      try {
+        const chartDataRaw = {{ chart_data_json|safe|default:"[]" }};
+        console.log("🔍 [DEBUG] Canvas ID:", canvasId);
+        console.log("🔍 [DEBUG] Raw chart_data_json type:", typeof chartDataRaw);
+        console.log("🔍 [DEBUG] Raw chart_data_json value:", chartDataRaw);
+        console.log("🔍 [DEBUG] chart_data_json length:", chartDataRaw ? (typeof chartDataRaw === 'string' ? chartDataRaw.length : JSON.stringify(chartDataRaw).length) : 0);
+
+        // ✅ التحقق من أن البيانات هي array وليست string
+        let chartDataFromContext = chartDataRaw;
+        if (typeof chartDataRaw === 'string') {
+          try {
+            chartDataFromContext = JSON.parse(chartDataRaw);
+          } catch (e) {
+            console.error("❌ [DEBUG] Failed to parse chart_data_json as JSON:", e);
+            chartDataFromContext = [];
+          }
+        }
+
+        // ✅ إذا كانت البيانات متوفرة في الـ context، استخدمها مباشرة
+        if (chartDataFromContext && Array.isArray(chartDataFromContext) && chartDataFromContext.length > 0) {
+          console.log("✅ [DEBUG] Using chart_data from context:", chartDataFromContext);
+          console.log("✅ [DEBUG] Canvas ID:", canvasId);
+          console.log("✅ [DEBUG] Datasets count:", chartDataFromContext.length);
+          console.log("✅ [DEBUG] Datasets names:", chartDataFromContext.map(ds => ds.name || 'N/A'));
+          if (loaderEl) {
+            $(loaderEl).fadeOut(200);
+          }
+          renderChartFromData({ chart_data: chartDataFromContext });
+          return;
+        } else {
+          console.log("⚠️ [DEBUG] chart_data is empty or invalid:", chartDataFromContext);
+          console.log("⚠️ [DEBUG] chart_data type:", typeof chartDataFromContext);
+          console.log("⚠️ [DEBUG] chart_data isArray:", Array.isArray(chartDataFromContext));
+        }
+      } catch (e) {
+        console.error("❌ [DEBUG] Error reading chart_data_json:", e);
+      }
+
+      console.log("⚠️ [DEBUG] No chart_data in context, loading via AJAX for canvas:", canvasId);
+
+      // ✅ إذا لم تكن متوفرة، احمّلها من السيرفر عبر AJAX
+      const monthSelectEl = document.getElementById("month-select");
+      const selectedMonthValue = monthSelectEl ? monthSelectEl.value : "";
+      const quarterSelectEl = document.getElementById("quarter-select");
+      const selectedQuarterValue = quarterSelectEl ? quarterSelectEl.value : "";
+
+    $.ajax({
+      url: "{% url 'dashboard:upload_excel' %}",
+      method: "GET",
+        data: {
+          tab: tabName,
+          month: selectedMonthValue || "",
+          quarter: selectedQuarterValue || "",
+        },
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+
+      success: function (res) {
+        console.log("🧩 DEBUG START ==========================");
+        console.log("📦 tabName:", tabName);
+        console.log("📊 canvasId:", canvasId);
+        console.log("🟢 RESPONSE:", res);
+        console.log("🧩 DEBUG END ============================");
+
+        $(loaderEl).fadeOut(200);
+          console.log("🟢 Received data:", res);
+
+        if (!res.chart_data || !res.chart_data.length) {
+            console.warn("⚠️ No chart data for tab:", tabName);
+            return;
+          }
+
+          renderChartFromData(res);
+        },
+
+        error: function (err) {
+          console.error("❌ Error while loading chart:", err);
+          $(loaderEl).fadeOut(200);
+        },
+      });
+    }
+
+    // ✅ دالة منفصلة لرسم الشارت من البيانات
+    function renderChartFromData(res) {
+          // ✅ الحصول على canvas element (مع retry)
+          let currentCtxEl = getCanvasElement();
+          if (!currentCtxEl) {
+            console.warn("⚠️ [renderChartFromData] Canvas element not found yet:", canvasId);
+            // ✅ إعادة المحاولة بعد قليل
+            setTimeout(() => {
+              currentCtxEl = getCanvasElement();
+              if (currentCtxEl) {
+                console.log("✅ [renderChartFromData] Canvas found after retry, proceeding...");
+                renderChartFromData(res);
+              }
+            }, 300);
+            return;
+          }
+
+          // ✅ تحديث ctxEl والحصول على context
+          ctxEl = currentCtxEl;
+          const ctx = ctxEl.getContext("2d");
+          if (!ctx) {
+            console.error("❌ [renderChartFromData] Cannot get 2d context from canvas:", canvasId);
+          return;
+        }
+
+        Chart.register(ChartDataLabels);
+        Chart.register(window["chartjs-plugin-annotation"]);
+
+          // 🔸 For Rejection or Return & Refusal tabs, render only a pie chart
+          const safeTabName = String(tabName)
+            .replace(/&amp;/g, "&")
+            .toLowerCase();
+
+        if (
+          safeTabName.includes("rejection") ||
+          safeTabName.includes("refusal") ||
+          safeTabName.includes("return")
+        ) {
+            console.log(
+              "🎯 Identified tab as Rejection/Refusal/Return:",
+              tabName
+            );
+
+            let doughnutSource = [];
+          if (res.chart_data && res.chart_data.length > 0) {
+            if (res.chart_data[0].dataPoints) {
+                doughnutSource = res.chart_data[0].dataPoints;
+            } else {
+                doughnutSource = res.chart_data;
+              }
+            }
+
+            const chartDataFixed = doughnutSource.map((dp) => ({
+              label: dp.label || dp.month,
+              y: Number(dp.y ?? dp.percentage) || 0,
+              color: dp.color,
+            }));
+
+          drawRejectionChart(chartDataFixed);
+          return;
+        }
+
+        // =====================================================
+        // 🎯 استخراج target إن وجد
+        // =====================================================
+          const targetDataset = res.chart_data.find(
+            (ds) =>
+              ds.name &&
+              typeof ds.name === "string" &&
+              ds.name.toLowerCase().includes("target")
+        );
+
+        let targetValue = null;
+        if (targetDataset && targetDataset.dataPoints.length) {
+            const validValues = targetDataset.dataPoints
+              .map((dp) => Number(dp.y))
+              .filter((v) => !isNaN(v));
+          if (validValues.length)
+              targetValue =
+                validValues.reduce((a, b) => a + b, 0) / validValues.length;
+        }
+
+        // =====================================================
+        // 🧾 تجهيز البيانات الأساسية
+        // =====================================================
+        // 🧾 تجهيز البيانات الأساسية
+          const labels = res.chart_data[0].dataPoints.map((dp) => dp.label);
+
+        // 🔹 فلترة الداتا علشان ميكونش فيه تكرار في نفس الاسم
+        const uniqueData = res.chart_data.filter(
+            (v, i, a) => a.findIndex((t) => t.name === v.name) === i
+          );
+
+          console.log("🔍 [DEBUG] Chart data count:", res.chart_data.length);
+          console.log("🔍 [DEBUG] Unique data count:", uniqueData.length);
+          console.log(
+            "🔍 [DEBUG] Chart data names:",
+            res.chart_data.map((d) => d.name)
+          );
+          console.log(
+            "🔍 [DEBUG] Unique data names:",
+            uniqueData.map((d) => d.name)
+          );
+
+          // ✅ فلترة datasets لإزالة أي dataset يحتوي على "target" (لإزالة الخط المستقيم)
+          const filteredData = uniqueData.filter(
+            (kpi) => !kpi.name || !kpi.name.toLowerCase().includes("target")
+          );
+
+          // ✅ التحقق من وجود stacked charts
+          const hasStackedCharts = filteredData.some(
+            (kpi) => kpi.type === "stackedColumn100" || kpi.type === "stackedColumn"
+          );
+
+          const datasets = filteredData.map((kpi) => {
+          let chartType = "bar";
+            if (kpi.type === "pie" || kpi.type === "doughnut")
+              chartType = "doughnut";
+          else if (kpi.type === "line") chartType = "line";
+          else if (kpi.type === "stackedColumn100" || kpi.type === "stackedColumn") {
+              chartType = "bar";  // ✅ Chart.js يستخدم "bar" للـ stacked charts
+            }
+
+            const data = kpi.dataPoints.map((dp) => {
+            const val = Number(dp.y);
+            return val < 1 ? val * 100 : val;
+          });
+
+          const colors = [
+              "#007fa3",
+              "#00b3a6",
+              "#f4c430",
+              "#ef7b45",
+              "#b61c3f",
+              "#4a90e2",
+              "#8bc34a",
+              "#9c27b0",
+              "#ff9800",
+              "#cddc39",
+            ];
+
+            const datasetConfig = {
+            label: kpi.name,
+            data: data,
+            type: chartType,
+              backgroundColor:
+                kpi.color || colors[Math.floor(Math.random() * colors.length)],
+            borderRadius: 8,
+            barThickness: 25,
+          };
+
+            // ✅ إضافة stack property للـ stacked charts
+            if (kpi.type === "stackedColumn100" || kpi.type === "stackedColumn") {
+              datasetConfig.stack = kpi.stack || "stack1";  // ✅ استخدام stack name من البيانات أو "stack1" كـ default
+            }
+
+            return datasetConfig;
+        });
+
+        // 🧹 حذف الشارت القديم
+          if (window.chartInstances[canvasId])
+            window.chartInstances[canvasId].destroy();
+
+        // =====================================================
+        // 🎨 إنشاء الشارت العمودي مع خط التارجت الأحمر
+        // =====================================================
+        const mainType = datasets[0]?.type || "bar";
+
+        // لو فيه شارت قديم مرسوم على نفس الـ canvas، امسحيه قبل إنشاء الجديد
+        if (window.dynamicChartInstance) {
+          window.dynamicChartInstance.destroy();
+        }
+
+        window.dynamicChartInstance = new Chart(ctx, {
+          type: mainType,
+          data: { labels, datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+              layout: { padding: { top: 40 } }, // ✅ تقليل padding من 50 إلى 30 لرفع عنوان KPI لأعلى
+            indexAxis: "x", // ✅ عمودي
+            plugins: {
+                legend: {
+                  display: uniqueData.some((d) => d.showInLegend !== false), // ✅ إخفاء الـ legend إذا كان showInLegend = false
+                  position: "top",
+                  labels: {
+                    font: { size: 12, weight: "bold" },
+                    padding: 15,
+                    usePointStyle: true,
+                  },
+                },
+                tooltip: { enabled: true }, // ✅ تفعيل tooltip لعرض البيانات
+              datalabels: {
+                  display: true,
+                  anchor: "end",
+                  align: "top",
+                  offset: function(context) {
+                    // ✅ للـ stacked charts، عرض labels في منتصف كل segment مع رفعها لأعلى
+                    if (hasStackedCharts) {
+                      const datasetIndex = context.datasetIndex;
+                      const dataIndex = context.dataIndex;
+                      const datasets = context.chart.data.datasets;
+
+                      // ✅ حساب مجموع القيم السابقة في نفس الـ stack
+                      let previousSum = 0;
+                      for (let i = 0; i < datasetIndex; i++) {
+                        if (datasets[i].stack === datasets[datasetIndex].stack) {
+                          const val = datasets[i].data[dataIndex];
+                          if (val !== null && val !== undefined) {
+                            previousSum += val;
+                          }
+                        }
+                      }
+
+                      // ✅ حساب القيمة الحالية
+                      const currentValue = datasets[datasetIndex].data[dataIndex] || 0;
+
+                      // ✅ حساب موضع label في منتصف segment الحالي
+                      const segmentCenter = previousSum + (currentValue / 2);
+
+                      // ✅ تحويل الموضع إلى offset (من أعلى الشارت) مع رفع إضافي
+                      const chart = context.chart;
+                      const yScale = chart.scales.y;
+                      if (yScale) {
+                        const chartTop = chart.chartArea.top;
+                        const chartBottom = chart.chartArea.bottom;
+                        const chartHeight = chartBottom - chartTop;
+                        const maxValue = yScale.max || 100;
+                        const percentageFromTop = (maxValue - segmentCenter) / maxValue;
+                        const yPosition = chartTop + (chartHeight * percentageFromTop);
+                        const currentY = yScale.getPixelForValue(segmentCenter);
+                        // ✅ رفع labels لأعلى بإضافة offset سالب إضافي (-15)
+                        return (currentY - yPosition) - 15;
+                      }
+
+                      // ✅ Fallback: استخدام offset ثابت مع رفع إضافي
+                      return -40;  // ✅ رفع من -25 إلى -40
+                    }
+
+                    // ✅ إذا كان هناك أعمدة متعددة لنفس الشهر، نوزع labels بشكل عمودي
+                    const datasetIndex = context.datasetIndex;
+                    const dataIndex = context.dataIndex;
+                    const datasets = context.chart.data.datasets;
+
+                    // ✅ حساب عدد الأعمدة لنفس الشهر (نفس dataIndex)
+                    let columnCount = 0;
+                    for (let i = 0; i < datasets.length; i++) {
+                      if (datasets[i].data[dataIndex] !== null && datasets[i].data[dataIndex] !== undefined) {
+                        columnCount++;
+                      }
+                    }
+
+                    // ✅ إذا كان هناك عمود واحد فقط، استخدم offset عادي
+                    if (columnCount === 1) {
+                      return -25;
+                    }
+
+                    // ✅ إذا كان هناك أعمدة متعددة، نوزع labels عمودياً
+                    // حساب موضع كل label: أول عمود -25، ثاني عمود -45، إلخ
+                    let currentColumnIndex = 0;
+                    for (let i = 0; i < datasetIndex; i++) {
+                      if (datasets[i].data[dataIndex] !== null && datasets[i].data[dataIndex] !== undefined) {
+                        currentColumnIndex++;
+                      }
+                    }
+
+                    // ✅ توزيع labels: كل عمود يظهر أعلى من السابق
+                    return -25 - (currentColumnIndex * 20);
+                  },
+                   backgroundColor: "rgba(173, 216, 230, 0.8)", // ✅ أزرق فاتح شبه الباستيل
+                   borderColor: "rgba(100, 149, 237, 0.9)", // ✅ إطار أزرق ناعم
+                   borderWidth: 1,
+                   borderRadius: 8, // ✅ زوايا ناعمة ومستديرة
+                   color: "#000", // ✅ لون النص أزرق غامق ليتناسق مع الخلفية
+                   z: 10,
+                   font: { weight: "bold", size: 11 },
+                   padding: { top: 4, bottom: 4, left: 6, right: 6 },
+                   formatter: function (value, context) {
+                    // ✅ للـ stacked charts، عرض القيمة الفعلية
+                    if (hasStackedCharts) {
+                      return `${Math.round(value)}%`;
+                    }
+                    // ✅ عرض الأرقام كأعداد صحيحة بدون علامة عشرية (مثل 50% وليس 50.0%)
+                    return `${Math.round(value)}%`;
+                   },
+                  listeners: {
+                    draw: function (context) {
+                      const ctx = context.chart.ctx;
+                      ctx.shadowColor = "rgba(0,0,0,0.15)";
+                      ctx.shadowBlur = 4;
+                    },
+                  },
+                  // ✅ إضافة منطق لتجنب التداخل
+                  clamp: true, // ✅ منع labels من الخروج خارج chartArea
+                  clip: false, // ✅ عدم قص labels عند حدود chartArea
+              },
+                annotation: { annotations: {} },
+            },
+            scales: {
+              x: {
+                stacked: hasStackedCharts,  // ✅ تفعيل stacked mode للـ stacked charts
+                ticks: {
+                  display: true,
+                  font: { weight: "bold", size: 13 },
+                },
+                grid: { display: false },
+              },
+              y: {
+                stacked: hasStackedCharts,  // ✅ تفعيل stacked mode للـ stacked charts
+                display: false, // ✅ ده اللي يخفي الأرقام من 0 إلى 100
+                grid: { display: false },
+                max: hasStackedCharts ? 100 : undefined,  // ✅ تحديد max إلى 100 للـ stacked charts (100%)
+              },
+            },
+          },
+          plugins: [ChartDataLabels],
+        });
+
+        window.chartInstances[canvasId] = window.dynamicChartInstance;
+
+          // ✅ الانتظار حتى يتم رسم الشارت بالكامل قبل الوصول إلى chartArea
+          console.log(`🔍 [Chart] Updating chart for ${canvasId}`);
+          window.dynamicChartInstance.update();
+
+          // ✅ استخدام setTimeout بدلاً من .then() لأن update() قد لا يرجع promise
+          setTimeout(function() {
+            try {
+            console.log(`✅ [Chart] Chart updated, rendering target line...`);
+            window.notifyChartRendered(canvasId);
+
+            // ✅ حذف عنوان الشارت (On time receiving (%) — Avg: 100.0%)
+            const chartCanvas = document.getElementById(canvasId);
+            if (!chartCanvas) {
+              console.error("❌ [renderChartFromData] Chart canvas not found:", canvasId);
+              return;
+            }
+            const chartContainer = chartCanvas.parentElement;
+            if (!chartContainer) {
+              console.error("❌ [renderChartFromData] Chart container not found for canvas:", canvasId);
+              return;
+            }
+
+          // احذف العنوان القديم إن وجد
+          const existingTitle = document.querySelector(
+            `#${canvasId}-chart-title`
+          );
+          if (existingTitle) {
+            existingTitle.remove();
+        }
+
+        // احذف أي خطوط هدف قديمة قبل إضافة الخط الجديد
+          const existingTargetLine = document.querySelector(
+            `#${canvasId}-target-line`
+          );
+        if (existingTargetLine) {
+          existingTargetLine.remove();
+        }
+
+        // ✅ التحقق من أن الشارت ليس في Order General Information
+        const isOrderGeneralInfo = chartCanvas.closest('#accordionOrderGeneral') !== null;
+        const canvasIdLower = canvasId.toLowerCase();
+        const isInOrderGeneral = isOrderGeneralInfo ||
+                                 canvasIdLower.includes('urgent-orders') ||
+                                 canvasIdLower.includes('outbound-details') ||
+                                 canvasIdLower.includes('picking-accuracy') ||
+                                 canvasIdLower.includes('quality-exceptions');
+
+        // ✅ إذا كان الشارت في Order General Information، لا نضيف خط التارجت
+        if (isInOrderGeneral) {
+          console.log(`⚠️ [Target Line] Skipping target line for Order General Information chart: ${canvasId}`);
+          return;
+        }
+
+        // إضافة الخط الأحمر
+
+        const targetLine = document.createElement("div");
+        targetLine.id = `${canvasId}-target-line`;
+        targetLine.style.position = "absolute";
+        targetLine.style.left = 0;
+        targetLine.style.right = 0;
+        targetLine.style.borderTop = "3px dashed red";
+        targetLine.style.zIndex = 10;
+
+        // احسبي موضع الخط حسب قيمة الهدف (99%)
+          if (!window.dynamicChartInstance) {
+            console.error("❌ [renderChartFromData] Chart instance not found");
+            return;
+          }
+
+        const chartArea = window.dynamicChartInstance.chartArea;
+          if (!chartArea) {
+            console.error("❌ [renderChartFromData] Chart area not found");
+            return;
+          }
+
+          // ✅ البحث عن y scale - قد يكون "y" أو "y1" أو غير ذلك
+          let yScale = window.dynamicChartInstance.scales["y"];
+          if (!yScale) {
+            // ✅ محاولة العثور على أي y scale
+            const scales = window.dynamicChartInstance.scales;
+            for (const key in scales) {
+              if (key.startsWith("y")) {
+                yScale = scales[key];
+                break;
+              }
+            }
+          }
+
+          if (!yScale) {
+            console.error("❌ [renderChartFromData] Y scale not found");
+            return;
+          }
+
+          // ✅ استخدام targetValue إذا كان موجوداً، وإلا استخدام 99% كقيمة افتراضية
+          let targetPercentage = 99; // ✅ قيمة افتراضية
+
+          if (targetValue !== null && targetValue > 0) {
+            targetPercentage = targetValue;
+          } else {
+            // ✅ محاولة البحث عن target في datasets
+            const targetDataset = datasets.find(ds =>
+              ds.label && ds.label.toLowerCase().includes("target")
+            );
+            if (targetDataset && targetDataset.data && targetDataset.data.length > 0) {
+              // ✅ حساب متوسط قيم target
+              const targetValues = targetDataset.data.filter(v => v > 0);
+              if (targetValues.length > 0) {
+                targetPercentage = targetValues.reduce((a, b) => a + b, 0) / targetValues.length;
+              }
+            }
+          }
+
+          console.log(`🔍 [Target Line] targetValue: ${targetValue}, targetPercentage: ${targetPercentage}`);
+          console.log(`🔍 [Target Line] yScale min: ${yScale.min}, max: ${yScale.max}`);
+
+          // ✅ التأكد من أن targetPercentage ضمن نطاق yScale
+          const yMin = yScale.min || 0;
+          const yMax = yScale.max || 100;
+          const clampedTarget = Math.max(yMin, Math.min(yMax, targetPercentage));
+
+          console.log(`🔍 [Target Line] clampedTarget: ${clampedTarget}`);
+
+          // ✅ حساب موضع y للخط
+          let y;
+          try {
+            y = yScale.getPixelForValue(clampedTarget);
+            console.log(`🔍 [Target Line] y from getPixelForValue: ${y}`);
+          } catch (e) {
+            console.error(`❌ [Target Line] Error getting pixel for value:`, e);
+            // ✅ حساب يدوي كـ fallback
+            const chartTop = chartArea.top;
+            const chartBottom = chartArea.bottom;
+            const chartHeight = chartBottom - chartTop;
+            const percentageFromTop = (yMax - clampedTarget) / (yMax - yMin);
+            y = chartTop + (chartHeight * percentageFromTop);
+            console.log(`🔍 [Target Line] y calculated manually: ${y}`);
+          }
+
+          // ✅ حساب موضع الخط النسبي داخل chartArea
+          const chartTop = chartArea.top;
+          const chartBottom = chartArea.bottom;
+          const chartLeft = chartArea.left;
+          const chartRight = chartArea.right;
+
+          console.log(`🔍 [Target Line] chartArea: top=${chartTop}, bottom=${chartBottom}, left=${chartLeft}, right=${chartRight}`);
+          console.log(`🔍 [Target Line] Final y position: ${y}`);
+
+          // ✅ التأكد من أن y داخل chartArea
+          if (y < chartTop) y = chartTop;
+          if (y > chartBottom) y = chartBottom;
+
+        targetLine.style.top = `${y}px`;
+          targetLine.style.left = `${chartLeft}px`;
+          targetLine.style.width = `${chartRight - chartLeft}px`;
+          targetLine.style.height = `3px`; // ✅ إضافة height لضمان ظهور الخط
+          targetLine.style.display = `block`; // ✅ التأكد من أن الخط ظاهر
+          targetLine.style.zIndex = `100`; // ✅ زيادة z-index
+          targetLine.innerHTML =
+            `<span style='color:red;font-weight:bold;position:absolute;right:30px;top:-30px;padding:2px 5px;border-radius:3px;'>Target ${Math.round(targetPercentage)}%</span>`;
+
+          // ✅ التأكد من أن chartContainer له position: relative
+          if (window.getComputedStyle(chartContainer).position === 'static') {
+        chartContainer.style.position = "relative";
+          }
+
+        chartContainer.appendChild(targetLine);
+
+          console.log(`✅ [Target Line] ✅✅✅ Added successfully at ${y}px, target: ${Math.round(targetPercentage)}%`);
+          console.log(`✅ [Target Line] Line element:`, targetLine);
+          console.log(`✅ [Target Line] Line style:`, {
+            top: targetLine.style.top,
+            left: targetLine.style.left,
+            width: targetLine.style.width,
+            display: targetLine.style.display,
+            zIndex: targetLine.style.zIndex,
+            position: targetLine.style.position,
+            borderTop: targetLine.style.borderTop
+          });
+          console.log(`✅ [Target Line] Chart container:`, {
+            position: window.getComputedStyle(chartContainer).position,
+            width: chartContainer.offsetWidth,
+            height: chartContainer.offsetHeight
+          });
+
+          // ✅ إعادة رسم خط التارجت عند ظهور tab pane (للتأكد من أن الخط يظهر في التابات)
+          function redrawTargetLine() {
+            try {
+              if (!window.dynamicChartInstance || !chartCanvas || !chartContainer) {
+                return;
+              }
+
+              // ✅ التحقق من أن الشارت مرئي
+              const tabPane = chartCanvas.closest('.tab-pane');
+              if (tabPane && !tabPane.classList.contains('show') && !tabPane.classList.contains('active')) {
+                // ✅ إذا كان tab pane غير مرئي، لا نرسم الخط الآن
+                console.log(`⚠️ [Target Line] Chart is in hidden tab, will redraw when shown`);
+                return;
+              }
+
+              const chartArea = window.dynamicChartInstance.chartArea;
+              if (!chartArea) {
+                console.warn(`⚠️ [Target Line] Chart area not ready yet`);
+                setTimeout(redrawTargetLine, 100);
+                return;
+              }
+
+              // ✅ إعادة حساب موضع الخط
+              let yScale = window.dynamicChartInstance.scales["y"];
+              if (!yScale) {
+                const scales = window.dynamicChartInstance.scales;
+                for (const key in scales) {
+                  if (key.startsWith("y")) {
+                    yScale = scales[key];
+                    break;
+                  }
+                }
+              }
+
+              if (!yScale) {
+                console.warn(`⚠️ [Target Line] Y scale not found for redraw`);
+                return;
+              }
+
+              const yMin = yScale.min || 0;
+              const yMax = yScale.max || 100;
+              const clampedTarget = Math.max(yMin, Math.min(yMax, targetPercentage));
+
+              let y;
+              try {
+                y = yScale.getPixelForValue(clampedTarget);
+              } catch (e) {
+                const chartTop = chartArea.top;
+                const chartBottom = chartArea.bottom;
+                const chartHeight = chartBottom - chartTop;
+                const percentageFromTop = (yMax - clampedTarget) / (yMax - yMin);
+                y = chartTop + (chartHeight * percentageFromTop);
+              }
+
+              if (y < chartArea.top) y = chartArea.top;
+              if (y > chartArea.bottom) y = chartArea.bottom;
+
+              targetLine.style.top = `${y}px`;
+              targetLine.style.left = `${chartArea.left}px`;
+              targetLine.style.width = `${chartArea.right - chartArea.left}px`;
+
+              console.log(`✅ [Target Line] 🔄 Redrawn at ${y}px`);
+            } catch (error) {
+              console.error(`❌ [Target Line] Error redrawing:`, error);
+            }
+          }
+
+          console.log(`🔍 [Target Line] Setting up redraw timers and event listeners`);
+
+          // ✅ إعادة رسم الخط بعد فترة قصيرة للتأكد
+          setTimeout(function() {
+            console.log(`⏰ [Target Line] First redraw attempt (100ms)`);
+            redrawTargetLine();
+          }, 100);
+
+          setTimeout(function() {
+            console.log(`⏰ [Target Line] Second redraw attempt (500ms)`);
+            redrawTargetLine();
+          }, 500);
+
+          setTimeout(function() {
+            console.log(`⏰ [Target Line] Third redraw attempt (1000ms)`);
+            redrawTargetLine();
+          }, 1000);
+
+          // ✅ إعادة رسم الخط عند ظهور tab pane
+          const tabPane = chartCanvas.closest('.tab-pane');
+          if (tabPane) {
+            // ✅ استخدام Bootstrap 5 event
+            tabPane.addEventListener('shown.bs.tab', function() {
+              setTimeout(redrawTargetLine, 100);
+            });
+
+            // ✅ أيضاً للـ parent tab triggers
+            const tabTriggers = document.querySelectorAll('button[data-bs-toggle="tab"], a[data-bs-toggle="tab"]');
+            tabTriggers.forEach(trigger => {
+              trigger.addEventListener('shown.bs.tab', function(event) {
+                // ✅ التحقق من أن هذا الـ tab trigger يتحكم في tab pane الذي يحتوي على الشارت
+                const targetId = event.target.getAttribute('data-bs-target');
+                if (targetId && tabPane.matches(targetId)) {
+                  setTimeout(redrawTargetLine, 100);
+                }
+                // ✅ أيضاً، إذا كان tab pane هذا يظهر الآن
+                if (tabPane.classList.contains('show') && tabPane.classList.contains('active')) {
+                  setTimeout(redrawTargetLine, 100);
+                }
+              });
+            });
+          }
+
+          // ✅ إعادة رسم الخط عند resize
+          window.addEventListener('resize', function() {
+            setTimeout(redrawTargetLine, 100);
+          });
+
+          // ✅ إضافة event listener للـ Accordion collapse
+          const accordionItem = chartCanvas.closest('.accordion-item');
+          if (accordionItem) {
+            const accordionButton = accordionItem.querySelector('.accordion-button');
+            if (accordionButton) {
+              accordionButton.addEventListener('click', function() {
+                setTimeout(function() {
+                  if (!accordionButton.classList.contains('collapsed')) {
+                    setTimeout(redrawTargetLine, 300);
+                  }
+                }, 100);
+              });
+            }
+          }
+
+            } catch (error) {
+              console.error("❌ [renderChartFromData] Error in setTimeout:", error);
+            }
+          }, 200); // ✅ إغلاق setTimeout
+  }
+
+  // 🚀 تحميل الشارت أول مرة
+  // ✅ استدعاء loadChartData مع retry mechanism
+  function tryLoadChart() {
+    ctxEl = getCanvasElement();
+    if (ctxEl) {
+      console.log("✅ [INIT] Canvas found, loading chart data for:", canvasId);
+  loadChartData();
+    } else {
+      console.warn("⚠️ [INIT] Canvas not found, will retry for:", canvasId);
+
+      // ✅ التحقق من أن canvas في Accordion مفتوح
+      const accordionItem = document.querySelector(`canvas[id="${canvasId}"]`)?.closest('.accordion-item') ||
+                            document.querySelector(`[id*="${canvasId}"]`)?.closest('.accordion-item');
+      if (accordionItem) {
+        const accordionCollapse = accordionItem.querySelector('.accordion-collapse');
+        if (accordionCollapse && accordionCollapse.classList.contains('show')) {
+          // ✅ إذا كان Accordion مفتوحاً، جرب بعد delay أطول
+          console.log("✅ [INIT] Accordion is open, will retry with longer delay");
+          setTimeout(tryLoadChart, 800);
+        } else {
+          // ✅ إذا كان Accordion مغلقاً، انتظر فتحه
+          setTimeout(tryLoadChart, 500);
+        }
+      } else {
+        // ✅ إعادة المحاولة بعد قليل
+        setTimeout(tryLoadChart, 500);
+      }
+    }
+  }
+
+  // ✅ حفظ loadChartData function بشكل عام لإعادة الاستدعاء
+  window.chartLoadFunctions[canvasId] = loadChartData;
+
+  // ✅ محاولة تحميل الشارت
+  tryLoadChart();
+
+  // ✅ إضافة event listener لفتح Accordion (إذا كان canvas في Accordion)
+  setTimeout(() => {
+    const canvasEl = getCanvasElement();
+    const accordionItem = document.querySelector(`canvas[id="${canvasId}"]`)?.closest('.accordion-item') ||
+                          document.querySelector(`[id*="${canvasId}"]`)?.closest('.accordion-item');
+
+    if (accordionItem) {
+      const accordionButton = accordionItem.querySelector('.accordion-button');
+      const accordionCollapse = accordionItem.querySelector('.accordion-collapse');
+
+      // ✅ إذا كان Accordion مفتوحاً بالفعل (الأول)، جرب تحميل الشارت فوراً
+      if (accordionCollapse && accordionCollapse.classList.contains('show')) {
+        console.log("✅ [Accordion] First accordion item is open, loading chart for:", canvasId);
+        // ✅ محاولات متعددة لضمان تحميل الشارت
+        setTimeout(() => {
+          const retryCanvas = getCanvasElement();
+          if (retryCanvas) {
+            console.log("✅ [Accordion] Canvas found in open accordion, loading chart for:", canvasId);
+            loadChartData();
+          } else {
+            console.warn("⚠️ [Accordion] Canvas not found, retrying...");
+            setTimeout(() => {
+              const retryCanvas2 = getCanvasElement();
+              if (retryCanvas2) {
+                loadChartData();
+              }
+            }, 500);
+          }
+        }, 600); // ✅ زيادة delay للجدول الأول
+      }
+
+      if (accordionButton) {
+        // ✅ إضافة event listener لفتح Accordion
+        accordionButton.addEventListener('click', function() {
+          setTimeout(() => {
+            const retryCanvas = getCanvasElement();
+            if (retryCanvas) {
+              console.log("✅ [Accordion] Canvas found after open, loading chart for:", canvasId);
+              loadChartData();
+            } else {
+              console.warn("⚠️ [Accordion] Canvas still not found after open for:", canvasId);
+            }
+          }, 500);
+        });
+      }
+    } else if (!canvasEl) {
+      // ✅ إذا لم يكن في Accordion ولم يكن موجوداً، جرب مرة أخرى
+      setTimeout(() => {
+        const retryCanvas = getCanvasElement();
+        if (retryCanvas) {
+          loadChartData();
+        }
+      }, 500);
+    }
+  }, 500); // ✅ زيادة delay للتحقق من Accordion
+
+  // ✅ إضافة event listener عام لـ Accordion collapse events
+  document.addEventListener('shown.bs.collapse', function(event) {
+    const accordionBody = event.target;
+    if (!accordionBody) return;
+
+    const canvas = accordionBody.querySelector('canvas');
+    if (canvas && canvas.id === canvasId) {
+      console.log("✅ [Accordion Event] Canvas found in opened accordion, loading chart for:", canvasId);
+      setTimeout(() => {
+        if (window.chartLoadFunctions[canvasId]) {
+          window.chartLoadFunctions[canvasId]();
+        } else {
+          loadChartData();
+        }
+      }, 300);
+    }
+  });
+
+  // ✅ معالجة Tab الأول المفتوح افتراضياً (عند التحميل الأول)
+  setTimeout(() => {
+    // ✅ البحث عن Tab الأول المفتوح
+    const tabPanes = document.querySelectorAll('.tab-pane.show.active');
+    tabPanes.forEach(tabPane => {
+      const canvas = tabPane.querySelector("canvas");
+      if (canvas) {
+        const canvasIdTab = canvas.id;
+        if (window.chartLoadFunctions && window.chartLoadFunctions[canvasIdTab]) {
+          console.log("✅ [Tab Initial] Loading chart for first open tab:", canvasIdTab);
+          setTimeout(() => {
+            window.chartLoadFunctions[canvasIdTab]();
+          }, 500);
+        }
+      }
+    });
+  }, 1000); // ✅ delay أطول لضمان تحميل DOM بالكامل
+
+  // 🧹 تدمير الشارت عند غلق التابة
+  $(document).on("hidden.bs.tab", "a[data-bs-toggle='tab']", function (e) {
+    const targetId = $(e.target).attr("href");
+    if (!targetId) return;
+    const canvas = $(targetId).find("canvas")[0];
+    if (!canvas) return;
+    const canvasId = canvas.id;
+    if (window.chartInstances[canvasId]) {
+      try {
+        window.chartInstances[canvasId].destroy();
+        delete window.chartInstances[canvasId];
+          console.log(`🧹 Destroyed chart instance for ${canvasId}`);
+      } catch (err) {
+          console.warn(`⚠️ Failed to destroy chart (${canvasId}):`, err);
+      }
+    }
+  });
+
+  // ♻️ إعادة تحميل الشارت عند فتح التابة
+  $(document).on("shown.bs.tab", "a[data-bs-toggle='tab']", function (e) {
+    const targetId = $(e.target).attr("href");
+    if (!targetId) return;
+    const canvas = $(targetId).find("canvas")[0];
+    if (!canvas) return;
+    const canvasId = canvas.id;
+    if (!window.chartInstances[canvasId]) {
+        console.log(`🔁 Reloading chart for tab ${canvasId}`);
+      loadChartData();
+    }
+  });
+  })(); // ✅ إغلاق IIFE
+</script>
+
+{% endblock scriptcontent %}

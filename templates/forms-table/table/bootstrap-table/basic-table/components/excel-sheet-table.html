@@ -1,0 +1,565 @@
+{% load static %} {% load custom_tags %} {% load sass_tags %}
+
+<style>
+  .table-top {
+    margin-top: 3rem !important;
+  }
+  .table-card {
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 1.5rem;
+    background-color: #fff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    margin-bottom: 1.5rem;
+  }
+  .custom-scrollbar {
+    max-height: 500px;
+    overflow-y: auto;
+  }
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 8px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #555;
+  }
+  .table-responsive {
+    padding: 1.5rem;
+    background-color: #fff;
+  }
+
+  .badge:empty {
+    display: block !important;
+  }
+
+  /* KPI cards row — مثل Roche Monthly Business Review */
+  .kpi-cards-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .kpi-card {
+    flex: 1;
+    min-width: 140px;
+    max-width: 280px;
+    background: #fff;
+    border: 1px solid #e8e8e8;
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+    transition: box-shadow 0.2s ease;
+  }
+  .kpi-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  }
+  .kpi-card .kpi-icon-wrap {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 0.75rem;
+  }
+  .kpi-card .kpi-icon-wrap svg {
+    width: 22px;
+    height: 22px;
+    fill: currentColor;
+  }
+  .kpi-card .kpi-title {
+    font-size: 0.85rem;
+    color: #4a5568;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+  .kpi-card .kpi-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #1e3a5f;
+  }
+  .kpi-card.kpi-miss .kpi-value {
+    color: #c53030;
+  }
+  .kpi-card .kpi-target {
+    font-size: 0.75rem;
+    color: #c05621;
+    margin-top: 0.25rem;
+  }
+</style>
+
+{% comment %} جدول KPI summary: sub_tables[0] {% endcomment %}
+{% with kpi_table=tab.sub_tables.0.data %}
+<div class="container-fluid general-widget">
+  <div class="kpi-cards-row">
+
+    {# Total Shipments #}
+    {% for row in kpi_table %}
+      {% if row.KPI == 'Total Shipments' %}
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap bg-primary bg-opacity-10 text-primary">
+          <svg>
+            <use href="{% static 'assets/svg/icon-sprite.svg' %}#orders"></use>
+          </svg>
+        </div>
+        <div class="kpi-title">Total Shipments</div>
+        <div class="kpi-value">{{ row.2025|default:0 }}</div>
+      </div>
+      {% endif %}
+    {% endfor %}
+
+    {# Hit % #}
+    {% for row in kpi_table %}
+      {% if row.KPI == 'Hit %' %}
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap bg-primary bg-opacity-10 text-primary">
+          <svg>
+            <use href="{% static 'assets/svg/icon-sprite.svg' %}#graph"></use>
+          </svg>
+        </div>
+        <div class="kpi-title">Hit %</div>
+        <div class="kpi-value">{{ row.2025|default:0|floatformat:0 }}%</div>
+        <div class="kpi-target">Target 99%</div>
+      </div>
+      {% endif %}
+    {% endfor %}
+
+    {# Miss >24h #}
+    {% for row in kpi_table %}
+      {% if row.KPI == 'Miss (>24h)' %}
+      <div class="kpi-card kpi-miss">
+        <div class="kpi-icon-wrap bg-danger bg-opacity-10 text-danger">
+          <svg>
+            <use href="{% static 'assets/svg/icon-sprite.svg' %}#down-arrow"></use>
+          </svg>
+        </div>
+        <div class="kpi-title">Miss &gt; 24h</div>
+        <div class="kpi-value">{{ row.2025|default:0 }}</div>
+      </div>
+      {% endif %}
+    {% endfor %}
+
+    {# Target ثابت #}
+    <div class="kpi-card">
+      <div class="kpi-icon-wrap bg-secondary bg-opacity-10 text-secondary">
+        <svg>
+          <use href="{% static 'assets/svg/icon-sprite.svg' %}#rate"></use>
+        </svg>
+      </div>
+      <div class="kpi-title">Target</div>
+      <div class="kpi-value">≥99%</div>
+    </div>
+
+  </div>
+</div>
+{% endwith %}
+
+
+
+
+{% with tab.name|default:''|lower as tab_name_lower %}
+<div class="card-body row align-items-start">
+  {% if tab.outbound_html %}
+  <div
+    class="col-12 mb-4 p-3 shadow-sm border rounded"
+    style="background-color: #f8f9fa"
+  >
+    {{ tab.outbound_html|safe }}
+  </div>
+  {% endif %} {% if tab.inbound_html %}
+  <div
+    class="col-12 mb-4 p-3 shadow-sm border rounded"
+    style="background-color: #f8f9fa"
+  >
+    {{ tab.inbound_html|safe }}
+  </div>
+  {% endif %} {% if tab.sub_tables %}
+  {# ================= ORDER GENERAL INFORMATION ================= #}
+  {% if tab_name_lower == 'order general information' %}
+  <div class="col-12">
+    <div class="accordion" id="accordionOrderGeneral">
+      {% for sub in tab.sub_tables %}
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button
+            class="accordion-button {% if not forloop.first %}collapsed{% endif %}"
+            data-bs-toggle="collapse"
+            data-bs-target="#collapse-{{ forloop.counter }}"
+          >
+            {{ sub.title }}
+          </button>
+        </h2>
+        <div
+          id="collapse-{{ forloop.counter }}"
+          class="accordion-collapse collapse {% if forloop.first %}show{% endif %}"
+        >
+          <div class="accordion-body">
+            <div class="row">
+              <div
+                class="{% if sub.title == 'Quality Exceptions' %}col-12{% else %}col-md-7{% endif %}"
+              >
+                <div class="table-card">
+                  <h5
+                    class="text-center mt-3 mb-3 fw-bold"
+                    style="color: #9084ad"
+                  >
+                    {{ sub.title }}
+                  </h5>
+                  <div class="table-responsive custom-scrollbar table-top">
+                    <table
+                      class="table table-striped table-bordered text-center align-middle"
+                    >
+                      <thead class="table-light">
+                        <tr>
+                          {% for col in sub.columns %}
+                          <th>{{ col }}</th>
+                          {% endfor %}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for row in sub.data %}
+                        <tr>
+                          {% for col in sub.columns %}
+                          <td>{{ row|get_item:col }}</td>
+                          {% endfor %}
+                        </tr>
+                        {% empty %}
+                        <tr>
+                          <td
+                            colspan="{{ sub.columns|length }}"
+                            class="text-muted"
+                          >
+                            No data available.
+                          </td>
+                        </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              {% if sub.title != 'Quality Exceptions' %}
+              <div class="col-md-5">
+                <div class="table-card">
+                  {% if sub.id %}
+                  {% render_chart sub.id %} {% else %}
+                  {% render_chart sub.title %} {% endif %}
+                </div>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {# ================= TABS (>=4) ================= #}
+  {% elif tab.sub_tables|length >= 4 %}
+  <div class="col-12">
+    <ul class="nav nav-tabs mb-3">
+      {% for sub in tab.sub_tables %}
+      <li class="nav-item">
+        <button
+          class="nav-link {% if forloop.first %}active{% endif %}"
+          data-bs-toggle="tab"
+          data-bs-target="#tab-{{ forloop.counter }}"
+        >
+          {{ sub.title }}
+        </button>
+      </li>
+      {% endfor %}
+    </ul>
+    <div class="tab-content p-3 border rounded bg-white shadow-sm">
+      {% for sub in tab.sub_tables %}
+      <div
+        class="tab-pane fade {% if forloop.first %}show active{% endif %}"
+        id="tab-{{ forloop.counter }}"
+      >
+        <div class="row">
+          <div class="col-md-7">
+            <div class="table-card">
+              <h5 class="text-center mt-3 mb-3 fw-bold" style="color: #9084ad">
+                {{ sub.title }}
+              </h5>
+              <div class="table-responsive custom-scrollbar table-top">
+                <table
+                  class="table table-striped table-bordered text-center align-middle"
+                >
+                  <thead class="table-light">
+                    <tr>
+                      {% for col in sub.columns %}
+                      <th>{{ col }}</th>
+                      {% endfor %}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for row in sub.data %}
+                    <tr>
+                      {% for col in sub.columns %}
+                      <td>{{ row|get_item:col }}</td>
+                      {% endfor %}
+                    </tr>
+                    {% empty %}
+                    <tr>
+                      <td colspan="{{ sub.columns|length }}" class="text-muted">
+                        No data available.
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-5">
+            <div class="table-card">
+              {% if sub.id %} {% render_chart sub.id %} {% else %}
+              {% render_chart sub.title %} {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {# ================= LESS THAN 4 ================= #} {% else %}
+  <div class="col-12">
+    {# ===== ROW 1: KPI TABLES + CHART ===== #}
+    <div class="row">
+      <div class="col-md-7">
+        {% for sub in tab.sub_tables %} {% if not sub.full_width %}
+        <div class="table-card mb-4">
+          <h5 class="text-center mt-3 mb-3 fw-bold" style="color: #9084ad">
+            {{ sub.title }}
+          </h5>
+          <div class="table-responsive custom-scrollbar table-top">
+            <table
+              class="table table-striped table-bordered text-center align-middle"
+            >
+              <thead class="table-light">
+                <tr>
+                  {% for col in sub.columns %}
+                  <th>{{ col }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in sub.data %}
+                <tr>
+                  {% for col in sub.columns %}
+                  <td>{{ row|get_item:col }}</td>
+                  {% endfor %}
+                </tr>
+                {% empty %}
+                <tr>
+                  <td colspan="{{ sub.columns|length }}" class="text-muted">
+                    No data available.
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% endif %} {% endfor %}
+      </div>
+      <div class="col-md-5">
+        {% if tab.chart_data %}
+        <div class="table-card mb-4">{% render_chart tab.name %}</div>
+        {% endif %}
+      </div>
+    </div>
+    {# ===== ROW 2: FULL WIDTH DETAIL TABLE ===== #}
+    {% for sub in tab.sub_tables %} {% if sub.full_width %}
+    <div class="row mt-4">
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header pb-0 card-no-border text-center">
+            <h4 class="mb-2">{{ sub.title }}</h4>
+          </div>
+          <div class="card-body text-center">
+            <div class="table-responsive custom-scrollbar">
+              <table class="table table-bordered">
+                <thead class="table-primary">
+                  <tr role="row">
+                    {% for col in sub.columns %}
+                    <th class="text-nowrap fw-semibold">{{ col }}</th>
+                    {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in sub.data %}
+                  <tr role="row" class="even">
+                    {% for col in sub.columns %}
+                    {% with value=row|get_item:col %}
+                    {# ===== STATUS BADGE ===== #}
+                    {% if col|lower == "status" %}
+                    <td class="text-center">
+                      {% if value|default_if_none:""|trim|lower == "in transit" %}
+                      <span class="badge bg-warning text-dark rounded-pill">
+                        <i class="bi bi-arrow-repeat"></i> In Transit</span
+                      >
+                      {% elif value|default_if_none:""|trim|lower == "receiving complete" %}
+                      <span class="badge bg-success rounded-pill">
+                        <i class="bi bi-hourglass-split"></i> Receiving
+                        Complete</span
+                      >
+                      {% elif value|default_if_none:""|trim|lower == "verified" %}
+                      <span class="badge bg-primary rounded-pill"
+                        ><i class="bi bi-check-circle-fill"></i> Verified</span
+                      >
+                      {% elif value|default_if_none:""|trim|lower == "receiving started" %}
+                      <span class="badge bg-info text-dark rounded-pill">
+                        Receiving Started</span
+                      >
+                      {% elif value|default_if_none:""|trim|lower == "cancelled" %}
+                      <span class="badge bg-danger rounded-pill"
+                        ><i class="bi bi-x-circle-fill"></i> Cancelled</span
+                      >
+                      {% else %}
+                      <span class="badge bg-secondary rounded-pill"
+                        >{{ value|default:"N/A" }}</span
+                      >
+                      {% endif %}
+                    </td>
+
+                    {# ===== HIT / MISS BADGE ===== #}
+                    {% elif col|lower == "hit or miss" or col|lower == "hit/miss" %}
+                    <td>
+                      {% if value|default_if_none:""|trim|lower == "hit" %}
+                      <span
+                        class="badge bg-success rounded-pill d-inline-flex align-items-center gap-1 text-uppercase"
+                      >
+                        <i class="bi bi-check-circle-fill"></i> Hit
+                      </span>
+                      {% elif value|default_if_none:""|trim|lower == "miss" %}
+                      <span
+                        class="badge bg-danger rounded-pill d-inline-flex align-items-center gap-1 text-uppercase"
+                      >
+                        <i class="bi bi-x-circle-fill"></i> Miss
+                      </span>
+                      {% elif value|default_if_none:""|trim|lower == "pending" %}
+                      <span class="badge bg-warning text-dark rounded-pill"
+                        >Pending</span
+                      >
+                      {% else %}
+                      <span class="badge bg-light text-dark rounded-pill"
+                        >{{ value|default:"—" }}</span
+                      >
+                      {% endif %}
+                    </td>
+
+                    {# ===== DATE / TIME ===== #}
+                    {% elif col|lower == "create timestamp" or col|lower == "arrival date" or col|lower == "offloading date" %}
+                    <td class="text-nowrap text-muted small">
+                      <i class="bi bi-clock"></i>
+                      {% if value %} {{ value }} {% else %} — {% endif %}
+                    </td>
+
+                    {# ===== DEFAULT CELL ===== #} {% else %}
+                    <td>{{ value }}</td>
+                    {% endif %}
+                    {% endwith %}
+                    {% endfor %}
+                  </tr>
+                  {% empty %}
+                  <tr>
+                    <td
+                      colspan="{{ sub.columns|length }}"
+                      class="text-muted text-center"
+                    >
+                      No data available
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% elif tab.data %}
+  {# ================= ONE TABLE ================= #}
+  <div class="row">
+    <div class="col-md-7">
+      <div class="table-card">
+        <div class="table-responsive custom-scrollbar table-top">
+          <table
+            class="table table-striped table-bordered text-center align-middle"
+          >
+            <thead class="table-light">
+              <tr>
+                {% for col in tab.columns %}
+                <th>{{ col }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in tab.data %}
+              <tr>
+                {% for col in tab.columns %}
+                <td>{{ row|get_item:col }}</td>
+                {% endfor %}
+              </tr>
+              {% empty %}
+              <tr>
+                <td colspan="{{ tab.columns|length }}" class="text-muted">
+                  No data available.
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-5">
+      <div class="table-card">{% render_chart tab.name %}</div>
+    </div>
+  </div>
+  {% else %}
+  <div class="col-12 text-center text-muted py-5">
+    No data available to display.
+  </div>
+  {% endif %}
+</div>
+{% endwith %}
+
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    // 🎯 معالجة Tabs (للتابات الأخرى)
+    const tabTriggers = document.querySelectorAll(
+      'button[data-bs-toggle="tab"]'
+    );
+
+    tabTriggers.forEach((tab) => {
+      tab.addEventListener("shown.bs.tab", function (event) {
+        const targetId = event.target.getAttribute("data-bs-target");
+        const activePane = document.querySelector(targetId);
+        if (!activePane) return;
+
+        const canvas = activePane.querySelector("canvas");
+        if (canvas && window.Chart && window.Chart.instances) {
+          const chartInstance = window.Chart.instances[canvas.id];
+          if (chartInstance) {
+            chartInstance.resize();
+            chartInstance.update();
+          }
+        }
+      });
+    });
+  });
+</script>
