@@ -530,18 +530,8 @@ class UploadExcelViewRoche(View):
                 return JsonResponse({"error": quarter_error})
 
             tab_filter_map = {
-                "overview": lambda: self.overview_tab(
-                    request=request,
-                    selected_month=effective_month,
-                    selected_months=quarter_months or None,
-                ),
                 "dashboard": lambda: self.dashboard_tab(request),
                 "all": lambda: self.filter_all_tabs(
-                    request,
-                    effective_month,
-                    selected_months=quarter_months or None,
-                ),
-                "order general information": lambda: self.filter_order_general_information(
                     request,
                     effective_month,
                     selected_months=quarter_months or None,
@@ -556,27 +546,7 @@ class UploadExcelViewRoche(View):
                     effective_month,
                     selected_months=quarter_months or None,
                 ),
-                "airport clearance": lambda: self.filter_airport_combined(
-                    request,
-                    effective_month,
-                    selected_months=quarter_months or None,
-                ),
-                "airport combined": lambda: self.filter_airport_combined(
-                    request,
-                    effective_month,
-                    selected_months=quarter_months or None,
-                ),
-                "seaport clearance": lambda: self.filter_seaport_combined(
-                    request,
-                    effective_month,
-                    selected_months=quarter_months or None,
-                ),
                 "total lead time performance": lambda: self.filter_total_lead_time_performance(
-                    request,
-                    effective_month,
-                    selected_months=quarter_months or None,
-                ),
-                "data logger": lambda: self.filter_data_logger_measurement(
                     request,
                     effective_month,
                     selected_months=quarter_months or None,
@@ -586,13 +556,18 @@ class UploadExcelViewRoche(View):
                     effective_month,
                     selected_months=quarter_months or None,
                 ),
-                "pods update": lambda: self.filter_pods_update(
+                "pods update": lambda: self.filter_pods_update(request, effective_month),
+                "meeting points": lambda: self.meeting_points_tab(request),
+                "expiry": lambda: self.filter_expiry(
                     request,
                     effective_month,
                     selected_months=quarter_months or None,
                 ),
-                "meeting points": lambda: self.meeting_points_tab(request),
-                "cross docking": lambda: self.cross_docking_tab(request),
+                "Expiry": lambda: self.filter_expiry(
+                    request,
+                    effective_month,
+                    selected_months=quarter_months or None,
+                ),
             }
 
             # Iterate available tab filters
@@ -630,18 +605,8 @@ class UploadExcelViewRoche(View):
                             status=200,
                         )
 
-            # Overview (never cached)
-            if selected_tab == "overview":
-                print("🔹 Loading Overview tab")
-                overview_result = self.overview_tab(
-                    request=request,
-                    selected_month=effective_month,
-                    selected_months=quarter_months or None,
-                )
-                return JsonResponse(overview_result, safe=True)
-
             # All-in-One (never cached)
-            elif selected_tab == "all":
+            if selected_tab == "all":
                 print("🔹 Loading All-in-One tab")
                 all_result = self.filter_all_tabs(
                     request=request,
@@ -651,12 +616,7 @@ class UploadExcelViewRoche(View):
                 return JsonResponse(all_result, safe=False)
 
             # Remaining tabs
-            elif selected_tab == "order general information":
-                return JsonResponse(
-                    self.filter_order_general_information(request, selected_month),
-                    safe=False,
-                )
-            elif selected_tab in ["rejections", "return & refusal"]:
+            if selected_tab in ["rejections", "return & refusal"]:
                 return JsonResponse(
                     self.filter_rejections_combined(
                         request,
@@ -665,17 +625,7 @@ class UploadExcelViewRoche(View):
                     ),
                     safe=False,
                 )
-            elif (
-                "airport clearance" in selected_tab
-                or "airport combined" in selected_tab
-            ):
-                return JsonResponse(
-                    self.filter_airport_combined(request, effective_month), safe=False
-                )
-            elif selected_tab == "seaport clearance":
-                return JsonResponse(
-                    self.filter_seaport_combined(request, effective_month), safe=False
-                )
+            # airport / seaport tabs تم إلغاؤها
             elif selected_tab in [
                 "total lead time performance",
                 "total lead time preformance",
@@ -693,15 +643,7 @@ class UploadExcelViewRoche(View):
                     self.filter_total_lead_time_roche(request, effective_month),
                     safe=False,
                 )
-            elif "data logger" in selected_tab:
-                return JsonResponse(
-                    self.filter_data_logger_measurement(
-                        request,
-                        effective_month,
-                        selected_months=quarter_months or None,
-                    ),
-                    safe=False,
-                )
+            # data logger tab تم إلغاؤه
             elif "dock to stock - roche" in selected_tab:
                 return JsonResponse(
                     self.filter_dock_to_stock_roche(request, effective_month),
@@ -726,8 +668,7 @@ class UploadExcelViewRoche(View):
                 )
             elif "meeting points" in selected_tab:
                 return self.meeting_points_tab(request)
-            elif "cross docking" in selected_tab:
-                return self.cross_docking_tab(request)
+            # cross docking tab تم إلغاؤه
             elif selected_tab:
                 raw_data = self.render_raw_sheet(request, selected_tab)
                 return JsonResponse(raw_data, safe=False)
@@ -779,7 +720,9 @@ class UploadExcelViewRoche(View):
                 "Return & Refusal",
                 "Dock to stock",
                 "Total Lead Time Performance",
+                "PODs update",
                 "Meeting Points & Action",
+                "Expiry",
             ]
             if include_only:
                 include_set_v = {s.strip() for s in include_only}
@@ -794,6 +737,7 @@ class UploadExcelViewRoche(View):
                 "PODs update",
                 "Return & Refusal",
                 "Meeting Points & Action",
+                "Expiry",
             ]
 
             filtered_tabs = [tab for tab in ordered_tabs if tab in filtered_tabs]
@@ -838,9 +782,6 @@ class UploadExcelViewRoche(View):
         done_count = meeting_points.filter(is_done=True).count()
         total_count = meeting_points.count()
 
-        overview_data = self.overview_tab(
-            request=request, selected_month=selected_month or None
-        )
         all_tab_data = self.filter_all_tabs(
             request=request, selected_month=selected_month or None
         )
@@ -1529,20 +1470,39 @@ class UploadExcelViewRoche(View):
                 )
                 return {"detail_html": html}
 
+            # ✅ قائمة التابات المحذوفة
+            excluded_tabs = [
+                "return & refusal",
+                "airport clearance",
+                "seaport clearance",
+                "data logger measurement",
+            ]
+
             clean_tabs = []
             for tab in overview_data.get("tab_cards", []):
                 name = tab.get("name", "غير معروف")
+                name_lower = name.strip().lower()
 
+                # ✅ حذف التابات المطلوبة
+                if name_lower in excluded_tabs:
+                    continue
+
+                # ✅ النسبة الفعلية
                 try:
                     hit = float(tab.get("hit_pct", 0))
-                except:
+                except Exception:
                     hit = 0
                 hit = int(round(max(0, min(hit, 100))))
 
+                # ✅ التارجت
                 try:
                     target = float(tab.get("target_pct", 100))
-                except:
+                except Exception:
                     target = 100
+
+                # ✅ نستخدم أي chart_data و chart_type راجعين من الـ overview كما هي
+                chart_data = tab.get("chart_data", []) or []
+                chart_type = tab.get("chart_type", "bar")
 
                 clean_tabs.append(
                     {
@@ -1550,66 +1510,12 @@ class UploadExcelViewRoche(View):
                         "hit_pct": hit,
                         "target_pct": int(target),
                         "count": tab.get("count", 0),
-                        "chart_type": tab.get("chart_type", "bar"),
-                        "chart_data": tab.get("chart_data", []),
+                        "chart_type": chart_type,
+                        "chart_data": chart_data,
                     }
                 )
 
-            # ✅ Airport Clearance
-            airport_data = self.filter_airport_combined(request, month_for_filters)
-            if airport_data:
-                hit_airport = airport_data.get("hit_pct", 0)
-                try:
-                    hit_airport = float(hit_airport)
-                except:
-                    hit_airport = 0
-                hit_airport = int(round(max(0, min(hit_airport, 100))))
-
-                existing_names = [t["name"].strip().lower() for t in clean_tabs]
-                if "airport clearance" not in existing_names:
-                    clean_tabs.append(
-                        {
-                            "name": "Airport Clearance",
-                            "hit_pct": hit_airport,
-                            "target_pct": 98,
-                            "count": airport_data.get("count", 0),
-                            "chart_type": "column",
-                            "chart_data": [],
-                        }
-                    )
-
-            # ✅ Seaport Clearance
-            # ✅ Seaport Clearance
-            seaport_data = self.filter_seaport_combined(
-                request, selected_month=month_for_filters
-            )
-            if seaport_data and seaport_data.get("chart_data"):
-                # خدي النسبة الحقيقية زي ما هي راجعة من التاب
-                hit_seaport = seaport_data.get("hit_pct", 0)
-
-                # تأكدي إنها عدد صحيح
-                try:
-                    hit_seaport = int(round(float(hit_seaport)))
-                except:
-                    hit_seaport = 0
-
-                # لو أقل من صفر أو أكتر من 100 نصححها
-                hit_seaport = max(0, min(hit_seaport, 100))
-
-                existing_names = [t["name"].strip().lower() for t in clean_tabs]
-                if "seaport clearance" not in existing_names:
-                    clean_tabs.append(
-                        {
-                            "name": "Seaport Clearance",
-                            "hit_pct": hit_seaport,
-                            "target_pct": 98,
-                            "count": seaport_data.get("count", 0),
-                            "chart_type": "column",
-                            "chart_data": seaport_data.get("chart_data", []),
-                        }
-                    )
-
-            # ✅ PODs Update
+            # ✅ PODs Update - إضافة مع الشارتات
             pods_data = self.filter_pods_update(request, month_for_filters)
             if pods_data and pods_data.get("hit_pct") is not None:
                 try:
@@ -1620,25 +1526,27 @@ class UploadExcelViewRoche(View):
 
                 existing_names = [t["name"].strip().lower() for t in clean_tabs]
                 if "pods update" not in existing_names:
+                    # ✅ جلب الشارتات من pods_data
+                    pods_chart_data = pods_data.get("chart_data", [])
+                    pods_chart_type = "column"
+                    if pods_chart_data and len(pods_chart_data) > 0:
+                        pods_chart_type = pods_chart_data[0].get("type", "column")
+
                     clean_tabs.append(
                         {
                             "name": "PODs update",
                             "hit_pct": hit_pods,
-                            "target_pct": 98,
+                            "target_pct": 100,
                             "count": pods_data.get("count", 0),
-                            "chart_type": "column",
-                            "chart_data": [],
+                            "chart_type": pods_chart_type,
+                            "chart_data": pods_chart_data,
                         }
                     )
 
-            # ✅ ترتيب التابات حسب الأولوية
+            # ✅ ترتيب التابات حسب الأولوية (بدون التابات المحذوفة)
             desired_order = [
                 "Total Lead Time Performance",
-                "Return & Refusal",
-                "Data Logger Measurement",
                 "Dock to stock",
-                "Airport Clearance",
-                "Seaport Clearance",
                 "PODs update",
             ]
             clean_tabs.sort(
@@ -3765,35 +3673,167 @@ class UploadExcelViewRoche(View):
             }
 
     # Merge sheets from Excel
-    def filter_data_logger_measurement(
-        self, request, selected_month=None, selected_months=None
-    ):
-        print("🟢 [DEBUG] ✅ دخل على filter_data_logger_measurement()")
+    def filter_pods_update(self, request, selected_month=None, selected_months=None):
+        """
+        تاب PODs: قراءة من شيت PODs.
+        - حساب Days بين Created on و PGI Date (باستثناء يوم الجمعة).
+        - Hit = ≤ 2 days, Miss = > 2 days.
+        - تجميع حسب W.HNAME (كل مدينة جدول + شارت لوحدها).
+        - كروت KPI: Total Shipment, Hit %, Miss %, Target.
+        """
+        import pandas as pd
+        from django.template.loader import render_to_string
+        import os
+        from datetime import datetime, timedelta
 
         try:
-            import pandas as pd, numpy as np, os, traceback
-            from django.template.loader import render_to_string
-
             excel_path = self.get_excel_path()
             if not excel_path or not os.path.exists(excel_path):
                 return {"error": "⚠️ Excel file not found."}
 
             xls = pd.ExcelFile(excel_path, engine="openpyxl")
             sheet_name = next(
-                (s for s in xls.sheet_names if "data logger measurement" in s.lower()),
+                (
+                    s
+                    for s in xls.sheet_names
+                    if "pod" in s.lower() and "update" not in s.lower()
+                ),
                 None,
             )
             if not sheet_name:
+                return {"error": "⚠️ Sheet 'PODs' was not found."}
+
+            df = pd.read_excel(
+                excel_path,
+                sheet_name=sheet_name,
+                engine="openpyxl",
+                dtype=str,
+                header=0,
+            ).fillna("")
+            df.columns = df.columns.astype(str).str.strip()
+
+            def _norm(val):
+                return re.sub(r"[^a-z0-9]", "", str(val).strip().lower())
+
+            def _find_col(dframe, names):
+                nmap = {_norm(c): c for c in dframe.columns}
+                for name in names:
+                    n = _norm(name)
+                    if n in nmap:
+                        return nmap[n]
+                for col in dframe.columns:
+                    if any(_norm(n) in _norm(col) for n in names):
+                        return col
+                return None
+
+            col_created = _find_col(df, ["created on", "createdon", "created"])
+            col_pgi = _find_col(df, ["pgi date", "pgidate", "pgi"])
+            col_whname = _find_col(
+                df, ["w.hname", "whname", "warehouse name", "warehouse"]
+            )
+            col_shpng = _find_col(df, ["shpng pnt", "shpngpnt", "shipping point"])
+            col_plant = _find_col(df, ["plant"])
+            col_whno = _find_col(df, ["wh no", "whno", "warehouse no"])
+            col_delivery = _find_col(df, ["delivery"])
+            col_inv = _find_col(df, ["inv", "invoice"])
+            col_shipto = _find_col(df, ["ship-to party", "shiptoparty", "ship to"])
+            col_shipto_name = _find_col(
+                df, ["name of the ship-to party", "ship-to party name"]
+            )
+            col_qty = _find_col(df, ["qty", "quantity"])
+            col_unit = _find_col(df, ["unit"])
+            col_city = _find_col(df, ["city"])
+
+            if not col_created or not col_pgi or not col_whname:
                 return {
-                    "error": "⚠️ No sheet containing 'Data logger Measurement' was found."
+                    "error": "⚠️ Required columns (Created on, PGI Date, W.HNAME) not found."
                 }
 
-            df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl")
-            df.columns = df.columns.str.strip()
+            # تحويل التواريخ
+            df["_created_dt"] = pd.to_datetime(df[col_created], errors="coerce")
+            df["_pgi_dt"] = pd.to_datetime(df[col_pgi], errors="coerce")
 
-            if "Month" not in df.columns:
-                return {"error": "⚠️ Column 'Month' was not found in the sheet."}
+            # حساب Days (باستثناء يوم الجمعة) - الفرق بين Created on و PGI Date
+            def business_days_between(start, end):
+                if pd.isna(start) or pd.isna(end):
+                    return None
+                if start > end:
+                    return None
+                days = 0
+                current = start.date()
+                end_date = end.date()
+                # نحسب الأيام بدون الجمعة (من Created on إلى PGI Date)
+                while current < end_date:  # < وليس <= لأننا لا نحسب اليوم الأخير
+                    if current.weekday() != 4:  # 4 = Friday
+                        days += 1
+                    current += timedelta(days=1)
+                return days
 
+            df["Days"] = df.apply(
+                lambda row: business_days_between(row["_created_dt"], row["_pgi_dt"]),
+                axis=1,
+            )
+            df["Hit or Miss"] = df["Days"].apply(
+                lambda d: (
+                    "Hit"
+                    if d is not None and d <= 2
+                    else ("Miss" if d is not None else "Pending")
+                )
+            )
+            df["Days"] = df["Days"].apply(
+                lambda d: str(int(d)) if d is not None else ""
+            )
+
+            # استخراج الشهر من Created on
+            df["Month"] = df["_created_dt"].dt.strftime("%b").fillna("")
+            df = df.drop(columns=["_created_dt", "_pgi_dt"], errors="ignore")
+
+            # فلترة الشهر
+            selected_months_norm = []
+            if selected_months:
+                if isinstance(selected_months, str):
+                    selected_months = [selected_months]
+                seen = set()
+                for m in selected_months:
+                    norm = self.normalize_month_label(m)
+                    if norm and norm.lower() not in seen:
+                        seen.add(norm.lower())
+                        selected_months_norm.append(norm)
+
+            if selected_months_norm:
+                df = df[
+                    df["Month"]
+                    .str.lower()
+                    .isin([m.lower() for m in selected_months_norm])
+                ]
+            elif selected_month:
+                month_norm = self.normalize_month_label(selected_month)
+                if month_norm:
+                    df = df[df["Month"].str.lower() == month_norm.lower()]
+
+            if df.empty:
+                return {
+                    "detail_html": "<p class='text-warning text-center p-4'>⚠️ No data available for selected period.</p>",
+                    "count": 0,
+                    "hit_pct": 0,
+                }
+
+            # إحصائيات عامة (لكروت KPI)
+            total_shipments = len(df[df["Hit or Miss"].isin(["Hit", "Miss"])])
+            hit_count = len(df[df["Hit or Miss"] == "Hit"])
+            miss_count = len(df[df["Hit or Miss"] == "Miss"])
+            hit_pct = (
+                round((hit_count / total_shipments * 100), 2)
+                if total_shipments > 0
+                else 0
+            )
+            miss_pct = (
+                round((miss_count / total_shipments * 100), 2)
+                if total_shipments > 0
+                else 0
+            )
+
+            # تجميع كل المدن مع بعض (جدول واحد وشارت واحد)
             month_order = [
                 "Jan",
                 "Feb",
@@ -3803,339 +3843,142 @@ class UploadExcelViewRoche(View):
                 "Jun",
                 "Jul",
                 "Aug",
-                "2025",
+                "Sep",
+                "Oct",
+                "Nov",
+                "Dec",
             ]
-
-            # تنظيف البيانات
-            df = df.dropna(subset=["Month"])
-            df = df[df["Month"].isin(month_order[:-1])]
-
-            selected_months_norm = []
-            if selected_months:
-                if isinstance(selected_months, str):
-                    selected_months = [selected_months]
-                seen = set()
-                for m in selected_months:
-                    norm = self.normalize_month_label(m)
-                    if norm and norm not in seen:
-                        seen.add(norm)
-                        selected_months_norm.append(norm)
-
-            selected_month_norm = (
-                self.normalize_month_label(selected_month) if selected_month else None
+            months_raw = df["Month"].dropna().unique().tolist()
+            months = sorted(
+                months_raw,
+                key=lambda m: month_order.index(m) if m in month_order else 999,
             )
-            if selected_months_norm:
-                df = df[
-                    df["Month"]
-                    .str.lower()
-                    .isin([m.lower() for m in selected_months_norm])
-                ]
-                if df.empty:
-                    return {
-                        "detail_html": "<p class='text-warning text-center p-4'>⚠️ No data available for the selected quarter months in Data Logger Measurement.</p>",
-                        "chart_data": [],
-                        "count": 0,
-                        "hit_pct": 0,
-                    }
-            elif selected_month_norm:
-                df = df[df["Month"].str.lower() == selected_month_norm.lower()]
-                if df.empty:
-                    return {
-                        "detail_html": f"<p class='text-warning text-center p-4'>⚠️ No data available for {selected_month_norm}.</p>",
-                        "chart_data": [],
-                        "count": 0,
-                    }
 
-            # Pivot
-            df_melted = df.melt(id_vars=["Month"], var_name="KPI", value_name="Value")
-            df_pivot = df_melted.pivot_table(
-                index="KPI",
-                columns="Month",
-                values="Value",
-                aggfunc="sum",
-                fill_value=0,
+            # الحصول على قائمة المدن
+            cities = sorted(
+                df[col_whname]
+                .astype(str)
+                .str.strip()
+                .replace("", pd.NA)
+                .dropna()
+                .unique()
+                .tolist()
             )
-            month_scope = (
-                selected_months_norm if selected_months_norm else month_order[:-1]
-            )
-            df_pivot = df_pivot[[m for m in month_scope if m in df_pivot.columns]]
-            df_pivot["2025"] = df_pivot.sum(axis=1)
 
-            # صف TOTAL
-            total_row = df_pivot.sum(numeric_only=True)
-            total_row.name = "TOTAL"
-            if "Late send to ROCHE" in df_pivot.index:
-                new_df = pd.DataFrame(columns=df_pivot.columns)
-                for idx in df_pivot.index:
-                    new_df.loc[idx] = df_pivot.loc[idx]
-                    if idx == "Late send to ROCHE":
-                        new_df.loc["TOTAL"] = total_row
-                df_pivot = new_df
-            else:
-                df_pivot.loc["TOTAL"] = total_row
+            if not months:
+                return {
+                    "detail_html": "<p class='text-warning text-center p-4'>⚠️ No months found in data.</p>",
+                    "count": 0,
+                    "hit_pct": 0,
+                }
 
-            # حساب النسب
-            ontime_percentages = []
-            months_iterable = [m for m in df_pivot.columns if m != "2025"]
-
-            for month in months_iterable:
-                if month not in df_pivot.columns:
+            # تجميع حسب المدينة والشهر: Hit (Closed), Miss (Pending), Total
+            # لكل مدينة: Closed, Pending, Total
+            city_data = {}
+            for city in cities:
+                df_city = df[df[col_whname].astype(str).str.strip() == city].copy()
+                if df_city.empty:
                     continue
-                on_time = (
-                    pd.to_numeric(df_pivot.at["On time sent", month], errors="coerce")
-                    if "On time sent" in df_pivot.index
-                    else 0
-                )
-                total = (
-                    pd.to_numeric(df_pivot.at["TOTAL", month], errors="coerce")
-                    if "TOTAL" in df_pivot.index
-                    else 0
-                )
-                pct = round((on_time / total * 100), 2) if total else 0
-                ontime_percentages.append(pct)
 
-            # ✅ فلترة الشهور اللي كلها أصفار (قبل تجهيز الشارت)
-            valid_months = []
-            valid_percentages = []
+                closed_by_month_city = []
+                pending_by_month_city = []
+                total_by_month_city = []
 
-            for i, month in enumerate(months_iterable):
-                # نحول كل القيم في الشهر إلى أرقام للتأكد إن مفيش قيم نصية
-                col_values = pd.to_numeric(df_pivot[month], errors="coerce").fillna(0)
-                if col_values.sum() != 0:  # الشهر فيه بيانات حقيقية
-                    valid_months.append(month)
-                    valid_percentages.append(ontime_percentages[i])
-
-            print(f"📊 [DEBUG] الشهور المعروضة في الشارت فقط: {valid_months}")
-
-            # 🎯 الشارت فقط للـ valid_months
-            chart_data = [
-                {
-                    "type": "bar",
-                    "name": "On Time Sent %",
-                    "showInLegend": True,
-                    "color": "#d0e7ff",
-                    "dataPoints": [
-                        {"label": m, "y": valid_percentages[i]}
-                        for i, m in enumerate(valid_months)
-                    ],
-                },
-                {
-                    "type": "line",
-                    "name": "Target (100%)",
-                    "color": "red",
-                    "showInLegend": True,
-                    "dataPoints": [{"label": m, "y": 100} for m in valid_months],
-                },
-            ]
-
-            # الجدول كما هو (ما نحذفش منه حاجة)
-            table_data = df_pivot.reset_index().to_dict(orient="records")
-            columns = ["KPI"] + [m for m in month_order if m in df_pivot.columns]
-
-            tab = {
-                "name": "Data Logger Measurement",
-                "columns": columns,
-                "data": table_data,
-                "chart_data": chart_data,  # ✅ إضافة chart_data للتاب
-            }
-
-            month_norm = self.apply_month_filter_to_tab(tab, selected_month)
-            html = render_to_string(
-                "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
-                {
-                    "tab": tab,
-                    "table_title": "Data Logger Measurement",
-                    "selected_month": month_norm,
-                },
-            )
-
-            # ✅ حساب hit الإجمالية
-            try:
-                total_on_time = (
-                    pd.to_numeric(df_pivot.loc["On time sent"], errors="coerce")
-                    .fillna(0)
-                    .sum()
-                )
-                total_all = (
-                    pd.to_numeric(df_pivot.loc["TOTAL"], errors="coerce")
-                    .fillna(0)
-                    .sum()
-                )
-                hit_pct = (
-                    round((total_on_time / total_all * 100), 2) if total_all else 0
-                )
-            except Exception:
-                hit_pct = 0
-
-            return {
-                "detail_html": html,
-                "chart_data": chart_data,
-                "chart_title": "On Time Sent % Performance",
-                "hit_pct": hit_pct,  # ✅ أضفناها هنا
-                "tab_data": tab,
-            }
-
-        except Exception as e:
-            print("❌ [ERROR] Exception in filter_data_logger_measurement():")
-            traceback.print_exc()
-            return {"error": f"⚠️ Error while reading data: {e}"}
-
-    def filter_pods_update(self, request, selected_month=None, selected_months=None):
-        """
-        🔹 قراءة شيت PODs Update من Excel
-        🔹 عرض الأشهر كما هي في الشيت (بدون ترتيب ثابت)
-        🔹 عرض جدول Closed / Pending / Total فقط
-        🔹 رسم شارت النسبة المئوية لـ Closed فقط (%)
-        🔹 حساب نسبة الأداء النهائية (YTD %)
-        """
-        print("🟢 [DEBUG] ✅ دخل على filter_pods_update()")
-
-        try:
-            import pandas as pd
-            from django.template.loader import render_to_string
-            import os
-
-            excel_path = self.get_excel_path()
-            if not excel_path or not os.path.exists(excel_path):
-                return {"error": "⚠️ Excel file not found."}
-
-            xls = pd.ExcelFile(excel_path, engine="openpyxl")
-            sheet_name = next((s for s in xls.sheet_names if "pod" in s.lower()), None)
-            if not sheet_name:
-                return {"error": "⚠️ No sheet containing the word 'POD' was found."}
-
-            # 🔹 قراءة البيانات من الشيت
-            df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl")
-            df.columns = df.columns.str.strip()
-
-            print(f"🔍 [DEBUG PODs] الأعمدة الموجودة: {df.columns.tolist()}")
-            print(f"🔍 [DEBUG PODs] عدد الصفوف: {len(df)}")
-            print(f"🔍 [DEBUG PODs] أول 5 صفوف:\n{df.head()}")
-
-            # 🔹 التأكد من الأعمدة الأساسية
-            columns_map = {}
-            for col in df.columns:
-                name = col.strip().lower()
-                if "month" in name:
-                    columns_map["Month"] = col
-                elif "closed" in name:
-                    columns_map["Closed"] = col
-                elif "pending" in name:
-                    columns_map["Pending"] = col
-
-            if len(columns_map) < 3:
-                return {"error": "⚠️ Required columns are missing."}
-
-            df = df.rename(columns=columns_map)
-            df = df.dropna(subset=["Month"])
-            df = df[~df["Month"].astype(str).str.lower().eq("total")]
-
-            # ✅ استخدام الأشهر الموجودة في Excel كما هي
-            df["MonthAbbr"] = df["Month"].astype(str).str.strip().str.title()
-
-            # ✅ فلترة الشهر المختار (لو موجود)
-            selected_months_norm = []
-            if selected_months:
-                if isinstance(selected_months, str):
-                    selected_months = [selected_months]
-                seen = set()
-                for month in selected_months:
-                    norm = self.normalize_month_label(month)
-                    if norm and norm.lower() not in seen:
-                        seen.add(norm.lower())
-                        selected_months_norm.append(norm)
-
-            if selected_months_norm:
-                df = df[
-                    df["MonthAbbr"]
-                    .str.lower()
-                    .isin([m.lower() for m in selected_months_norm])
-                ]
-                print(
-                    f"🔍 [DEBUG PODs] فلترة الكوارتر: {', '.join(selected_months_norm)}, الصفوف: {len(df)}"
-                )
-
-                if df.empty:
-                    return {
-                        "detail_html": "<p class='text-warning text-center p-4'>⚠️ No data available for the selected quarter months in PODs Update.</p>",
-                        "count": 0,
-                        "hit_pct": 0,
-                    }
-                selected_month = None
-
-            if selected_month:
-                selected_month_norm = self.normalize_month_label(selected_month)
-                if selected_month_norm:
-                    df = df[df["MonthAbbr"].str.lower() == selected_month_norm.lower()]
-                    print(
-                        f"🔍 [DEBUG PODs] فلترة الشهر: {selected_month_norm}, الصفوف: {len(df)}"
+                for month in months:
+                    df_month_city = df_city[df_city["Month"] == month]
+                    hit_month = len(
+                        df_month_city[df_month_city["Hit or Miss"] == "Hit"]
                     )
+                    miss_month = len(
+                        df_month_city[df_month_city["Hit or Miss"] == "Miss"]
+                    )
+                    closed_by_month_city.append(hit_month)
+                    pending_by_month_city.append(miss_month)
+                    total_by_month_city.append(hit_month + miss_month)
 
-                    if df.empty:
-                        return {
-                            "detail_html": f"<p class='text-warning text-center p-4'>⚠️ No data available for {selected_month_norm} in PODs Update.</p>",
-                            "count": 0,
-                            "hit_pct": 0,
-                        }
+                # YTD لكل مدينة
+                closed_ytd_city = sum(closed_by_month_city)
+                pending_ytd_city = sum(pending_by_month_city)
+                total_ytd_city = sum(total_by_month_city)
 
-            # 🔹 استخراج القيم
-            closed_values = df["Closed"].tolist()
-            pending_values = df["Pending"].tolist()
-            total_values = [c + p for c, p in zip(closed_values, pending_values)]
+                city_data[city] = {
+                    "closed": closed_by_month_city + [closed_ytd_city],
+                    "pending": pending_by_month_city + [pending_ytd_city],
+                    "total": total_by_month_city + [total_ytd_city],
+                }
 
-            # ✅ حساب المجاميع السنوية
-            closed_sum = sum(closed_values)
-            pending_sum = sum(pending_values)
-            total_sum = sum(total_values)
+            # تجميع حسب الشهر: Hit (Closed), Miss (Pending), Total (كل المدن مجمعة)
+            closed_by_month = []
+            pending_by_month = []
+            total_by_month = []
 
-            # ✅ ترتيب الأشهر حسب ما جاءت في Excel (بعد الفلترة إن وُجدت)
-            month_order_display = df["MonthAbbr"].tolist()
+            for month in months:
+                df_month = df[df["Month"] == month]
+                hit_month = len(df_month[df_month["Hit or Miss"] == "Hit"])
+                miss_month = len(df_month[df_month["Hit or Miss"] == "Miss"])
+                closed_by_month.append(hit_month)
+                pending_by_month.append(miss_month)
+                total_by_month.append(hit_month + miss_month)
 
-            selected_month_norm = (
-                self.normalize_month_label(selected_month) if selected_month else None
-            )
-            if selected_month_norm:
-                df = df[df["MonthAbbr"].str.lower() == selected_month_norm.lower()]
-                if df.empty:
-                    return {
-                        "detail_html": f"<p class='text-warning text-center p-4'>⚠️ No data available for {selected_month_norm}.</p>",
-                        "chart_data": [],
-                        "count": 0,
-                    }
-                month_order_display = df["MonthAbbr"].tolist()
+            # إضافة YTD
+            closed_ytd = sum(closed_by_month)
+            pending_ytd = sum(pending_by_month)
+            total_ytd = sum(total_by_month)
 
-            # ✅ إضافة صف المجموع (YTD) لو مفيش فلترة
-            append_ytd = not bool(selected_month_norm or selected_months_norm)
-            if append_ytd:
-                month_order_display = month_order_display + ["YTD"]
+            months_display = months + ["YTD"]
+            closed_by_month.append(closed_ytd)
+            pending_by_month.append(pending_ytd)
+            total_by_month.append(total_ytd)
 
-            if append_ytd:
-                closed_values.append(closed_sum)
-                pending_values.append(pending_sum)
-                total_values.append(total_sum)
-
-            # ✅ حساب النسب المئوية (للشارت فقط)
-            closed_percent_values = [
-                round((c / t) * 100, 2) if t != 0 else 0
-                for c, t in zip(closed_values, total_values)
+            # حساب النسب المئوية
+            closed_pct = [
+                round((c / t * 100), 2) if t > 0 else 0
+                for c, t in zip(closed_by_month, total_by_month)
             ]
 
-            print("📊 Closed % per month:", closed_percent_values)
+            # بناء الجدول الواحد مع عمود المدن
+            # الأعمدة: KPI, [المدن], [الشهور], YTD
+            table_rows = []
 
-            # ✅ بناء الجدول النهائي بدون صف KPI %
-            table_data = pd.DataFrame({"KPI": ["Closed", "Pending", "Total"]})
-            for i, month in enumerate(month_order_display):
-                col_values = [
-                    int(closed_values[i]) if i < len(closed_values) else 0,
-                    int(pending_values[i]) if i < len(pending_values) else 0,
-                    int(total_values[i]) if i < len(total_values) else 0,
-                ]
-                table_data[month] = col_values
+            # صف Closed
+            closed_row = {"KPI": "Closed"}
+            # إضافة قيم المدن (مجموع كل المدن لكل شهر)
+            for city in cities:
+                if city in city_data:
+                    closed_row[city] = sum(city_data[city]["closed"][:-1])  # بدون YTD
+                else:
+                    closed_row[city] = 0
+            # إضافة قيم الشهور
+            for i, month in enumerate(months_display):
+                closed_row[month] = int(closed_by_month[i])
+            table_rows.append(closed_row)
 
-            # ✅ نسبة الأداء النهائية (YTD)
-            hit_pct = closed_percent_values[-1] if closed_percent_values else 0
+            # صف Pending
+            pending_row = {"KPI": "Pending"}
+            for city in cities:
+                if city in city_data:
+                    pending_row[city] = sum(city_data[city]["pending"][:-1])  # بدون YTD
+                else:
+                    pending_row[city] = 0
+            for i, month in enumerate(months_display):
+                pending_row[month] = int(pending_by_month[i])
+            table_rows.append(pending_row)
 
-            # ✅ تجهيز بيانات الشارت
+            # صف Total
+            total_row = {"KPI": "Total"}
+            for city in cities:
+                if city in city_data:
+                    total_row[city] = sum(city_data[city]["total"][:-1])  # بدون YTD
+                else:
+                    total_row[city] = 0
+            for i, month in enumerate(months_display):
+                total_row[month] = int(total_by_month[i])
+            table_rows.append(total_row)
+
+            # أعمدة الجدول: KPI, المدن, الشهور
+            columns = ["KPI"] + cities + months_display
+
+            # شارت واحد (كل المدن مجمعة)
             chart_data = [
                 {
                     "type": "column",
@@ -4143,32 +3986,144 @@ class UploadExcelViewRoche(View):
                     "color": "#9fc0e4",
                     "showInLegend": True,
                     "indexLabel": "{y}%",
-                    "related_table": "PODs YTD",  # ✅ إضافة related_table
+                    "related_table": "PODs YTD",
                     "dataPoints": [
-                        {"label": m, "y": closed_percent_values[i]}
-                        for i, m in enumerate(month_order_display)
+                        {"label": m, "y": closed_pct[i]}
+                        for i, m in enumerate(months_display)
                     ],
                 },
                 {
                     "type": "line",
-                    "name": "Target (%)",
+                    "name": "Target 100%",
                     "color": "red",
                     "showInLegend": True,
-                    "related_table": "PODs YTD",  # ✅ إضافة related_table
-                    "dataPoints": [{"label": m, "y": 100} for m in month_order_display],
+                    "related_table": "PODs YTD",
+                    "dataPoints": [{"label": m, "y": 100} for m in months_display],
                 },
             ]
 
-            # ✅ بناء الجدول للعرض
             sub_tables = [
                 {
-                    "id": "sub-table-pods-ytd",  # ✅ إضافة ID فريد
+                    "id": "sub-table-pods-ytd",
                     "title": "PODs YTD",
-                    "columns": table_data.columns.tolist(),
-                    "data": table_data.to_dict(orient="records"),
-                    "chart_data": chart_data,  # ✅ إضافة chart_data لكل sub_table
+                    "columns": columns,
+                    "data": table_rows,
+                    "chart_data": chart_data,
                 }
             ]
+
+            # ✅ بناء جدول التفاصيل الكامل (مثل Outbound و Inbound)
+            detail_columns = [
+                col_shpng if col_shpng else "Shpng Pnt",
+                col_whname if col_whname else "W.HNAME",
+                col_plant if col_plant else "PLANT",
+                col_whno if col_whno else "WH No",
+                col_created if col_created else "Created on",
+                col_pgi if col_pgi else "PGI Date",
+                col_delivery if col_delivery else "Delivery",
+                col_inv if col_inv else "INV",
+                col_shipto if col_shipto else "Ship-to party",
+                col_shipto_name if col_shipto_name else "Name of the ship-to party",
+                col_qty if col_qty else "QTY",
+                col_unit if col_unit else "Unit",
+                col_city if col_city else "City",
+                "Days",
+                "Hit or Miss",
+                "Month",
+            ]
+            
+            # تنظيف الأعمدة (إزالة None)
+            detail_columns = [c for c in detail_columns if c]
+            
+            # إعداد البيانات للجدول التفصيلي
+            detail_df = df.copy()
+            
+            # حفظ عمود الترتيب قبل التحويل
+            if "_created_dt" in detail_df.columns:
+                detail_df["_sort_ts"] = detail_df["_created_dt"]
+            
+            def _fmt_date(x):
+                if pd.isna(x) or x is pd.NaT:
+                    return ""
+                try:
+                    return pd.Timestamp(x).strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    return ""
+            
+            # تحويل التواريخ إلى نص
+            if col_created in detail_df.columns and "_created_dt" in detail_df.columns:
+                detail_df[col_created] = detail_df["_created_dt"].apply(_fmt_date)
+            if col_pgi in detail_df.columns and "_pgi_dt" in detail_df.columns:
+                detail_df[col_pgi] = detail_df["_pgi_dt"].apply(_fmt_date)
+            
+            # ترتيب البيانات قبل إزالة الأعمدة المؤقتة
+            if "_sort_ts" in detail_df.columns:
+                detail_df = detail_df.sort_values("_sort_ts", ascending=False)
+            
+            # إزالة الأعمدة المؤقتة
+            drop_cols = ["_created_dt", "_pgi_dt", "_sort_ts"]
+            detail_df = detail_df.drop(columns=[c for c in drop_cols if c in detail_df.columns], errors="ignore")
+            
+            # استخراج البيانات
+            detail_rows_raw = detail_df.head(500)[detail_columns].to_dict(orient="records")
+            
+            def _to_blank(val):
+                if val is None:
+                    return ""
+                if isinstance(val, float) and (pd.isna(val) or (val != val)):
+                    return ""
+                s = str(val).strip()
+                if s.lower() in ("nan", "nat", "none", "<nat>"):
+                    return ""
+                return s
+            
+            detail_rows = [
+                {k: _to_blank(v) for k, v in row.items()} for row in detail_rows_raw
+            ]
+            
+            # بناء قائمة الفلاتر
+            detail_df_for_options = detail_df.copy()
+            whname_options = sorted(
+                detail_df_for_options[col_whname].fillna("").astype(str).str.strip().replace("", None).dropna().unique().tolist()
+            ) if col_whname in detail_df_for_options.columns else []
+            
+            city_options = sorted(
+                detail_df_for_options[col_city].fillna("").astype(str).str.strip().replace("", None).dropna().unique().tolist()
+            ) if col_city in detail_df_for_options.columns else []
+            
+            status_options = sorted(
+                detail_df_for_options["Hit or Miss"].fillna("").astype(str).str.strip().replace("", None).dropna().unique().tolist()
+            ) if "Hit or Miss" in detail_df_for_options.columns else []
+            
+            month_options = sorted(
+                detail_df_for_options["Month"].fillna("").astype(str).str.strip().replace("", None).dropna().unique().tolist()
+            ) if "Month" in detail_df_for_options.columns else []
+            
+            # إضافة جدول التفاصيل
+            detail_table = {
+                "id": "sub-table-pods-detail",
+                "title": "PODs Shipments Detail",
+                "columns": detail_columns,
+                "data": detail_rows,
+                "chart_data": [],
+                "full_width": True,
+                "filter_options": {
+                    "whnames": whname_options,
+                    "cities": city_options,
+                    "statuses": status_options,
+                    "months": month_options,
+                },
+            }
+            
+            sub_tables.append(detail_table)
+
+            # كروت KPI
+            stats = {
+                "total_shipments": total_shipments,
+                "hit_pct": hit_pct,
+                "miss_pct": miss_pct,
+                "target": 100,
+            }
 
             tab_data = {
                 "name": "PODs Update",
@@ -4177,28 +4132,24 @@ class UploadExcelViewRoche(View):
                 "chart_title": "PODs Closed % Performance",
                 "hit_pct": hit_pct,
                 "target_pct": 100,
+                "stats": stats,
             }
-            month_norm_tab = self.apply_month_filter_to_tab(
-                tab_data,
-                selected_month if not selected_months_norm else None,
-                selected_months_norm or None,
-            )
 
+            month_norm_tab = self.apply_month_filter_to_tab(
+                tab_data, selected_month, selected_months_norm or None
+            )
             html = render_to_string(
                 "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
                 {"tab": tab_data, "selected_month": month_norm_tab},
             )
 
-            tab_name = f"PODs Update ({hit_pct}%)"
-
             return {
-                "name": tab_name,
                 "detail_html": html,
                 "chart_data": chart_data,
                 "chart_title": "PODs Closed % Performance",
                 "hit_pct": hit_pct,
                 "target_pct": 100,
-                "count": len(table_data),
+                "count": total_shipments,
                 "tab_data": tab_data,
             }
 
@@ -4206,9 +4157,10 @@ class UploadExcelViewRoche(View):
             import traceback
 
             print(traceback.format_exc())
-            return {"error": f"⚠️ Error while processing data: {e}"}
+            return {"error": f"⚠️ Error processing PODs: {e}"}
 
-    def filter_order_general_information(
+    # filter_order_general_information - تم حذفها (غير مستخدمة)
+    def _deleted_filter_order_general_information(
         self, request, selected_month=None, selected_months=None
     ):
         """
@@ -4886,7 +4838,256 @@ class UploadExcelViewRoche(View):
                 "count": 0,
             }
 
-    def filter_airport_combined(
+    def filter_expiry(self, request, selected_month=None, selected_months=None):
+        """
+        تاب Expiry: قراءة من شيت Expiry.
+        - فلتر Status: Located, Allocated, Partly Allocated فقط.
+        - أعمدة: Facility, Company, LPN Nbr, Status, Item Code, Item Description, Current Qty, batch_nbr, Expiry Date.
+        - تحذير: اللي ينتهي خلال 3 شهور = قريب، خلال 6 شهور = warning، يعرض تحت الجدول في Bootstrap 5 alert.
+        """
+        import pandas as pd
+        import os
+        from datetime import datetime, timedelta
+        from django.template.loader import render_to_string
+
+        try:
+            excel_path = self.get_excel_path()
+            if not excel_path or not os.path.exists(excel_path):
+                return {
+                    "detail_html": "<p class='text-danger'>⚠️ Excel file not found.</p>",
+                    "chart_data": [],
+                    "count": 0,
+                }
+
+            xls = pd.ExcelFile(excel_path, engine="openpyxl")
+            sheet_names = [s.strip() for s in xls.sheet_names]
+            expiry_sheet = next((s for s in sheet_names if "expiry" in s.lower()), None)
+            if not expiry_sheet:
+                return {
+                    "detail_html": "<p class='text-warning'>⚠️ Sheet containing 'Expiry' was not found.</p>",
+                    "chart_data": [],
+                    "count": 0,
+                }
+
+            df = pd.read_excel(
+                excel_path,
+                sheet_name=expiry_sheet,
+                engine="openpyxl",
+                dtype=str,
+                header=0,
+            ).fillna("")
+            df.columns = df.columns.astype(str).str.strip()
+
+            def _norm(val):
+                return re.sub(r"[^a-z0-9]", "", str(val).strip().lower())
+
+            def _find_col(dframe, names):
+                nmap = {_norm(c): c for c in dframe.columns}
+                for name in names:
+                    n = _norm(name)
+                    if n in nmap:
+                        return nmap[n]
+                for col in dframe.columns:
+                    if any(_norm(n) in _norm(col) for n in names):
+                        return col
+                return None
+
+            col_facility = _find_col(df, ["facility", "facility code"])
+            col_company = _find_col(df, ["company"])
+            col_lpn = _find_col(df, ["lpn nbr", "lpn", "lpn nbr"])
+            col_status = _find_col(df, ["status"])
+            col_item_code = _find_col(df, ["item code", "itemcode"])
+            col_item_desc = _find_col(df, ["item description", "item desc"])
+            col_qty = _find_col(df, ["current qty", "currentqty", "qty"])
+            col_batch = _find_col(df, ["batch_nbr", "batch nbr", "batch"])
+            col_expiry = _find_col(df, ["expiry date", "expirydate", "expiry"])
+
+            if not col_status:
+                return {
+                    "detail_html": "<p class='text-danger'>⚠️ Column 'Status' not found in Expiry sheet.</p>",
+                    "chart_data": [],
+                    "count": 0,
+                }
+
+            # فلتر Status: Located, Allocated, Partly Allocated
+            status_vals = {"located", "allocated", "partly allocated"}
+            df = df[
+                df[col_status].astype(str).str.strip().str.lower().isin(status_vals)
+            ]
+
+            display_columns = [
+                "Facility",
+                "Company",
+                "LPN Nbr",
+                "Status",
+                "Item Code",
+                "Item Description",
+                "Current Qty",
+                "batch_nbr",
+                "Expiry Date",
+            ]
+            rename_map = {}
+            if col_facility:
+                rename_map[col_facility] = "Facility"
+            if col_company:
+                rename_map[col_company] = "Company"
+            if col_lpn:
+                rename_map[col_lpn] = "LPN Nbr"
+            if col_status:
+                rename_map[col_status] = "Status"
+            if col_item_code:
+                rename_map[col_item_code] = "Item Code"
+            if col_item_desc:
+                rename_map[col_item_desc] = "Item Description"
+            if col_qty:
+                rename_map[col_qty] = "Current Qty"
+            if col_batch:
+                rename_map[col_batch] = "batch_nbr"
+            if col_expiry:
+                rename_map[col_expiry] = "Expiry Date"
+
+            df = df.rename(columns=rename_map)
+            for c in display_columns:
+                if c not in df.columns:
+                    df[c] = ""
+
+            df = df[display_columns]
+
+            # تحويل Expiry Date وتحديد نطاقات: 1–3، 3–6، 6–9 شهور
+            today = pd.Timestamp(datetime.now().date())
+            three_months = today + pd.DateOffset(months=3)
+            six_months = today + pd.DateOffset(months=6)
+            nine_months = today + pd.DateOffset(months=9)
+
+            expiry_ser = pd.to_datetime(df["Expiry Date"], errors="coerce")
+            df["_expiry_dt"] = expiry_ser
+            df["Expiry Date"] = expiry_ser.dt.strftime("%Y-%m-%d").fillna("")
+
+            within_1_3 = (
+                (df["_expiry_dt"].notna())
+                & (df["_expiry_dt"] >= today)
+                & (df["_expiry_dt"] <= three_months)
+            )
+            within_3_6 = (
+                (df["_expiry_dt"].notna())
+                & (df["_expiry_dt"] > three_months)
+                & (df["_expiry_dt"] <= six_months)
+            )
+            within_6_9 = (
+                (df["_expiry_dt"].notna())
+                & (df["_expiry_dt"] > six_months)
+                & (df["_expiry_dt"] <= nine_months)
+            )
+            df = df.drop(columns=["_expiry_dt"], errors="ignore")
+
+            table_data = df[display_columns].to_dict(orient="records")
+
+            # أعداد المنتجات لكل نطاق
+            expiry_counts = {
+                "within_1_3": int(within_1_3.sum()),
+                "within_3_6": int(within_3_6.sum()),
+                "within_6_9": int(within_6_9.sum()),
+            }
+
+            # خيارات الفلاتر: Facility, Company, Status, Expiry Date
+            facility_codes = (
+                sorted(
+                    df["Facility"]
+                    .astype(str)
+                    .str.strip()
+                    .replace("", pd.NA)
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+                if "Facility" in df.columns
+                else []
+            )
+            companies = (
+                sorted(
+                    df["Company"]
+                    .astype(str)
+                    .str.strip()
+                    .replace("", pd.NA)
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+                if "Company" in df.columns
+                else []
+            )
+            statuses = (
+                sorted(
+                    df["Status"]
+                    .astype(str)
+                    .str.strip()
+                    .replace("", pd.NA)
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+                if "Status" in df.columns
+                else []
+            )
+            expiry_dates = (
+                sorted(
+                    df["Expiry Date"]
+                    .astype(str)
+                    .str.strip()
+                    .replace("", pd.NA)
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+                if "Expiry Date" in df.columns
+                else []
+            )
+
+            filter_options = {
+                "facility_codes": facility_codes,
+                "companies": companies,
+                "statuses": statuses,
+                "expiry_dates": expiry_dates,
+            }
+
+            sub_tables = [
+                {
+                    "id": "sub-table-expiry-detail",
+                    "title": "Expiry",
+                    "columns": display_columns,
+                    "data": table_data,
+                    "filter_options": filter_options,
+                }
+            ]
+            tab_data = {
+                "name": "Expiry",
+                "sub_tables": sub_tables,
+                "chart_data": [],
+                "expiry_counts": expiry_counts,
+            }
+            month_norm = self.apply_month_filter_to_tab(tab_data, selected_month, None)
+            html = render_to_string(
+                "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
+                {"tab": tab_data, "selected_month": month_norm},
+            )
+            return {
+                "detail_html": html,
+                "chart_data": [],
+                "count": len(table_data),
+                "tab_data": tab_data,
+            }
+        except Exception as e:
+            import traceback
+
+            print(traceback.format_exc())
+            return {
+                "detail_html": f"<p class='text-danger'>⚠️ Error processing Expiry: {e}</p>",
+                "chart_data": [],
+                "count": 0,
+            }
+
+    # filter_airport_combined - تم حذفها (غير مستخدمة)
+    def _deleted_filter_airport_combined(
         self, request, selected_month=None, selected_months=None
     ):
         """
@@ -5303,7 +5504,8 @@ class UploadExcelViewRoche(View):
                 "count": 0,
             }
 
-    def filter_seaport_combined(
+    # filter_seaport_combined - تم حذفها (غير مستخدمة)
+    def _deleted_filter_seaport_combined(
         self, request, selected_month=None, selected_months=None
     ):
         """
@@ -6220,6 +6422,16 @@ class UploadExcelViewRoche(View):
                 selected_month if not selected_months_norm else None,
                 selected_months_norm if selected_months_norm else None,
             )
+            # ✅ جلب نسبة الـ Hit من Outbound (هي اللي هنستخدمها كـ KPI للتاب ده)
+            outbound_stats = outbound_result.get("stats", {}) or {}
+            outbound_hit_pct = outbound_stats.get("hit_pct", 0) or 0
+            # ✅ إذا لم تكن موجودة في stats، نحاول جلبها مباشرة من outbound_result
+            if not outbound_hit_pct:
+                outbound_hit_pct = outbound_result.get("hit_pct", 0) or 0
+            print(
+                f"🔍 Total Lead Time Performance - Outbound hit_pct: {outbound_hit_pct}% (from stats: {outbound_stats.get('hit_pct', 'N/A')})"
+            )
+
             if outbound_result.get("sub_tables"):
                 outbound_tab = {
                     "name": "Outbound Shipments",
@@ -6275,12 +6487,37 @@ class UploadExcelViewRoche(View):
 
             total_count = sum(len(st["data"]) for st in sub_tables)
 
+            # ✅ نسبة الـ Hit الخاصة بالـ Outbound (هي اللي هنستخدمها كـ KPI للتاب ده)
+            try:
+                hit_pct_calculated = (
+                    float(outbound_hit_pct) if outbound_hit_pct else 0.0
+                )
+                hit_pct_calculated = round(hit_pct_calculated, 2)  # تقريب لرقمين عشريين
+            except (ValueError, TypeError):
+                hit_pct_calculated = 0.0
+            print(
+                f"✅ Total Lead Time Performance - Using Outbound hit_pct: {hit_pct_calculated}%"
+            )
+
+            # ✅ إذا لم يكن هناك chart_data من 3PL، نستخدم chart_data من Outbound
+            if not chart_data:
+                outbound_chart_data = outbound_result.get("chart_data", []) or []
+                if outbound_chart_data:
+                    chart_data = outbound_chart_data
+                    print(
+                        f"✅ Total Lead Time Performance - Using Outbound chart_data: {len(chart_data)} datasets"
+                    )
+
+            print(
+                f"✅ Total Lead Time Performance - Final chart_data: {len(chart_data)} datasets"
+            )
+
             return {
                 "detail_html": html,
                 "chart_data": chart_data,
                 "chart_title": "Total Lead Time Performance – On-Time Delivery",
                 "count": total_count,
-                "hit_pct": actual_target,  # ✅ أضفنا النسبة هنا
+                "hit_pct": hit_pct_calculated,  # ✅ نسبة الـ Hit من Outbound
                 "tab_data": tab_data,
             }
 
@@ -6292,6 +6529,7 @@ class UploadExcelViewRoche(View):
                 "detail_html": f"<p class='text-danger'>⚠️ Error while processing data: {e}</p>",
                 "chart_data": [],
                 "count": 0,
+                "hit_pct": 0,  # ✅ إضافة hit_pct في حالة الخطأ
             }
 
     def filter_dock_to_stock_combined(
@@ -7012,43 +7250,7 @@ class UploadExcelViewRoche(View):
                 print("⚠️ [DEBUG] لم يتم العثور على عمود Booking orders.")
                 return 0, 100
 
-            # ============== 5) Data Logger Measurement ==============
-            elif tab_name.lower() == "data logger measurement":
-                print("🔷 [TAB] Data Logger Measurement — بداية المعالجة")
-
-                try:
-                    # 🟢 استدعاء نفس دالة الفلترة الأصلية
-                    res = self.filter_data_logger_measurement(None, selected_month)
-                    print("🟢 [STEP] تم تنفيذ filter_data_logger_measurement() بنجاح")
-
-                    # 🟢 استخراج نسبة On Time Sent من البيانات اللي راجعة من الشارت
-                    if "chart_data" in res and len(res["chart_data"]) > 0:
-                        chart_series = res["chart_data"][
-                            0
-                        ]  # أول سلسلة (On Time Sent %)
-                        y_values = [
-                            p["y"]
-                            for p in chart_series["dataPoints"]
-                            if isinstance(p["y"], (int, float)) and p["y"] > 0
-                        ]
-
-                        # ✅ النسبة النهائية = آخر شهر فيه بيانات (زي اللي بتظهر في الشارت)
-                        hit_pct = y_values[-1] if y_values else 0
-                        print(
-                            f"✅ [RESULT] نسبة On Time Sent النهائية (آخر شهر) = {hit_pct}%"
-                        )
-                    else:
-                        print("⚠️ [DEBUG] لا توجد بيانات chart_data صالحة — النسبة = 0")
-                        hit_pct = 0
-
-                    target_pct = 100
-                    return hit_pct, target_pct
-
-                except Exception as e:
-                    print(f"❌ [ERROR] أثناء معالجة Data Logger Measurement: {e}")
-                    return 0, 100
-
-            # ============== 6) Dock to Stock ==============
+            # ============== 5) Dock to Stock ==============
             elif tab_name.lower() == "dock to stock":
                 print("🔷 [TAB] Dock to stock — بداية المعالجة")
 
@@ -7120,77 +7322,6 @@ class UploadExcelViewRoche(View):
                     print(f"⚠️ [ERROR] أثناء حساب progress للتاب Dock to stock: {e}")
                     return 0, 100
 
-            # ============== 7)Airport Clearance ==============
-            elif "airport clearance" in tab_name.lower():
-                print("🔷 [TAB] Airport Clearance — بداية المعالجة")
-                result = self.filter_airport_combined(None, selected_month)
-                if result and "chart_data" in result:
-                    on_time_series = next(
-                        (
-                            s
-                            for s in result["chart_data"]
-                            if s["name"].lower().startswith("on time")
-                        ),
-                        None,
-                    )
-                    if on_time_series and on_time_series["dataPoints"]:
-                        hit_values = [
-                            p["y"]
-                            for p in on_time_series["dataPoints"]
-                            if isinstance(p["y"], (int, float))
-                        ]
-                        hit_avg = (
-                            round(sum(hit_values) / len(hit_values), 2)
-                            if hit_values
-                            else 0
-                        )
-                        print(f"✅ [RESULT] Airport Clearance -> hit_pct={hit_avg}%")
-                        return hit_avg, 100
-                print("⚠️ [DEBUG] لا توجد بيانات صالحة لـ Airport Clearance.")
-                return 0, 100
-
-            # ============== 8) Seaport Clearance ==============
-            elif "seaport clearance" in tab_name.lower():
-                print("🔷 [TAB] Seaport Clearance — بداية المعالجة")
-                try:
-                    result = self.filter_seaport_combined(None, selected_month)
-                    print("🟢 [DEBUG] نتيجة filter_seaport_combined:", bool(result))
-
-                    # 🔹 التأكد من وجود بيانات الشارت
-                    if result and "chart_data" in result:
-                        on_time_series = next(
-                            (
-                                s
-                                for s in result["chart_data"]
-                                if "on time receiving" in s["name"].lower()
-                            ),
-                            None,
-                        )
-                        if on_time_series and on_time_series.get("dataPoints"):
-                            # استخراج القيم من الأعمدة
-                            values = [
-                                p["y"]
-                                for p in on_time_series["dataPoints"]
-                                if isinstance(p["y"], (int, float))
-                            ]
-                            if values:
-                                avg_hit = round(sum(values) / len(values), 2)
-                                print(
-                                    f"✅ [RESULT] Seaport Clearance -> hit_pct={avg_hit}%"
-                                )
-                                return avg_hit, 100
-                            else:
-                                print(
-                                    "⚠️ [DEBUG] لم يتم العثور على قيم عددية في On time receiving"
-                                )
-                                return 0, 100
-                    print("⚠️ [DEBUG] لا توجد بيانات شارت صالحة لـ Seaport Clearance.")
-                    return 0, 100
-
-                except Exception as e:
-                    print(f"❌ [ERROR] أثناء معالجة Seaport Clearance: {e}")
-                    return 0, 100
-
             # باقي التابات (افتراضي)
             else:
                 print(
@@ -7219,10 +7350,7 @@ class UploadExcelViewRoche(View):
 
         target_manual = {
             "total lead time performance": 98,
-            "data logger measurement": 99,
             "dock to stock": 99,
-            "airport clearance": 98,
-            "seaport clearance": 98,
             "pods update": 98,
             "return & refusal": 100,
         }
@@ -7240,22 +7368,12 @@ class UploadExcelViewRoche(View):
                         month_for_filters,
                         selected_months=selected_months,
                     )
-                elif tab_lower == "data logger measurement":
-                    res = self.filter_data_logger_measurement(
-                        request,
-                        month_for_filters,
-                        selected_months=selected_months,
-                    )
                 elif tab_lower == "dock to stock":
                     res = self.filter_dock_to_stock_combined(
                         request,
                         month_for_filters,
                         selected_months=selected_months,
                     )
-                elif "airport clearance" in tab_lower:
-                    res = self.filter_airport_combined(request, month_for_filters)
-                elif "seaport clearance" in tab_lower:
-                    res = self.filter_seaport_combined(request, month_for_filters)
                 elif "pods update" in tab_lower:
                     res = self.filter_pods_update(request, month_for_filters)
                 elif "total lead time performance" in tab_lower:
@@ -7463,7 +7581,8 @@ class UploadExcelViewRoche(View):
                 {"error": f"An error occurred while loading data: {e}"}, status=500
             )
 
-    def cross_docking_tab(self, request):
+    # cross_docking_tab - تم حذفها (غير مستخدمة)
+    def _deleted_cross_docking_tab(self, request):
         """
         🔹 عرض تاب Cross Docking يحتوي على تابين (رسمتين لجدة والرياض)
         """
