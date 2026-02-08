@@ -22,6 +22,7 @@ from datetime import date
 from django.db.models import Q
 from django.template.loader import render_to_string
 from calendar import month_abbr, month_name
+import calendar as calendar_module
 
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
@@ -79,6 +80,1079 @@ def _sanitize_for_json(obj):
     if isinstance(obj, (list, tuple)):
         return [_sanitize_for_json(v) for v in obj]
     return obj
+
+
+def _get_excel_path_for_request(request):
+    """يرجع مسار ملف الإكسل المرفوع من الجلسة أو المجلد الافتراضي."""
+    if not request:
+        return None
+    folder = os.path.join(settings.MEDIA_ROOT, "excel_uploads")
+    if not os.path.isdir(folder):
+        return None
+    path = request.session.get("uploaded_excel_path")
+    if path and os.path.isfile(path):
+        return path
+    for name in ["latest.xlsm", "latest.xlsx", "all sheet.xlsm", "all sheet.xlsx", "all_sheet.xlsm", "all_sheet.xlsx"]:
+        p = os.path.join(folder, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+# اسم ملف الداشبورد الثابت (شيت تاني للتاب Dashboard فقط)
+DASHBOARD_EXCEL_FILENAME = "Aramco_Tamer3PL_KPI_Dashboard.xlsx"
+
+# داتا Inbound الافتراضية (للكروت والشارت) — نفس فكرة chart_data في rejection
+INBOUND_DEFAULT_KPI = {
+    "number_of_vehicles": 12,
+    "number_of_shipments": 287,
+    "number_of_pallets": 1105,
+    "total_quantity": 65400,
+    "total_quantity_display": "65.4k",
+}
+# الداتا اللي بتظهر على شارت Pending Shipments (label, value, pct, color)
+INBOUND_DEFAULT_PENDING_SHIPMENTS = [
+    {"label": "In Transit", "value": "1%", "pct": 1, "color": "#87CEEB"},
+    {"label": "Receiving Complete", "value": "96%", "pct": 96, "color": "#2E7D32"},
+    {"label": "Verified", "value": "3%", "pct": 3, "color": "#1565C0"},
+]
+
+# داتا الشارتات الافتراضية للداشبورد (نفس فكرة chart_data في rejection — لو مفيش إكسل نستخدمها)
+DASHBOARD_DEFAULT_CHART_DATA = {
+    "outbound_chart_data": {
+        "categories": ["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
+        "series": [40, 55, 48, 62, 58, 70],
+    },
+    "returns_chart_data": {
+        "categories": ["Mar", "Apr", "May", "Jun", "Jul", "Aug"],
+        "series": [280, 320, 300, 350, 380, 400],
+    },
+    "inventory_capacity_data": {"used": 78, "available": 22},
+}
+
+
+def _read_dashboard_charts_from_excel(excel_path):
+    """
+    يقرأ داتا الشارتات (Outbound, Returns, Inventory) من ملف الداشبورد لو الشيتات موجودة.
+    ترجع ديكت باللي اتقرا فقط (لو مفيش داتا للشارت ترجع None للكاي) — عشان نعمل الشارتات دينامك.
+    """
+    result = {}
+    try:
+        xls = pd.ExcelFile(excel_path, engine="openpyxl")
+    except Exception:
+        return result
+    sheet_names = [str(s).strip() for s in xls.sheet_names]
+
+    # Outbound: من شيت Outbound_Data أو Outbound — تجميع حسب شهر لو فيه عمود شهر/تاريخ
+    for out_name in ["Outbound_Data", "Outbound Data", "Outbound"]:
+        if not any(out_name.lower().replace(" ", "") in s.lower().replace(" ", "") for s in sheet_names):
+            continue
+        sheet_name = next((s for s in sheet_names if out_name.lower() in s.lower()), None)
+        if not sheet_name:
+            continue
+        try:
+            df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+            if df.empty or len(df) < 2:
+                break
+            df.columns = [str(c).strip() for c in df.columns]
+            cols_lower = {c.lower(): c for c in df.columns}
+            month_col = None
+            for c in cols_lower:
+                if "month" in c or "date" in c:
+                    month_col = cols_lower[c]
+                    break
+            if month_col:
+                df["_m"] = pd.to_datetime(df[month_col], errors="coerce").dt.strftime("%b")
+                by_month = df.groupby("_m").size().reindex(
+                    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                ).dropna()
+                if not by_month.empty:
+                    result["outbound_chart_data"] = {
+                        "categories": by_month.index.tolist(),
+                        "series": by_month.values.tolist(),
+                    }
+            break
+        except Exception:
+            break
+
+    # Returns: من شيت Return أو Rejection
+    for ret_name in ["Return", "Rejection", "Returns"]:
+        sheet_name = next((s for s in sheet_names if ret_name.lower() in s.lower()), None)
+        if not sheet_name:
+            continue
+        try:
+            df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+            if df.empty or len(df) < 2:
+                break
+            df.columns = [str(c).strip() for c in df.columns]
+            month_col = next((c for c in df.columns if "month" in c.lower()), None)
+            val_col = next(
+                (c for c in df.columns if "order" in c.lower() or "booking" in c.lower() or "count" in c.lower()),
+                df.columns[1] if len(df.columns) > 1 else None,
+            )
+            if month_col and val_col:
+                summary = df[[month_col, val_col]].dropna()
+                if not summary.empty:
+                    try:
+                        summary[val_col] = pd.to_numeric(summary[val_col].astype(str).str.replace("%", "", regex=False), errors="coerce")
+                        summary = summary.dropna(subset=[val_col])
+                        categories = summary[month_col].astype(str).tolist()
+                        series = summary[val_col].astype(int).tolist()
+                        if categories and series:
+                            result["returns_chart_data"] = {"categories": categories, "series": series}
+                    except Exception:
+                        pass
+            break
+        except Exception:
+            break
+
+    # Inventory capacity: من شيت Inventory أو Capacity
+    for inv_name in ["Inventory", "Capacity", "Warehouse"]:
+        sheet_name = next((s for s in sheet_names if inv_name.lower() in s.lower()), None)
+        if not sheet_name:
+            continue
+        try:
+            df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+            if df.empty:
+                break
+            df.columns = [str(c).strip() for c in df.columns]
+            used_col = next((c for c in df.columns if "used" in c.lower() or "utilization" in c.lower()), None)
+            if used_col:
+                vals = pd.to_numeric(df[used_col], errors="coerce").dropna()
+                if len(vals) > 0:
+                    used = int(min(100, max(0, vals.mean())))
+                    result["inventory_capacity_data"] = {"used": used, "available": 100 - used}
+            break
+        except Exception:
+            break
+
+    return result
+
+
+def _get_dashboard_excel_path(request):
+    """
+    يرجّع مسار ملف إكسل الداشبورد (Aramco_Tamer3PL_KPI_Dashboard.xlsx) إن وُجد.
+    مصدر الداتا لتاب Dashboard فقط؛ باقي التابات من الملف الرئيسي (all_sheet / latest).
+    """
+    if not request:
+        return None
+    folder = os.path.join(settings.MEDIA_ROOT, "excel_uploads")
+    path = request.session.get("dashboard_excel_path")
+    if path and os.path.isfile(path):
+        return path
+    p = os.path.join(folder, DASHBOARD_EXCEL_FILENAME)
+    if os.path.isfile(p):
+        try:
+            request.session["dashboard_excel_path"] = p
+            request.session.save()
+        except Exception:
+            pass
+        return p
+    return None
+
+
+def _is_dashboard_excel_filename(name):
+    """يعرف إذا الملف المرفوع هو ملف الداشبورد (شيت تاني)."""
+    if not name:
+        return False
+    n = (name or "").strip().lower()
+    return "kpi_dashboard" in n or "aramco_tamer3pl" in n
+
+
+def _read_inbound_data_from_excel(excel_path):
+    """
+    يقرأ بيانات Inbound (KPI + Pending Shipments) من ملف الإكسل.
+    الشيت: "Inbound" أو أول شيت اسمه يحتوي "inbound".
+    أعمدة الـ KPI (حسب الطلب):
+    - Vehicle_ID: كل يوم بيومه نشيل المتكرر (unique per day) ثم نجمع عدد المركبات لكل الأيام → Number of Vehicles
+    - Shipment_ID: نفس المنطق يوم بيوم unique ثم جمع → Number of Shipments
+    - Nbr_LPNs: مجموع كل القيم (27+18+13+...) → Number of Pallets (LPNs)
+    - Total_Qty: مجموع كل القيم → Total Quantity
+    عمود التاريخ: أي عمود اسمه يحتوي date/receipt/shipment date (للتجميع يوم بيوم).
+    إن لم يوجد عمود تاريخ، نعتبر كل البيانات يوم واحد.
+    Pending Shipments: إن وُجدت أعمدة Label/Status, Value, Pct, Color في نفس الشيت أو شيت آخر نستخدمها.
+    """
+    try:
+        xls = pd.ExcelFile(excel_path, engine="openpyxl")
+    except Exception:
+        return None
+    sheet_name = None
+    for name in xls.sheet_names:
+        if "inbound" in name.lower():
+            sheet_name = name
+            break
+    if not sheet_name:
+        sheet_name = xls.sheet_names[0] if xls.sheet_names else None
+    if not sheet_name:
+        return None
+    try:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+    except Exception:
+        return None
+    if df.empty or len(df) < 1:
+        return None
+
+    # تطبيع أسماء الأعمدة: strip + lower للبحث
+    df.columns = [str(c).strip() for c in df.columns]
+    cols_lower = {c.lower(): c for c in df.columns if c}
+
+    def _col(*keys):
+        for k in keys:
+            if k.lower() in cols_lower:
+                return cols_lower[k.lower()]
+        return None
+
+    # عمود التاريخ (للتجميع يوم بيوم)
+    date_col = None
+    for c in df.columns:
+        cl = c.lower()
+        if "date" in cl or "receipt" in cl or ("shipment" in cl and "date" in cl) or cl == "day":
+            date_col = c
+            break
+    if not date_col and df.columns.size > 0:
+        for c in df.columns:
+            try:
+                pd.to_datetime(df[c].dropna().head(20), errors="coerce")
+                date_col = c
+                break
+            except Exception:
+                continue
+
+    vehicle_col = _col("Vehicle_ID", "Vehicle ID", "Vehicle_ID")
+    shipment_col = _col("Shipment_ID", "Shipment ID", "Shipment_ID")
+    lpn_col = _col("Nbr_LPNs", "Nbr LPNs", "LPNs")
+    qty_col = _col("Total_Qty", "Total_Qty", "Total Qty", "Total_Qty")
+
+    def _to_int(val):
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return None
+        try:
+            return int(float(val))
+        except (ValueError, TypeError):
+            return None
+
+    n_vehicles = 0
+    n_shipments = 0
+    n_pallets = 0
+    n_qty = 0
+
+    if date_col and (vehicle_col or shipment_col):
+        # تجميع يوم بيوم
+        df_date = df.copy()
+        df_date["_date"] = pd.to_datetime(df_date[date_col], errors="coerce")
+        df_date = df_date.dropna(subset=["_date"])
+        df_date["_day"] = df_date["_date"].dt.normalize()
+
+        if vehicle_col:
+            # كل يوم: عدد الـ Vehicle_ID المميزة، ثم نجمع كل الأيام
+            per_day_vehicles = df_date.groupby("_day")[vehicle_col].nunique()
+            n_vehicles = int(per_day_vehicles.sum())
+        if shipment_col:
+            # كل يوم: عدد الـ Shipment_ID المميزة، ثم نجمع كل الأيام
+            per_day_shipments = df_date.groupby("_day")[shipment_col].nunique()
+            n_shipments = int(per_day_shipments.sum())
+    else:
+        # بدون تاريخ: نعتبر كل الصفوف يوم واحد (unique للمركبات والشحنات)
+        if vehicle_col:
+            n_vehicles = int(df[vehicle_col].nunique())
+        if shipment_col:
+            n_shipments = int(df[shipment_col].nunique())
+
+    if lpn_col:
+        n_pallets = _to_int(df[lpn_col].sum()) or 0
+    if qty_col:
+        n_qty = _to_int(df[qty_col].sum()) or 0
+
+    # قيم افتراضية لو مفيش أعمدة مناسبة
+    if not vehicle_col:
+        n_vehicles = 12
+    if not shipment_col:
+        n_shipments = 287
+    if not lpn_col:
+        n_pallets = 1105
+    if not qty_col:
+        n_qty = 65400
+
+    if n_qty >= 1000:
+        qty_display = f"{n_qty / 1000:.1f}k".rstrip("0").rstrip(".")
+        if not qty_display.endswith("k"):
+            qty_display += "k"
+    else:
+        qty_display = str(n_qty)
+
+    inbound_kpi = {
+        "number_of_vehicles": n_vehicles,
+        "number_of_shipments": n_shipments,
+        "number_of_pallets": n_pallets,
+        "total_quantity": n_qty,
+        "total_quantity_display": qty_display,
+    }
+
+    # Pending Shipments: من عمود Status في نفس شيت Inbound — In Transit, Receiving Complete, Verified
+    # يوم بيوم نجمع عدد الشحنات لكل حالة ثم نجمع التوتال، ثم النسبة = (عدد الحالة / التوتال) * 100
+    pending = []
+    status_col = _col("Status", "status")
+    STATUS_LABELS = (
+        ("in transit", "In Transit", "#87CEEB"),
+        ("receiving complete", "Receiving Complete", "#2E7D32"),
+        ("verified", "Verified", "#1565C0"),
+    )
+    if status_col:
+        df_status = df.copy()
+        # تطبيع Status: حروف صغيرة + إزالة مسافات زائدة لتحمل اختلافات الكتابة
+        s = df_status[status_col].fillna("").astype(str).str.strip().str.lower()
+        df_status["_status_norm"] = s.str.replace(r"\s+", " ", regex=True)
+        if date_col:
+            df_status["_date"] = pd.to_datetime(df_status[date_col], errors="coerce")
+            df_status = df_status.dropna(subset=["_date"])
+            df_status["_day"] = df_status["_date"].dt.normalize()
+            # كل يوم: عدد الصفوف (شحنات) لكل حالة، ثم جمع كل الأيام
+            count_in_transit = 0
+            count_receiving_complete = 0
+            count_verified = 0
+            for _day, grp in df_status.groupby("_day"):
+                count_in_transit += (grp["_status_norm"] == "in transit").sum()
+                count_receiving_complete += (grp["_status_norm"] == "receiving complete").sum()
+                count_verified += (grp["_status_norm"] == "verified").sum()
+        else:
+            count_in_transit = (df_status["_status_norm"] == "in transit").sum()
+            count_receiving_complete = (df_status["_status_norm"] == "receiving complete").sum()
+            count_verified = (df_status["_status_norm"] == "verified").sum()
+        total_pending = count_in_transit + count_receiving_complete + count_verified
+        if total_pending > 0:
+            for key, label, color in STATUS_LABELS:
+                if key == "in transit":
+                    c = count_in_transit
+                elif key == "receiving complete":
+                    c = count_receiving_complete
+                else:
+                    c = count_verified
+                pct = round((c / total_pending) * 100)
+                pending.append({
+                    "label": label,
+                    "value": f"{pct}%",
+                    "pct": pct,
+                    "color": color,
+                })
+    if not pending:
+        pending = [
+            {"label": "In Transit", "value": "1%", "pct": 1, "color": "#87CEEB"},
+            {"label": "Receiving Complete", "value": "96%", "pct": 96, "color": "#2E7D32"},
+            {"label": "Verified", "value": "3%", "pct": 3, "color": "#1565C0"},
+        ]
+
+    return {"inbound_kpi": inbound_kpi, "pending_shipments": pending}
+
+
+def _read_outbound_data_from_excel(excel_path):
+    """
+    يقرأ بيانات Outbound من شيت Outbound_Data في ملف الداشبورد.
+    - عمود Status: نفلتر "Released" → released_orders، "Picked" → picked_orders
+    - عمود Order_ID: نحذف المتكرر (unique) ونحسب عدد الطلبات لكل حالة
+    """
+    try:
+        xls = pd.ExcelFile(excel_path, engine="openpyxl")
+    except Exception:
+        return None
+    sheet_name = None
+    for name in xls.sheet_names:
+        if "outbound_data" in name.lower().replace(" ", "").replace("_", ""):
+            sheet_name = name
+            break
+    if not sheet_name:
+        for name in xls.sheet_names:
+            if "outbound" in name.lower():
+                sheet_name = name
+                break
+    if not sheet_name:
+        return None
+    try:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+    except Exception:
+        return None
+    if df.empty or len(df) < 1:
+        return None
+
+    df.columns = [str(c).strip() for c in df.columns]
+    cols_lower = {c.lower(): c for c in df.columns if c}
+
+    def _col(*keys):
+        for k in keys:
+            k_norm = k.lower().replace(" ", "").replace("_", "")
+            for col in cols_lower:
+                if col.replace(" ", "").replace("_", "") == k_norm:
+                    return cols_lower[col]
+            if k.lower() in cols_lower:
+                return cols_lower[k.lower()]
+        return None
+
+    status_col = _col("Status", "status")
+    order_col = _col("Order_ID", "Order ID", "Order_ID", "OrderID")
+    if not status_col or not order_col:
+        return None
+
+    # تطبيع Status للمقارنة
+    s = df[status_col].fillna("").astype(str).str.strip().str.lower()
+    df["_status_norm"] = s.str.replace(r"\s+", " ", regex=True)
+
+    released_mask = df["_status_norm"] == "released"
+    picked_mask = df["_status_norm"] == "picked"
+
+    released_orders = 0
+    picked_orders = 0
+    if released_mask.any():
+        released_orders = df.loc[released_mask, order_col].dropna().astype(str).str.strip().nunique()
+    if picked_mask.any():
+        picked_orders = df.loc[picked_mask, order_col].dropna().astype(str).str.strip().nunique()
+
+    return {
+        "released_orders": int(released_orders),
+        "picked_orders": int(picked_orders),
+    }
+
+
+def _read_pods_data_from_excel(excel_path):
+    """
+    يقرأ من شيت PODs_Data: عمود POD_Status (On Time, Pending, Late)،
+    Delivery_Date للشهور، POD_ID للعدد. يرجّع داتا لشارت خط: كل شهر ونسبة كل حالة %.
+    """
+    try:
+        xls = pd.ExcelFile(excel_path, engine="openpyxl")
+    except Exception:
+        return None
+    sheet_name = None
+    for name in xls.sheet_names:
+        n = str(name).strip().lower().replace(" ", "").replace("_", "")
+        if "podsdata" in n or "pods_data" in n or (n == "pods" and "data" in n):
+            sheet_name = name
+            break
+    if not sheet_name:
+        for name in xls.sheet_names:
+            if "pod" in str(name).lower():
+                sheet_name = name
+                break
+    if not sheet_name:
+        return None
+    try:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+    except Exception:
+        return None
+    if df.empty or len(df) < 1:
+        return None
+
+    df.columns = [str(c).strip() for c in df.columns]
+    cols_lower = {c.lower(): c for c in df.columns if c}
+
+    def _col(*keys):
+        for k in keys:
+            k_norm = k.lower().replace(" ", "").replace("_", "")
+            for col in cols_lower:
+                if col.replace(" ", "").replace("_", "") == k_norm:
+                    return cols_lower[col]
+            if k.lower() in cols_lower:
+                return cols_lower[k.lower()]
+        return None
+
+    status_col = _col("POD_Status", "POD Status", "PODStatus")
+    date_col = _col("Delivery_Date", "Delivery Date", "DeliveryDate", "Date")
+    pod_id_col = _col("POD_ID", "POD ID", "PODID")
+    if not status_col or not date_col:
+        return None
+    if not pod_id_col:
+        pod_id_col = df.columns[0]
+
+    s = df[status_col].fillna("").astype(str).str.strip().str.lower()
+    df["_status_norm"] = s.str.replace(r"\s+", " ", regex=True)
+    valid_statuses = {"on time", "pending", "late"}
+    df = df[df["_status_norm"].isin(valid_statuses)].copy()
+    if df.empty:
+        return None
+
+    df["_date"] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df.dropna(subset=["_date"])
+    df["_month"] = df["_date"].dt.strftime("%b")
+    month_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    months_in_data = df["_month"].unique().tolist()
+    months_sorted = sorted(months_in_data, key=lambda m: month_order.index(m) if m in month_order else 99)
+
+    series_on_time = []
+    series_pending = []
+    series_late = []
+    for m in months_sorted:
+        grp = df[df["_month"] == m]
+        on_time = (grp["_status_norm"] == "on time").sum()
+        pending = (grp["_status_norm"] == "pending").sum()
+        late = (grp["_status_norm"] == "late").sum()
+        total = on_time + pending + late
+        if total == 0:
+            series_on_time.append(0)
+            series_pending.append(0)
+            series_late.append(0)
+        else:
+            series_on_time.append(round(100.0 * on_time / total, 1))
+            series_pending.append(round(100.0 * pending / total, 1))
+            series_late.append(round(100.0 * late / total, 1))
+
+    return {
+        "categories": months_sorted,
+        "series": [
+            {"name": "On Time", "data": series_on_time},
+            {"name": "Pending", "data": series_pending},
+            {"name": "Late", "data": series_late},
+        ],
+    }
+
+
+def _read_returns_data_from_excel(excel_path):
+    """
+    يقرأ من شيت Returns_Data: عمود Return_Status (فلترة مثل PODs: On Time, Pending, Late)،
+    Request_Date للشهور، Return_ID لعدد الشحنات (unique). يرجّع returns_kpi و returns_chart_data.
+    """
+    try:
+        xls = pd.ExcelFile(excel_path, engine="openpyxl")
+    except Exception:
+        return None
+    sheet_name = None
+    for name in xls.sheet_names:
+        n = str(name).strip().lower().replace(" ", "").replace("_", "")
+        if "returnsdata" in n or "returns_data" in n:
+            sheet_name = name
+            break
+    if not sheet_name:
+        for name in xls.sheet_names:
+            if "returns" in str(name).lower() and "data" in str(name).lower():
+                sheet_name = name
+                break
+    if not sheet_name:
+        for name in xls.sheet_names:
+            if "return" in str(name).lower():
+                sheet_name = name
+                break
+    if not sheet_name:
+        return None
+    try:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+    except Exception:
+        return None
+    if df.empty or len(df) < 1:
+        return None
+
+    df.columns = [str(c).strip() for c in df.columns]
+    cols_lower = {c.lower(): c for c in df.columns if c}
+
+    def _col(*keys):
+        for k in keys:
+            k_norm = k.lower().replace(" ", "").replace("_", "")
+            for col in cols_lower:
+                if col.replace(" ", "").replace("_", "") == k_norm:
+                    return cols_lower[col]
+            if k.lower() in cols_lower:
+                return cols_lower[k.lower()]
+        return None
+
+    status_col = _col("Return_Status", "Return Status", "ReturnStatus")
+    date_col = _col("Request_Date", "Request Date", "RequestDate", "Date")
+    return_id_col = _col("Return_ID", "Return ID", "ReturnID")
+    nbr_skus_col = _col("Nbr_SKUs", "Nbr SKUs", "NbrSKUs")
+    nbr_items_col = _col("Nbr_Items", "Nbr Items", "NbrItems")
+    if not status_col or not date_col:
+        return None
+    if not return_id_col:
+        return_id_col = df.columns[0]
+
+    s = df[status_col].fillna("").astype(str).str.strip().str.lower()
+    df["_status_norm"] = s.str.replace(r"\s+", " ", regex=True)
+    valid_statuses = {"on time", "pending", "late"}
+    df = df[df["_status_norm"].isin(valid_statuses)].copy()
+    if df.empty:
+        return None
+
+    df["_date"] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df.dropna(subset=["_date"])
+    df["_month"] = df["_date"].dt.strftime("%b")
+    month_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    months_in_data = df["_month"].unique().tolist()
+    months_sorted = sorted(months_in_data, key=lambda m: month_order.index(m) if m in month_order else 99)
+
+    total_unique_returns = df[return_id_col].dropna().astype(str).str.strip().nunique()
+    total_rows = len(df)
+
+    total_skus_kpi = total_unique_returns
+    total_lpns_kpi = total_rows
+    if nbr_skus_col:
+        total_skus_kpi = int(pd.to_numeric(df[nbr_skus_col], errors="coerce").fillna(0).sum())
+    if nbr_items_col:
+        total_lpns_kpi = int(pd.to_numeric(df[nbr_items_col], errors="coerce").fillna(0).sum())
+
+    series_on_time = []
+    series_pending = []
+    series_late = []
+    for m in months_sorted:
+        grp = df[df["_month"] == m]
+        on_time = (grp["_status_norm"] == "on time").sum()
+        pending = (grp["_status_norm"] == "pending").sum()
+        late = (grp["_status_norm"] == "late").sum()
+        total = on_time + pending + late
+        if total == 0:
+            series_on_time.append(0)
+            series_pending.append(0)
+            series_late.append(0)
+        else:
+            series_on_time.append(round(100.0 * on_time / total, 1))
+            series_pending.append(round(100.0 * pending / total, 1))
+            series_late.append(round(100.0 * late / total, 1))
+
+    return {
+        "returns_kpi": {
+            "total_skus": total_skus_kpi,
+            "total_lpns": total_lpns_kpi,
+        },
+        "returns_chart_data": {
+            "categories": months_sorted,
+            "series": [
+                {"name": "On Time", "data": series_on_time},
+                {"name": "Pending", "data": series_pending},
+                {"name": "Late", "data": series_late},
+            ],
+        },
+    }
+
+
+def _read_inventory_data_from_excel(excel_path):
+    """
+    يقرأ من شيت Inventory_Lots:
+    - عمود LPNs: تجميع كل القيم (مجموع) = Total LPNs.
+    - عمود Snapshot_Date: كل يوم بيومه (للاستخدام لاحقاً في شارت/تحليل).
+    - عمود SKU: حذف المتكرر وعدّ القيم الفريدة فقط = Total SKUs.
+    """
+    try:
+        xls = pd.ExcelFile(excel_path, engine="openpyxl")
+    except Exception:
+        return None
+    sheet_name = None
+    for name in xls.sheet_names:
+        n = str(name).strip().lower().replace(" ", "").replace("_", "")
+        if "inventorylots" in n or "inventory_lots" in n:
+            sheet_name = name
+            break
+    if not sheet_name:
+        for name in xls.sheet_names:
+            if "inventory" in str(name).lower() and "lot" in str(name).lower():
+                sheet_name = name
+                break
+    if not sheet_name:
+        for name in xls.sheet_names:
+            if "inventory" in str(name).lower():
+                sheet_name = name
+                break
+    if not sheet_name:
+        return None
+    try:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+    except Exception:
+        return None
+    if df.empty or len(df) < 1:
+        return None
+
+    df.columns = [str(c).strip() for c in df.columns]
+    cols_lower = {c.lower(): c for c in df.columns if c}
+
+    def _col(*keys):
+        for k in keys:
+            k_norm = k.lower().replace(" ", "").replace("_", "")
+            for col in cols_lower:
+                if col.replace(" ", "").replace("_", "") == k_norm:
+                    return cols_lower[col]
+            if k.lower() in cols_lower:
+                return cols_lower[k.lower()]
+        return None
+
+    lpns_col = _col("LPNs", "LPN")
+    snapshot_date_col = _col("Snapshot_Date", "Snapshot Date", "SnapshotDate", "Date")
+    sku_col = _col("SKU", "Sku")
+
+    total_lpns = 0
+    total_skus = 0
+
+    if lpns_col:
+        total_lpns = int(pd.to_numeric(df[lpns_col], errors="coerce").fillna(0).sum())
+
+    if sku_col:
+        sku_series = df[sku_col].dropna().astype(str).str.strip()
+        sku_series = sku_series[sku_series != ""]
+        total_skus = int(sku_series.nunique())
+
+    return {
+        "inventory_kpi": {
+            "total_skus": total_skus,
+            "total_lpns": total_lpns,
+            "utilization_pct": "78",
+        },
+    }
+
+
+def _read_inventory_snapshot_capacity_from_excel(excel_path):
+    """
+    يقرأ من شيت Inventory_Snapshot:
+    - Used_Space_m3 → Used (مجموع ثم نسبة مئوية).
+    - Available_Space_m3 → Available (مجموع ثم نسبة مئوية).
+    يرجع inventory_capacity_data: { used: نسبة Used %, available: نسبة Available % }.
+    """
+    try:
+        xls = pd.ExcelFile(excel_path, engine="openpyxl")
+    except Exception:
+        return None
+    sheet_name = None
+    for name in xls.sheet_names:
+        n = str(name).strip().lower().replace(" ", "").replace("_", "")
+        if "inventorysnapshot" in n or "inventory_snapshot" in n:
+            sheet_name = name
+            break
+    if not sheet_name:
+        for name in xls.sheet_names:
+            if "inventory" in str(name).lower() and "snapshot" in str(name).lower():
+                sheet_name = name
+                break
+    if not sheet_name:
+        return None
+    try:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+    except Exception:
+        return None
+    if df.empty or len(df) < 1:
+        return None
+
+    df.columns = [str(c).strip() for c in df.columns]
+    cols_lower = {c.lower(): c for c in df.columns if c}
+
+    def _col(*keys):
+        for k in keys:
+            k_norm = k.lower().replace(" ", "").replace("_", "")
+            for col in cols_lower:
+                if col.replace(" ", "").replace("_", "") == k_norm:
+                    return cols_lower[col]
+            if k.lower() in cols_lower:
+                return cols_lower[k.lower()]
+        return None
+
+    used_col = _col("Used_Space_m3", "Used Space m3", "UsedSpace_m3")
+    avail_col = _col("Available_Space_m3", "Available Space m3", "AvailableSpace_m3")
+    if not used_col or not avail_col:
+        return None
+
+    total_used = pd.to_numeric(df[used_col], errors="coerce").fillna(0).sum()
+    total_avail = pd.to_numeric(df[avail_col], errors="coerce").fillna(0).sum()
+    total = total_used + total_avail
+    if total <= 0:
+        return {"inventory_capacity_data": {"used": 78, "available": 22}}
+
+    used_pct = round(100.0 * total_used / total, 1)
+    available_pct = round(100.0 - used_pct, 1)
+    return {
+        "inventory_capacity_data": {
+            "used": used_pct,
+            "available": available_pct,
+        },
+    }
+
+
+def _read_inventory_warehouse_table_from_excel(excel_path):
+    """
+    يقرأ من شيت Inventory_Snapshot جدول الـ Warehouse:
+    - Warehouse من عمود Warehouse
+    - SKUs من عمود Total_SKUs
+    - Available Space من عمود Available_Space_m3
+    - Utilization % من عمود Utilization_%
+    كل صف كما هو من الشيت بدون جمع.
+    """
+    try:
+        xls = pd.ExcelFile(excel_path, engine="openpyxl")
+    except Exception:
+        return None
+    sheet_name = None
+    for name in xls.sheet_names:
+        n = str(name).strip().lower().replace(" ", "").replace("_", "")
+        if "inventorysnapshot" in n or "inventory_snapshot" in n:
+            sheet_name = name
+            break
+    if not sheet_name:
+        for name in xls.sheet_names:
+            if "inventory" in str(name).lower() and "snapshot" in str(name).lower():
+                sheet_name = name
+                break
+    if not sheet_name:
+        return None
+    try:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+    except Exception:
+        return None
+    if df.empty or len(df) < 1:
+        return None
+
+    df.columns = [str(c).strip() for c in df.columns]
+    cols_lower = {c.lower(): c for c in df.columns if c}
+
+    def _col(*keys):
+        for k in keys:
+            k_norm = k.lower().replace(" ", "").replace("_", "")
+            for col in cols_lower:
+                if col.replace(" ", "").replace("_", "") == k_norm:
+                    return cols_lower[col]
+            if k.lower() in cols_lower:
+                return cols_lower[k.lower()]
+        return None
+
+    warehouse_col = _col("Warehouse")
+    total_skus_col = _col("Total_SKUs", "Total SKUs", "TotalSKUs")
+    avail_space_col = _col("Available_Space_m3", "Available Space m3", "AvailableSpace_m3")
+    util_col = _col("Utilization_%", "Utilization %", "UtilizationPct", "Utilization")
+    if not warehouse_col:
+        return None
+
+    def _val(col, r):
+        if not col or col not in r.index:
+            return ""
+        v = r[col]
+        if pd.isna(v):
+            return ""
+        if isinstance(v, (int, float)):
+            return str(int(v)) if v == int(v) else str(v)
+        return str(v).strip()
+
+    def _util_pct(col, r):
+        if not col or col not in r.index:
+            return ""
+        v = r[col]
+        if pd.isna(v):
+            return ""
+        try:
+            num = float(v)
+            if 0 <= num <= 1:
+                return f"{round(num * 100, 2)}%"
+            return f"{round(num, 2)}%"
+        except (TypeError, ValueError):
+            s = str(v).strip()
+            return f"{s}%" if s and not s.endswith("%") else s
+
+    rows = []
+    for _, r in df.iterrows():
+        warehouse = "" if pd.isna(r[warehouse_col]) else str(r[warehouse_col]).strip()
+        rows.append({
+            "warehouse": warehouse,
+            "skus": _val(total_skus_col, r),
+            "available_space": _val(avail_space_col, r),
+            "utilization_pct": _util_pct(util_col, r),
+        })
+    if not rows:
+        return None
+    return {"inventory_warehouse_table": rows}
+
+
+def _read_returns_region_table_from_excel(excel_path):
+    """
+    يبني returns_region_table من Inventory_Lots + Inventory_Snapshot:
+    - Region من عمود Warehouse في Inventory_Lots (فلترة بالـ Warehouse).
+    - SKUs: عدد القيم الفريدة لعمود SKU لكل Warehouse بعد الفلترة بالتاريخ.
+    - Available: مجموع LPNs لكل Warehouse بعد الفلترة بـ Snapshot_Date (آخر تاريخ).
+    - Utilization %: (LPNs للمنطقة والتاريخ) / Capacity_m3 من Inventory_Snapshot لنفس المنطقة، كنسبة مئوية.
+    """
+    try:
+        xls = pd.ExcelFile(excel_path, engine="openpyxl")
+    except Exception:
+        return None
+
+    def _find_sheet(*names):
+        for want in names:
+            want_n = want.lower().replace(" ", "").replace("_", "")
+            for s in xls.sheet_names:
+                if want_n in str(s).lower().replace(" ", "").replace("_", ""):
+                    return s
+        return None
+
+    lots_sheet = _find_sheet("Inventory_Lots", "Inventory Lots")
+    snapshot_sheet = _find_sheet("Inventory_Snapshot", "Inventory Snapshot")
+    if not lots_sheet:
+        return None
+
+    try:
+        df_lots = pd.read_excel(excel_path, sheet_name=lots_sheet, engine="openpyxl", header=0)
+    except Exception:
+        return None
+    if df_lots.empty:
+        return None
+
+    df_lots.columns = [str(c).strip() for c in df_lots.columns]
+    cols_lots = {c.lower(): c for c in df_lots.columns if c}
+
+    def _col_lots(*keys):
+        for k in keys:
+            k_norm = k.lower().replace(" ", "").replace("_", "")
+            for col in cols_lots:
+                if col.replace(" ", "").replace("_", "") == k_norm:
+                    return cols_lots[col]
+        return None
+
+    wh_col = _col_lots("Warehouse")
+    sku_col = _col_lots("SKU", "Sku")
+    lpns_col = _col_lots("LPNs", "LPN")
+    snap_col = _col_lots("Snapshot_Date", "Snapshot Date", "SnapshotDate", "Date")
+    if not wh_col or not snap_col:
+        return None
+    if not lpns_col:
+        lpns_col = df_lots.columns[1] if len(df_lots.columns) > 1 else None
+    if not lpns_col:
+        return None
+
+    df_lots["_date"] = pd.to_datetime(df_lots[snap_col], errors="coerce")
+    df_lots = df_lots.dropna(subset=["_date"])
+    if df_lots.empty:
+        return None
+
+    latest_date = df_lots["_date"].max()
+    df_filtered = df_lots[df_lots["_date"] == latest_date].copy()
+
+    capacity_by_warehouse = {}
+    if snapshot_sheet:
+        try:
+            df_snap = pd.read_excel(excel_path, sheet_name=snapshot_sheet, engine="openpyxl", header=0)
+            if not df_snap.empty:
+                df_snap.columns = [str(c).strip() for c in df_snap.columns]
+                snap_cols = {c.lower(): c for c in df_snap.columns if c}
+                snap_wh = next((snap_cols[c] for c in snap_cols if "warehouse" in c.replace(" ", "").replace("_", "")), None)
+                cap_col = next((snap_cols[c] for c in snap_cols if "capacity_m3" in c.replace(" ", "").replace("_", "") or ("capacity" in c and "m3" in c)), None)
+                if not cap_col:
+                    used_c = next((snap_cols[c] for c in snap_cols if "used_space" in c.replace(" ", "").replace("_", "")), None)
+                    avail_c = next((snap_cols[c] for c in snap_cols if "available_space" in c.replace(" ", "").replace("_", "")), None)
+                    if used_c and avail_c:
+                        df_snap["_cap"] = pd.to_numeric(df_snap[used_c], errors="coerce").fillna(0) + pd.to_numeric(df_snap[avail_c], errors="coerce").fillna(0)
+                        cap_col = "_cap"
+                if snap_wh and cap_col:
+                    for _, r in df_snap.iterrows():
+                        w = r.get(snap_wh)
+                        if pd.isna(w):
+                            continue
+                        w = str(w).strip()
+                        if not w:
+                            continue
+                        c = r.get(cap_col)
+                        if cap_col == "_cap":
+                            val = c
+                        else:
+                            val = pd.to_numeric(c, errors="coerce")
+                        if pd.notna(val) and val > 0:
+                            capacity_by_warehouse[w] = float(val)
+        except Exception:
+            pass
+
+    df_filtered["_lpns_num"] = pd.to_numeric(df_filtered[lpns_col], errors="coerce").fillna(0)
+    rows = []
+    for wh, grp in df_filtered.groupby(wh_col, dropna=False):
+        wh_name = "" if pd.isna(wh) else str(wh).strip()
+        skus = grp[sku_col].dropna().astype(str).str.strip() if sku_col else pd.Series(dtype=object)
+        skus = skus[skus != ""].nunique() if not skus.empty else 0
+        available = int(grp["_lpns_num"].sum())
+        cap = capacity_by_warehouse.get(wh_name) or capacity_by_warehouse.get(wh)
+        if cap and cap > 0:
+            util = round(100.0 * available / cap, 2)
+            utilization_pct = f"{util}%"
+        else:
+            utilization_pct = "—"
+        rows.append({
+            "region": wh_name,
+            "skus": str(int(skus)) if isinstance(skus, (int, float)) else str(skus),
+            "available": str(available),
+            "utilization_pct": utilization_pct,
+        })
+
+    if not rows:
+        return None
+    return {"returns_region_table": rows}
+
+
+def get_dashboard_tab_context(request):
+    """
+    يبني سياق تاب الداشبورد (نفس بيانات Dashboard view).
+    إذا وُجدت الفيو في تطبيق dashboard أو inbound يتم استخدامها، وإلا يُرجع سياق افتراضي.
+    """
+    try:
+        for app_label in ["dashboard", "inbound"]:
+            try:
+                view_module = __import__(f"{app_label}.views", fromlist=["DashboardView"])
+                ViewClass = getattr(view_module, "DashboardView", None)
+                if ViewClass is not None:
+                    view = ViewClass()
+                    view.request = request
+                    view.object = None
+                    return view.get_context_data()
+            except (ImportError, AttributeError):
+                continue
+    except Exception:
+        pass
+    # سياق افتراضي عند عدم وجود الموديلات/الفيو (مع داتا وهمية لـ Inbound)
+    return {
+        "title": "Dashboard",
+        "breadcrumb": {"title": "Healthcare Dashboard", "parent": "Dashboard", "child": "Default"},
+        "is_admin": False,
+        "is_employee": False,
+        "inbound_data": [],
+        "transportation_outbound_data": [],
+        "wh_outbound_data": [],
+        "returns_data": [],
+        "expiry_data": [],
+        "damage_data": [],
+        "inventory_data": [],
+        "pallet_location_availability_data": [],
+        "hse_data": [],
+        "number_of_shipments": 0,
+        "total_vehicles_daily": 0,
+        "total_pallets": 0,
+        "total_pending_shipments": 0,
+        "total_number_of_shipments": 0,
+        "total_quantity": 0,
+        "total_number_of_line": 0,
+        # Inbound KPI + داتا شارت Pending Shipments (من الديكت في الفيو)
+        "inbound_kpi": INBOUND_DEFAULT_KPI.copy(),
+        "pending_shipments": list(INBOUND_DEFAULT_PENDING_SHIPMENTS),
+        "shipment_data": {"bulk": 0, "loose": 0, "cold": 0, "frozen": 0, "ambient": 0},
+        "wh_total_released_order": 0,
+        "wh_total_piked_order": 0,
+        "wh_total_pending_pick_orders": 0,
+        "wh_total_number_of_PODs_collected_on_time": 0,
+        "wh_total_number_of_PODs_collected_Late": 0,
+        "total_orders_items_returned": 0,
+        "total_number_of_return_items_orders_updated_on_time": 0,
+        "total_number_of_return_items_orders_updated_late": 0,
+        "total_SKUs_expired": 0,
+        "total_expired_SKUS_disposed": 0,
+        "total_nearly_expired_1_to_3_months": 0,
+        "total_nearly_expired_3_to_6_months": 0,
+        "total_SKUs_expired_calculated": 0,
+        "Total_QTYs_Damaged_by_WH": 0,
+        "Total_Number_of_Damaged_during_receiving": 0,
+        "Total_Araive_Damaged": 0,
+        "Total_Locations_match": 0,
+        "Total_Locations_not_match": 0,
+        "last_shipment": None,
+        "Total_Storage_Pallet": 0,
+        "Total_Storage_pallet_empty": 0,
+        "Total_Storage_Bin": 0,
+        "Total_occupied_pallet_location": 0,
+        "Total_Storage_Bin_empty": 0,
+        "Total_occupied_Bin_location": 0,
+        "Total_Incidents_on_the_side": 0,
+        "total_no_of_employees": 0,
+        "admin_data": [],
+        "user_type": "Unknown",
+        "years": [],
+        "months": list(calendar_module.month_name)[1:],
+        "days": list(range(1, 32)),
+        "returns_region_table": [
+            {"region": "Main warehouse", "skus": "2,538", "available": "1118", "utilization_pct": "71%"},
+            {"region": "Dammam DC", "skus": "501", "available": "200", "utilization_pct": "—"},
+            {"region": "Riyadh DC", "skus": "3,996", "available": "209", "utilization_pct": "—"},
+            {"region": "Jeddah DC", "skus": "7,996", "available": "300", "utilization_pct": "—"},
+        ],
+    }
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -556,7 +1630,9 @@ class UploadExcelViewRoche(View):
                     effective_month,
                     selected_months=quarter_months or None,
                 ),
-                "pods update": lambda: self.filter_pods_update(request, effective_month),
+                "pods update": lambda: self.filter_pods_update(
+                    request, effective_month
+                ),
                 "meeting points": lambda: self.meeting_points_tab(request),
                 "expiry": lambda: self.filter_expiry(
                     request,
@@ -668,7 +1744,6 @@ class UploadExcelViewRoche(View):
                 )
             elif "meeting points" in selected_tab:
                 return self.meeting_points_tab(request)
-            # cross docking tab تم إلغاؤه
             elif selected_tab:
                 raw_data = self.render_raw_sheet(request, selected_tab)
                 return JsonResponse(raw_data, safe=False)
@@ -786,23 +1861,29 @@ class UploadExcelViewRoche(View):
             request=request, selected_month=selected_month or None
         )
 
-        return render(
-            request,
-            self.template_name,
-            {
-                "data_is_uploaded": True,
-                "months": all_months,
-                "excel_tabs": excel_tabs,
-                "active_tab": "all",
-                "tab_summaries": [],
-                "form": ExcelUploadForm(),
-                "meeting_points": meeting_points,
-                "done_count": done_count,
-                "total_count": total_count,
-                "all_tab_data": all_tab_data,
-                "raw_tab_data": None,
-            },
-        )
+        render_context = {
+            "data_is_uploaded": True,
+            "months": all_months,
+            "excel_tabs": excel_tabs,
+            "active_tab": selected_tab or "all",
+            "tab_summaries": [],
+            "form": ExcelUploadForm(),
+            "meeting_points": meeting_points,
+            "done_count": done_count,
+            "total_count": total_count,
+            "all_tab_data": all_tab_data,
+            "raw_tab_data": None,
+        }
+        if (selected_tab or "").lower() == "dashboard":
+            try:
+                dashboard_ctx = self._get_dashboard_include_context(request)
+                render_context.update(dashboard_ctx)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"⚠️ [Dashboard include context] {e}")
+
+        return render(request, self.template_name, render_context)
 
     def post(self, request):
         print("📥 [DEBUG] تم استدعاء post()")  # ✅ بداية الدالة
@@ -836,28 +1917,34 @@ class UploadExcelViewRoche(View):
         excel_file = form.cleaned_data["excel_file"]
         folder_path = os.path.join(settings.MEDIA_ROOT, "excel_uploads")
         os.makedirs(folder_path, exist_ok=True)
-        ext = (
-            os.path.splitext(getattr(excel_file, "name", "") or "latest.xlsx")[1]
-            or ".xlsx"
-        )
-        if ext.lower() not in (".xlsx", ".xlsm"):
-            ext = ".xlsx"
-        file_path = os.path.join(folder_path, "latest" + ext)
+        file_name = getattr(excel_file, "name", "") or ""
+        is_dashboard_file = _is_dashboard_excel_filename(file_name)
+
+        if is_dashboard_file:
+            # ✅ ملف الداشبورد (شيت تاني): Aramco_Tamer3PL_KPI_Dashboard.xlsx — للتاب Dashboard فقط
+            file_path = os.path.join(folder_path, DASHBOARD_EXCEL_FILENAME)
+            print(f"📊 [DEBUG] رفع ملف الداشبورد: {file_name} → {file_path}")
+        else:
+            # ✅ الملف الرئيسي (all_sheet / latest) — لباقي التابات
+            ext = os.path.splitext(file_name)[1] or ".xlsx"
+            if ext.lower() not in (".xlsx", ".xlsm"):
+                ext = ".xlsx"
+            file_path = os.path.join(folder_path, "latest" + ext)
 
         try:
-            # ✅ حذف أي ملف latest قديم (xlsx أو xlsm) لتفادي بقاء ملف بالامتداد الآخر
-            for old_name in ("latest.xlsx", "latest.xlsm"):
-                old_path = os.path.join(folder_path, old_name)
-                if os.path.exists(old_path):
-                    try:
-                        os.chmod(old_path, 0o644)
-                        os.remove(old_path)
-                        print(f"🗑️ [DEBUG] تم حذف الملف القديم: {old_path}")
-                    except Exception as e:
-                        print(f"⚠️ [DEBUG] تحذير حذف {old_name}: {e}")
+            if not is_dashboard_file:
+                # ✅ حذف أي ملف latest قديم (xlsx أو xlsm) لتفادي بقاء ملف بالامتداد الآخر
+                for old_name in ("latest.xlsx", "latest.xlsm"):
+                    old_path = os.path.join(folder_path, old_name)
+                    if os.path.exists(old_path):
+                        try:
+                            os.chmod(old_path, 0o644)
+                            os.remove(old_path)
+                            print(f"🗑️ [DEBUG] تم حذف الملف القديم: {old_path}")
+                        except Exception as e:
+                            print(f"⚠️ [DEBUG] تحذير حذف {old_name}: {e}")
             if os.path.exists(file_path):
                 try:
-                    # ✅ محاولة تغيير الصلاحيات أولاً (على PythonAnywhere قد يكون الملف محمي)
                     os.chmod(file_path, 0o644)
                     os.remove(file_path)
                     print(f"🗑️ [DEBUG] تم حذف الملف القديم: {file_path}")
@@ -865,12 +1952,10 @@ class UploadExcelViewRoche(View):
                     print(
                         f"⚠️ [DEBUG] تحذير: لا يمكن حذف الملف القديم (PermissionError): {pe}"
                     )
-                    # ✅ محاولة حفظ الملف باسم مؤقت ثم استبداله
-                    temp_path = os.path.join(folder_path, "latest_temp.xlsx")
+                    temp_path = os.path.join(folder_path, "temp_upload.xlsx")
                     with open(temp_path, "wb+") as destination:
                         for chunk in excel_file.chunks():
                             destination.write(chunk)
-                    # ✅ محاولة استبدال الملف القديم بالجديد
                     try:
                         os.replace(temp_path, file_path)
                         print(f"✅ [DEBUG] تم استبدال الملف باستخدام os.replace")
@@ -878,18 +1963,15 @@ class UploadExcelViewRoche(View):
                         print(
                             f"⚠️ [DEBUG] تحذير: لا يمكن استبدال الملف: {replace_error}"
                         )
-                        # ✅ إذا فشل الاستبدال، استخدم الملف المؤقت
                         file_path = temp_path
                 except Exception as delete_error:
                     print(f"⚠️ [DEBUG] تحذير: خطأ في حذف الملف القديم: {delete_error}")
-                    # ✅ المتابعة مع حفظ الملف الجديد (سيستبدل الملف القديم)
 
             # ✅ حفظ الملف الجديد
             with open(file_path, "wb+") as destination:
                 for chunk in excel_file.chunks():
                     destination.write(chunk)
 
-            # ✅ التأكد من الصلاحيات الصحيحة للملف الجديد
             try:
                 os.chmod(file_path, 0o644)
             except Exception as chmod_error:
@@ -897,10 +1979,14 @@ class UploadExcelViewRoche(View):
 
             print(f"✅ [DEBUG] تم حفظ الملف بنجاح في: {file_path}")
 
-            # ✅ حفظ مسار الملف في الجلسة لاستخدامه في الجلسات التالية بدون إعادة الرفع
-            request.session["uploaded_excel_path"] = file_path
+            # ✅ حفظ المسار في الجلسة حسب نوع الملف (داشبورد أو رئيسي)
+            if is_dashboard_file:
+                request.session["dashboard_excel_path"] = file_path
+                print(f"💾 [DEBUG] تم حفظ مسار ملف الداشبورد في الجلسة: {file_path}")
+            else:
+                request.session["uploaded_excel_path"] = file_path
+                print(f"💾 [DEBUG] تم حفظ مسار الملف الرئيسي في الجلسة: {file_path}")
             request.session.save()
-            print(f"💾 [DEBUG] تم حفظ مسار الملف في الجلسة: {file_path}")
 
             # ✅ مسح الكاش بعد رفع ملف جديد
             try:
@@ -3676,10 +4762,11 @@ class UploadExcelViewRoche(View):
     def filter_pods_update(self, request, selected_month=None, selected_months=None):
         """
         تاب PODs: قراءة من شيت PODs.
-        - حساب Days بين Created on و PGI Date (باستثناء يوم الجمعة).
-        - Hit = ≤ 2 days, Miss = > 2 days.
-        - تجميع حسب W.HNAME (كل مدينة جدول + شارت لوحدها).
-        - كروت KPI: Total Shipment, Hit %, Miss %, Target.
+        - فلترة بـ W.HNAME، Created on، PGI Date.
+        - حساب الأيام بين Created on و PGI Date (باستثناء يوم الجمعة).
+        - Hit = استلام خلال 7 أيام أو أقل، Miss = أكثر من 7 أيام.
+        - الجدول العلوي: KPI + صفوف المدن لكل شهر.
+        - الجدول السفلي: التفاصيل مع فلتر W.HNAME، الشهور، Hit/Miss؛ البادجات على المدن و Hit/Miss.
         """
         import pandas as pd
         from django.template.loader import render_to_string
@@ -3773,10 +4860,11 @@ class UploadExcelViewRoche(View):
                 lambda row: business_days_between(row["_created_dt"], row["_pgi_dt"]),
                 axis=1,
             )
+            # Hit = استلام خلال 7 أيام أو أقل (بدون الجمعة)، Miss = أكثر من 7 أيام
             df["Hit or Miss"] = df["Days"].apply(
                 lambda d: (
                     "Hit"
-                    if d is not None and d <= 2
+                    if d is not None and d <= 7
                     else ("Miss" if d is not None else "Pending")
                 )
             )
@@ -3784,9 +4872,8 @@ class UploadExcelViewRoche(View):
                 lambda d: str(int(d)) if d is not None else ""
             )
 
-            # استخراج الشهر من Created on
+            # استخراج الشهر من Created on (نحتفظ بـ _created_dt و _pgi_dt لجدول التفاصيل)
             df["Month"] = df["_created_dt"].dt.strftime("%b").fillna("")
-            df = df.drop(columns=["_created_dt", "_pgi_dt"], errors="ignore")
 
             # فلترة الشهر
             selected_months_norm = []
@@ -3818,10 +4905,10 @@ class UploadExcelViewRoche(View):
                     "hit_pct": 0,
                 }
 
-            # إحصائيات عامة (لكروت KPI)
-            total_shipments = len(df[df["Hit or Miss"].isin(["Hit", "Miss"])])
+            # إحصائيات عامة (لكروت KPI): عدد الشحنات الكل = Hit + Miss فقط
             hit_count = len(df[df["Hit or Miss"] == "Hit"])
             miss_count = len(df[df["Hit or Miss"] == "Miss"])
+            total_shipments = hit_count + miss_count
             hit_pct = (
                 round((hit_count / total_shipments * 100), 2)
                 if total_shipments > 0
@@ -3936,47 +5023,34 @@ class UploadExcelViewRoche(View):
                 for c, t in zip(closed_by_month, total_by_month)
             ]
 
-            # بناء الجدول الواحد مع عمود المدن
-            # الأعمدة: KPI, [المدن], [الشهور], YTD
+            # بناء الجدول: KPI، ثم أعمدة المدن جانب أعمدة الشهور، ثم الشهور + YTD
+            # الأعمدة: KPI, City1, City2, ..., Jan, Feb, ..., YTD
+            columns = ["KPI"] + cities + months_display
             table_rows = []
 
-            # صف Closed
+            # صف Closed (الإجمالي): لكل مدينة نعرض YTD، ثم لكل شهر نعرض الإجمالي
             closed_row = {"KPI": "Closed"}
-            # إضافة قيم المدن (مجموع كل المدن لكل شهر)
             for city in cities:
-                if city in city_data:
-                    closed_row[city] = sum(city_data[city]["closed"][:-1])  # بدون YTD
-                else:
-                    closed_row[city] = 0
-            # إضافة قيم الشهور
+                closed_row[city] = int(city_data.get(city, {}).get("closed", [0])[-1])
             for i, month in enumerate(months_display):
                 closed_row[month] = int(closed_by_month[i])
             table_rows.append(closed_row)
 
-            # صف Pending
+            # صف Pending (الإجمالي)
             pending_row = {"KPI": "Pending"}
             for city in cities:
-                if city in city_data:
-                    pending_row[city] = sum(city_data[city]["pending"][:-1])  # بدون YTD
-                else:
-                    pending_row[city] = 0
+                pending_row[city] = int(city_data.get(city, {}).get("pending", [0])[-1])
             for i, month in enumerate(months_display):
                 pending_row[month] = int(pending_by_month[i])
             table_rows.append(pending_row)
 
-            # صف Total
+            # صف Total (الإجمالي)
             total_row = {"KPI": "Total"}
             for city in cities:
-                if city in city_data:
-                    total_row[city] = sum(city_data[city]["total"][:-1])  # بدون YTD
-                else:
-                    total_row[city] = 0
+                total_row[city] = int(city_data.get(city, {}).get("total", [0])[-1])
             for i, month in enumerate(months_display):
                 total_row[month] = int(total_by_month[i])
             table_rows.append(total_row)
-
-            # أعمدة الجدول: KPI, المدن, الشهور
-            columns = ["KPI"] + cities + months_display
 
             # شارت واحد (كل المدن مجمعة)
             chart_data = [
@@ -4031,17 +5105,17 @@ class UploadExcelViewRoche(View):
                 "Hit or Miss",
                 "Month",
             ]
-            
+
             # تنظيف الأعمدة (إزالة None)
             detail_columns = [c for c in detail_columns if c]
-            
+
             # إعداد البيانات للجدول التفصيلي
             detail_df = df.copy()
-            
+
             # حفظ عمود الترتيب قبل التحويل
             if "_created_dt" in detail_df.columns:
                 detail_df["_sort_ts"] = detail_df["_created_dt"]
-            
+
             def _fmt_date(x):
                 if pd.isna(x) or x is pd.NaT:
                     return ""
@@ -4049,24 +5123,29 @@ class UploadExcelViewRoche(View):
                     return pd.Timestamp(x).strftime("%Y-%m-%d %H:%M")
                 except Exception:
                     return ""
-            
+
             # تحويل التواريخ إلى نص
             if col_created in detail_df.columns and "_created_dt" in detail_df.columns:
                 detail_df[col_created] = detail_df["_created_dt"].apply(_fmt_date)
             if col_pgi in detail_df.columns and "_pgi_dt" in detail_df.columns:
                 detail_df[col_pgi] = detail_df["_pgi_dt"].apply(_fmt_date)
-            
+
             # ترتيب البيانات قبل إزالة الأعمدة المؤقتة
             if "_sort_ts" in detail_df.columns:
                 detail_df = detail_df.sort_values("_sort_ts", ascending=False)
-            
+
             # إزالة الأعمدة المؤقتة
             drop_cols = ["_created_dt", "_pgi_dt", "_sort_ts"]
-            detail_df = detail_df.drop(columns=[c for c in drop_cols if c in detail_df.columns], errors="ignore")
-            
+            detail_df = detail_df.drop(
+                columns=[c for c in drop_cols if c in detail_df.columns],
+                errors="ignore",
+            )
+
             # استخراج البيانات
-            detail_rows_raw = detail_df.head(500)[detail_columns].to_dict(orient="records")
-            
+            detail_rows_raw = detail_df.head(500)[detail_columns].to_dict(
+                orient="records"
+            )
+
             def _to_blank(val):
                 if val is None:
                     return ""
@@ -4076,29 +5155,73 @@ class UploadExcelViewRoche(View):
                 if s.lower() in ("nan", "nat", "none", "<nat>"):
                     return ""
                 return s
-            
+
             detail_rows = [
                 {k: _to_blank(v) for k, v in row.items()} for row in detail_rows_raw
             ]
-            
+
             # بناء قائمة الفلاتر
             detail_df_for_options = detail_df.copy()
-            whname_options = sorted(
-                detail_df_for_options[col_whname].fillna("").astype(str).str.strip().replace("", None).dropna().unique().tolist()
-            ) if col_whname in detail_df_for_options.columns else []
-            
-            city_options = sorted(
-                detail_df_for_options[col_city].fillna("").astype(str).str.strip().replace("", None).dropna().unique().tolist()
-            ) if col_city in detail_df_for_options.columns else []
-            
-            status_options = sorted(
-                detail_df_for_options["Hit or Miss"].fillna("").astype(str).str.strip().replace("", None).dropna().unique().tolist()
-            ) if "Hit or Miss" in detail_df_for_options.columns else []
-            
-            month_options = sorted(
-                detail_df_for_options["Month"].fillna("").astype(str).str.strip().replace("", None).dropna().unique().tolist()
-            ) if "Month" in detail_df_for_options.columns else []
-            
+            whname_options = (
+                sorted(
+                    detail_df_for_options[col_whname]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .replace("", None)
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+                if col_whname in detail_df_for_options.columns
+                else []
+            )
+
+            city_options = (
+                sorted(
+                    detail_df_for_options[col_city]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .replace("", None)
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+                if col_city in detail_df_for_options.columns
+                else []
+            )
+
+            status_options = (
+                sorted(
+                    detail_df_for_options["Hit or Miss"]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .replace("", None)
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+                if "Hit or Miss" in detail_df_for_options.columns
+                else []
+            )
+
+            month_options = (
+                sorted(
+                    detail_df_for_options["Month"]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .replace("", None)
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+                if "Month" in detail_df_for_options.columns
+                else []
+            )
+
             # إضافة جدول التفاصيل
             detail_table = {
                 "id": "sub-table-pods-detail",
@@ -4109,12 +5232,11 @@ class UploadExcelViewRoche(View):
                 "full_width": True,
                 "filter_options": {
                     "whnames": whname_options,
-                    "cities": city_options,
                     "statuses": status_options,
                     "months": month_options,
                 },
             }
-            
+
             sub_tables.append(detail_table)
 
             # كروت KPI
@@ -4158,415 +5280,6 @@ class UploadExcelViewRoche(View):
 
             print(traceback.format_exc())
             return {"error": f"⚠️ Error processing PODs: {e}"}
-
-    # filter_order_general_information - تم حذفها (غير مستخدمة)
-    def _deleted_filter_order_general_information(
-        self, request, selected_month=None, selected_months=None
-    ):
-        """
-        🔹 دمج عرض 4 شيتات:
-            1️⃣ Urgent Orders Details ← جدول + شارت (% From Full Order Number)
-            2️⃣ Outbound Details ← جدول + شارت (% Of Normal Orders + % Of Booking Orders)
-            3️⃣ Picking Accuracy ← جدول + شارت (% Of Actual)
-            4️⃣ Quality Exceptions (Temperature deviation سابقاً)
-        🔹 عرض جميع البيانات بدون فلترة بالشهر
-        """
-        print("🟢 [DEBUG] ✅ دخل على filter_order_general_information()")
-
-        try:
-            excel_path = self.get_excel_path()
-            if not excel_path or not os.path.exists(excel_path):
-                return {"error": "⚠️ Excel file not found."}
-
-            xls = pd.ExcelFile(excel_path, engine="openpyxl")
-            sub_tables = []
-
-            selected_months_norm = []
-            if selected_months:
-                if isinstance(selected_months, str):
-                    selected_months = [selected_months]
-                seen = set()
-                for month in selected_months:
-                    norm = self.normalize_month_label(month)
-                    if norm and norm.lower() not in seen:
-                        seen.add(norm.lower())
-                        selected_months_norm.append(norm)
-
-            sheets_info = {
-                "Urgent orders details": "Urgent Orders Details",
-                "Outbound details": "Outbound Details",
-                "Picking Accuracy": "Picking Accuracy",
-                "Temperature deviation": "Quality Exceptions",
-            }
-
-            for sheet_name, table_title in sheets_info.items():
-                if sheet_name not in xls.sheet_names:
-                    continue
-
-                try:
-                    df = pd.read_excel(
-                        excel_path, sheet_name=sheet_name, engine="openpyxl"
-                    )
-                    df.columns = df.columns.str.strip().str.title()
-                    df = df.dropna(how="all")
-
-                    if df.empty:
-                        sub_tables.append(
-                            {
-                                "id": f"sub-table-{slugify(table_title)}",
-                                "title": table_title,
-                                "columns": [],
-                                "data": [],
-                                "chart_data": [],
-                                "message": "لا توجد بيانات متاحة.",
-                            }
-                        )
-                        continue
-
-                    # ✅ حفظ نسخة من البيانات الأصلية قبل التحويل (لإنشاء chart_data)
-                    df_original = df.copy()
-
-                    # ✅ تحويل النسب المئوية إلى أعداد صحيحة بدون علامة عشرية (مثل 27% وليس 27.00%)
-                    for col in df.select_dtypes(include=["float", "float64"]).columns:
-                        df[col] = df[col].apply(
-                            lambda x: f"{int(round(x * 100))}%" if pd.notna(x) else ""
-                        )
-
-                    # ✅ إنشاء chart_data بناءً على نوع الشيت
-                    chart_data = []
-
-                    # البحث عن عمود Month أو الشهر
-                    month_col = None
-                    for col in df_original.columns:
-                        if col.lower() in ["month", "monthabbr", "month_abbr"]:
-                            month_col = col
-                            break
-
-                    # 1️⃣ Urgent Orders Details - الشارت يعرض "% From Full Order Number"
-                    if table_title == "Urgent Orders Details":
-                        pct_col = None
-                        for col in df_original.columns:
-                            col_lower = str(col).lower()
-                            # البحث عن عمود يحتوي على "%" و "full" أو "order" و "number"
-                            if "%" in str(col) and (
-                                "full" in col_lower
-                                or ("order" in col_lower and "number" in col_lower)
-                            ):
-                                pct_col = col
-                                break
-                        # إذا لم نجد، جرب البحث عن أي عمود يحتوي على "%"
-                        if not pct_col:
-                            for col in df_original.columns:
-                                if "%" in str(col) and col != month_col:
-                                    pct_col = col
-                                    break
-
-                        if month_col and pct_col:
-                            data_points = []
-                            for _, row in df_original.iterrows():
-                                month_val = (
-                                    str(row[month_col]).strip()
-                                    if pd.notna(row[month_col])
-                                    else ""
-                                )
-                                pct_val = row[pct_col]
-                                if pd.notna(pct_val):
-                                    # تحويل من نسبة (0.27) إلى نسبة مئوية (27)
-                                    if isinstance(pct_val, (int, float)):
-                                        pct_val = (
-                                            pct_val * 100 if pct_val <= 1 else pct_val
-                                        )
-                                    else:
-                                        try:
-                                            pct_val = float(
-                                                str(pct_val).replace("%", "")
-                                            )
-                                        except:
-                                            continue
-                                    data_points.append(
-                                        {"label": month_val, "y": round(pct_val, 2)}
-                                    )
-
-                            if data_points:
-                                chart_data.append(
-                                    {
-                                        "type": "column",
-                                        "name": "% From Full Order Number",
-                                        "color": "#9fc0e4",
-                                        "showInLegend": True,
-                                        "dataPoints": data_points,
-                                        "related_table": table_title,
-                                    }
-                                )
-
-                    # 2️⃣ Outbound Details - الشارت يعرض "% Of Normal Orders" و "% Of Booking Orders"
-                    elif table_title == "Outbound Details":
-                        normal_col = None
-                        booking_col = None
-
-                        # البحث الأول: البحث عن الأعمدة المحددة
-                        for col in df_original.columns:
-                            col_lower = str(col).lower()
-                            col_str = str(col)
-                            if "%" in col_str:
-                                if "normal" in col_lower:
-                                    normal_col = col
-                                elif "booking" in col_lower:
-                                    booking_col = col
-
-                        # Fallback: إذا لم نجد الأعمدة المحددة، نبحث عن أي عمود يحتوي على "%"
-                        if not normal_col and not booking_col:
-                            for col in df_original.columns:
-                                col_str = str(col)
-                                if "%" in col_str and col != month_col:
-                                    # نأخذ أول عمود نسبة مئوية كـ fallback
-                                    if not normal_col:
-                                        normal_col = col
-                                    elif not booking_col:
-                                        booking_col = col
-                                    if normal_col and booking_col:
-                                        break
-
-                        if month_col:
-                            # Normal Orders
-                            if normal_col:
-                                data_points_normal = []
-                                for _, row in df_original.iterrows():
-                                    month_val = (
-                                        str(row[month_col]).strip()
-                                        if pd.notna(row[month_col])
-                                        else ""
-                                    )
-                                    val = row[normal_col]
-                                    if pd.notna(val):
-                                        if isinstance(val, (int, float)):
-                                            val = val * 100 if val <= 1 else val
-                                        else:
-                                            try:
-                                                val = float(str(val).replace("%", ""))
-                                            except:
-                                                continue
-                                        data_points_normal.append(
-                                            {"label": month_val, "y": round(val, 2)}
-                                        )
-
-                                if data_points_normal:
-                                    chart_data.append(
-                                        {
-                                            "type": "stackedColumn100",  # ✅ تغيير إلى stackedColumn100 للـ stacked chart
-                                            "name": (
-                                                normal_col
-                                                if normal_col
-                                                else "% Of Normal Orders"
-                                            ),
-                                            "color": "#9084ad",
-                                            "showInLegend": True,
-                                            "dataPoints": data_points_normal,
-                                            "related_table": table_title,
-                                            "stack": "stack1",  # ✅ إضافة stack name للـ stacked chart
-                                        }
-                                    )
-
-                            # Booking Orders
-                            if booking_col:
-                                data_points_booking = []
-                                for _, row in df_original.iterrows():
-                                    month_val = (
-                                        str(row[month_col]).strip()
-                                        if pd.notna(row[month_col])
-                                        else ""
-                                    )
-                                    val = row[booking_col]
-                                    if pd.notna(val):
-                                        if isinstance(val, (int, float)):
-                                            val = val * 100 if val <= 1 else val
-                                        else:
-                                            try:
-                                                val = float(str(val).replace("%", ""))
-                                            except:
-                                                continue
-                                        data_points_booking.append(
-                                            {"label": month_val, "y": round(val, 2)}
-                                        )
-
-                                if data_points_booking:
-                                    chart_data.append(
-                                        {
-                                            "type": "stackedColumn100",  # ✅ تغيير إلى stackedColumn100 للـ stacked chart
-                                            "name": (
-                                                booking_col
-                                                if booking_col
-                                                else "% Of Booking Orders"
-                                            ),
-                                            "color": "#9fc0e4",
-                                            "showInLegend": True,
-                                            "dataPoints": data_points_booking,
-                                            "related_table": table_title,
-                                            "stack": "stack1",  # ✅ إضافة stack name للـ stacked chart (نفس الاسم)
-                                        }
-                                    )
-
-                            # ✅ إذا لم نجد أي عمود، نستخدم أول عمود نسبة مئوية كـ fallback
-                            if not chart_data and normal_col:
-                                data_points = []
-                                for _, row in df_original.iterrows():
-                                    month_val = (
-                                        str(row[month_col]).strip()
-                                        if pd.notna(row[month_col])
-                                        else ""
-                                    )
-                                    val = row[normal_col]
-                                    if pd.notna(val):
-                                        if isinstance(val, (int, float)):
-                                            val = val * 100 if val <= 1 else val
-                                        else:
-                                            try:
-                                                val = float(str(val).replace("%", ""))
-                                            except:
-                                                continue
-                                        data_points.append(
-                                            {"label": month_val, "y": round(val, 2)}
-                                        )
-
-                                if data_points:
-                                    chart_data.append(
-                                        {
-                                            "type": "column",
-                                            "name": normal_col,
-                                            "color": "#4caf50",
-                                            "showInLegend": True,
-                                            "dataPoints": data_points,
-                                            "related_table": table_title,
-                                        }
-                                    )
-
-                    # 3️⃣ Picking Accuracy - الشارت يعرض "% Of Actual"
-                    elif table_title == "Picking Accuracy":
-                        actual_col = None
-                        for col in df_original.columns:
-                            col_lower = str(col).lower()
-                            col_str = str(col)
-                            if "%" in col_str and "actual" in col_lower:
-                                actual_col = col
-                                break
-                        # إذا لم نجد، جرب البحث عن أي عمود يحتوي على "%" و "actual"
-                        if not actual_col:
-                            for col in df_original.columns:
-                                col_str = str(col)
-                                if "%" in col_str and col != month_col:
-                                    actual_col = col
-                                    break
-
-                        if month_col and actual_col:
-                            data_points = []
-                            for _, row in df_original.iterrows():
-                                month_val = (
-                                    str(row[month_col]).strip()
-                                    if pd.notna(row[month_col])
-                                    else ""
-                                )
-                                val = row[actual_col]
-                                if pd.notna(val):
-                                    if isinstance(val, (int, float)):
-                                        val = val * 100 if val <= 1 else val
-                                    else:
-                                        try:
-                                            val = float(str(val).replace("%", ""))
-                                        except:
-                                            continue
-                                    data_points.append(
-                                        {"label": month_val, "y": round(val, 2)}
-                                    )
-
-                            if data_points:
-                                chart_data.append(
-                                    {
-                                        "type": "column",
-                                        "name": "% Of Actual",
-                                        "color": "#9fc0e4",
-                                        "showInLegend": True,
-                                        "dataPoints": data_points,
-                                        "related_table": table_title,
-                                    }
-                                )
-
-                    # 4️⃣ Quality Exceptions - بدون شارت (جدول فقط في المنتصف)
-                    elif table_title == "Quality Exceptions":
-                        # ✅ لا نضيف chart_data لهذا الجدول
-                        chart_data = []
-
-                    # ✅ إنشاء sub_table مع ID فريد و chart_data
-                    sub_table_id = f"sub-table-{slugify(table_title)}"
-                    sub_table = {
-                        "id": sub_table_id,
-                        "title": table_title,
-                        "columns": list(df.columns),
-                        "data": df.to_dict(orient="records"),
-                        "chart_data": chart_data,  # ✅ إضافة chart_data
-                    }
-                    sub_tables.append(sub_table)
-
-                    print(
-                        f"✅ تمت معالجة الشيت: {sheet_name} → title='{table_title}' → chart_data: {len(chart_data)} datasets"
-                    )
-                    if chart_data:
-                        print(
-                            f"   📊 Chart datasets: {[ds.get('name', 'N/A') for ds in chart_data]}"
-                        )
-                        print(f"   📊 Month column found: {month_col}")
-                        print(
-                            f"   📊 Data points count: {sum(len(ds.get('dataPoints', [])) for ds in chart_data)}"
-                        )
-                    else:
-                        print(f"   ⚠️ No chart_data created for {table_title}")
-                        print(f"   📊 Available columns: {list(df_original.columns)}")
-                        print(f"   📊 Month column: {month_col}")
-
-                except Exception as e:
-                    print(f"⚠️ خطأ أثناء قراءة الشيت {sheet_name}: {e}")
-                    sub_tables.append(
-                        {
-                            "id": f"sub-table-{slugify(table_title)}",
-                            "title": table_title,
-                            "columns": [],
-                            "data": [],
-                            "chart_data": [],  # ✅ إضافة chart_data فارغ
-                            "message": f"⚠️ خطأ أثناء قراءة البيانات: {e}",
-                        }
-                    )
-
-            if not sub_tables:
-                return {"error": "⚠️ No valid data was found in any sheets."}
-
-            tab_data = {
-                "name": "Order General Information",
-                "sub_tables": sub_tables,
-            }
-            month_norm_tab = self.apply_month_filter_to_tab(
-                tab_data,
-                selected_month if not selected_months_norm else None,
-                selected_months_norm or None,
-            )
-
-            html = render_to_string(
-                "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
-                {"tab": tab_data, "selected_month": month_norm_tab},
-            )
-
-            total_count = sum(len(st["data"]) for st in sub_tables)
-
-            return {
-                "name": "Order General Information",
-                "detail_html": html,
-                "count": total_count,
-                "tab_data": tab_data,
-            }
-
-        except Exception as e:
-            import traceback
-
-            print(traceback.format_exc())
-            return {"error": f"⚠️ Error while processing data: {e}"}
 
     def filter_rejections_combined(
         self, request, selected_month=None, selected_months=None
@@ -5083,890 +5796,6 @@ class UploadExcelViewRoche(View):
             return {
                 "detail_html": f"<p class='text-danger'>⚠️ Error processing Expiry: {e}</p>",
                 "chart_data": [],
-                "count": 0,
-            }
-
-    # filter_airport_combined - تم حذفها (غير مستخدمة)
-    def _deleted_filter_airport_combined(
-        self, request, selected_month=None, selected_months=None
-    ):
-        """
-        Clearance Pivot Table + Chart لصفحة Airport
-        - Hit Summary
-        - Roch Delay Reasons
-        - Transit KPI Summary
-        """
-        cache.clear()
-        try:
-            import pandas as pd
-            from django.template.loader import render_to_string
-            import os
-
-            # 🧾 قراءة ملف الإكسل
-            excel_path = self.get_excel_path()
-            if not excel_path or not os.path.exists(excel_path):
-                return {
-                    "detail_html": "<p class='text-danger'>⚠️ Excel file not found.</p>",
-                    "count": 0,
-                }
-
-            # ✅ قراءة شيت Airport Clearance (مع سقوط إذا غير موجود)
-            xls = pd.ExcelFile(excel_path, engine="openpyxl")
-            sheet_name = next(
-                (s for s in xls.sheet_names if "airport clearance" in s.lower()), None
-            )
-            if not sheet_name:
-                return {
-                    "detail_html": "<p class='text-warning text-center'>⚠️ Sheet 'Airport Clearance' was not found in the uploaded workbook.</p>",
-                    "chart_data": [],
-                    "count": 0,
-                    "hit_pct": 0,
-                }
-            df = pd.read_excel(xls, sheet_name=sheet_name)
-
-            # 🧹 تنظيف الأعمدة
-            df.columns = (
-                df.columns.str.strip()
-                .str.replace(r"[\n\r\t]+", "", regex=True)
-                .str.replace(r"\s+", " ", regex=True)
-            )
-            df.rename(columns={"Clearanace Remarks": "Clearance Remarks"}, inplace=True)
-
-            # ✅ الأعمدة المطلوبة الأساسية
-            required_cols = ["Month", "Clearance Handling KPI", "MBL/AWB"]
-            for col in required_cols:
-                if col not in df.columns:
-                    return {
-                        "detail_html": f"<p class='text-danger'>⚠️ Column '{col}' does not exist in the sheet.</p>",
-                        "count": 0,
-                    }
-
-            # 🧹 تنظيف القيم وتحويل الشهر
-            df["Month"] = pd.to_datetime(df["Month"], errors="coerce")
-            df["MonthAbbr"] = df["Month"].dt.strftime(
-                "%b"
-            )  # 👈 الشهر في شكل مختصر مثل Jan, Feb, Oct
-
-            selected_months_norm = []
-            if selected_months:
-                if isinstance(selected_months, str):
-                    selected_months = [selected_months]
-                seen = set()
-                for month in selected_months:
-                    norm = self.normalize_month_label(month)
-                    if norm and norm.lower() not in seen:
-                        seen.add(norm.lower())
-                        selected_months_norm.append(norm)
-
-            if selected_months_norm:
-                month_lower_list = [m.lower() for m in selected_months_norm]
-                df = df[df["MonthAbbr"].str.lower().isin(month_lower_list)]
-                if df.empty:
-                    return {
-                        "detail_html": f"<p class='text-warning text-center'>⚠️ No data available for months {', '.join(selected_months_norm)} in Airport Clearance.</p>",
-                        "count": 0,
-                        "hit_pct": 0,
-                    }
-                selected_month = None
-
-            # ✅ فلترة الشهر المختار (لو موجود)
-            if selected_month:
-                selected_month_norm = str(selected_month).strip().capitalize()
-                df = df[df["MonthAbbr"].str.lower() == selected_month_norm.lower()]
-                print(f"🔍 [DEBUG] فلترة البيانات للشهر: {selected_month_norm}")
-                print(f"🔍 [DEBUG] عدد الصفوف بعد الفلترة: {len(df)}")
-
-                # ✅ التحقق من وجود بيانات بعد الفلترة
-                if df.empty:
-                    return {
-                        "detail_html": f"<p class='text-warning'>⚠️ No data available for {selected_month_norm}.</p>",
-                        "count": 0,
-                        "hit_pct": 0,
-                    }
-
-            # ✅ طباعة كل قيم الشهور الموجودة في الشيت (الأصلية والمختصرة)
-            print("🚀 [DEBUG] Original Month column values:")
-            print(df["Month"].dropna().unique())
-
-            print("🚀 [DEBUG] Extracted Month Abbreviations:")
-            print(df["MonthAbbr"].dropna().unique())
-
-            df["Clearance Handling KPI"] = (
-                df["Clearance Handling KPI"].astype(str).str.strip()
-            )
-            df["MBL/AWB"] = df["MBL/AWB"].astype(str).str.strip()
-
-            # ===========================================================
-            # ✅ 1️⃣ Hit Summary
-            # ===========================================================
-            df_hit = df[
-                df["Clearance Handling KPI"].str.lower() == "hit"
-            ].drop_duplicates(subset=["MBL/AWB", "Month"])
-            df_hit["KPI"] = "On-time Delivery"
-
-            month_labels = (
-                df_hit.dropna(subset=["Month"])
-                .sort_values("Month")["MonthAbbr"]
-                .unique()
-                .tolist()
-            )
-
-            pivot_hit = df_hit.pivot_table(
-                index="KPI",
-                columns="MonthAbbr",
-                values="MBL/AWB",
-                aggfunc="count",
-                fill_value=0,
-            ).reset_index()
-
-            # ✅ صف Total
-            total_row = {"KPI": "Total"}
-            for m in month_labels:
-                total_row[m] = int(pivot_hit[m].sum() if m in pivot_hit.columns else 0)
-            pivot_hit = pd.concat(
-                [pivot_hit, pd.DataFrame([total_row])], ignore_index=True
-            )
-
-            # ✅ حساب Hit %
-            hit_percent = {}
-            for m in month_labels:
-                hit = pivot_hit.at[0, m] if m in pivot_hit.columns else 0
-                total = pivot_hit.at[1, m] if m in pivot_hit.columns else 1
-                hit_percent[m] = int((hit / total * 100) if total > 0 else 0)
-
-            # ✅ تجهيز الجدول والشارت
-            hit_chart = [
-                {
-                    "title": "Airport Clearance (Hit Summary)",
-                    "type": "column",
-                    "name": "Hit %",
-                    "color": "#9fc0e4",
-                    "dataPoints": [
-                        {"label": m, "y": hit_percent[m]} for m in month_labels
-                    ],
-                    "related_table": "Airport Clearance (Hit Summary)",
-                },
-                {
-                    "title": "Airport Clearance (Hit Summary)",
-                    "type": "line",
-                    "name": "Target (98%)",
-                    "color": "#a3d977",
-                    "markerSize": 5,
-                    "dataPoints": [{"label": m, "y": 98} for m in month_labels],
-                    "related_table": "Airport Clearance (Hit Summary)",
-                },
-            ]
-
-            hit_table = {
-                "id": "airport-hit-summary",
-                "title": "Airport Clearance (Hit Summary)",
-                "columns": pivot_hit.columns.tolist(),
-                "data": pivot_hit.to_dict(orient="records"),
-                "chart_data": hit_chart,
-            }
-
-            # ===========================================================
-            # ✅ 2️⃣ Roch Delay Reasons
-            # ===========================================================
-            required_roch_cols = [
-                "Month",
-                "Clearance Handling KPI",
-                "MBL/AWB",
-                "Clearance Group",
-                "Clearance Remarks",
-            ]
-            for col in required_roch_cols:
-                if col not in df.columns:
-                    return {
-                        "detail_html": f"<p class='text-danger'>⚠️ Column '{col}' does not exist in the sheet.</p>",
-                        "count": 0,
-                    }
-
-            df_roch = df[
-                (df["Clearance Handling KPI"].str.lower() == "miss")
-                & (df["Clearance Group"].str.lower().str.contains("roch", na=False))
-            ].drop_duplicates(subset=["MBL/AWB"])
-
-            if selected_month:
-                df_roch = df_roch[
-                    df_roch["MonthAbbr"].str.lower() == selected_month.lower()
-                ]
-
-            if df_roch.empty:
-                roch_table = {
-                    "id": "airport-roch-delay-reasons",
-                    "title": "Roch Delay Reasons",
-                    "columns": ["Reason", "Count"],
-                    "data": [{"Reason": "لا توجد أسباب تأخير", "Count": "-"}],
-                    "chart_data": [],  # لا يوجد شارت لهذا الجدول
-                }
-            else:
-                month_label = (
-                    selected_month.capitalize()
-                    if selected_month
-                    else df_roch["MonthAbbr"].iloc[0]
-                )
-                reasons_count = (
-                    df_roch.groupby("Clearance Remarks")["MBL/AWB"]
-                    .nunique()
-                    .reset_index()
-                    .rename(
-                        columns={"Clearance Remarks": "Reason", "MBL/AWB": month_label}
-                    )
-                    .sort_values(by=month_label, ascending=False)
-                )
-                roch_table = {
-                    "id": "airport-roch-delay-reasons",
-                    "title": "Roch Delay Reasons",
-                    "columns": reasons_count.columns.tolist(),
-                    "data": reasons_count.to_dict(orient="records"),
-                    "chart_data": [],  # لا يوجد شارت لهذا الجدول
-                }
-
-            # ===========================================================
-            # ✅ 3️⃣ Transit KPI Summary
-            # ===========================================================
-            required_transit_cols = [
-                "Month",
-                "Transit KPI",
-                "MBL/AWB",
-                "Transit Group",
-                "Transit Remarks",
-            ]
-            for col in required_transit_cols:
-                if col not in df.columns:
-                    return {
-                        "detail_html": f"<p class='text-danger'>⚠️ Column '{col}' does not exist in the sheet.</p>",
-                        "count": 0,
-                    }
-
-            df_transit = df.copy()
-            df_transit["Month"] = pd.to_datetime(df_transit["Month"], errors="coerce")
-            df_transit["MonthAbbr"] = df_transit["Month"].dt.strftime(
-                "%b"
-            )  # 👈 تحويل الشهر
-            df_transit = df_transit.dropna(subset=["Month"])
-
-            # فلترة الشهر لو المستخدم اختار
-            if selected_month:
-                df_transit = df_transit[
-                    df_transit["MonthAbbr"].str.lower() == selected_month.lower()
-                ]
-
-            months_to_show = (
-                df_transit.sort_values("Month")["MonthAbbr"].unique().tolist()
-            )
-
-            df_hit_t = df_transit[
-                df_transit["Transit KPI"].str.lower() == "hit"
-            ].drop_duplicates(subset=["MBL/AWB"])
-            hit_counts = {
-                m: int(df_hit_t[df_hit_t["MonthAbbr"] == m]["MBL/AWB"].nunique())
-                for m in months_to_show
-            }
-
-            df_miss_t = df_transit[
-                df_transit["Transit KPI"].str.lower() == "miss"
-            ].drop_duplicates(subset=["MBL/AWB"])
-            if not df_miss_t.empty:
-                pivot_miss = (
-                    df_miss_t.groupby(
-                        ["Transit Remarks", "Transit Group", "MonthAbbr"]
-                    )["MBL/AWB"]
-                    .nunique()
-                    .unstack(fill_value=0)
-                    .reset_index()
-                )
-            else:
-                pivot_miss = pd.DataFrame(
-                    columns=["Transit Remarks", "Transit Group"] + months_to_show
-                )
-
-            rows = [
-                {
-                    "KPI (Delay Reason)": "On-time Delivery",
-                    "Responsible": "Tamer",
-                    **{m: hit_counts.get(m, 0) for m in months_to_show},
-                }
-            ]
-            for _, row in pivot_miss.iterrows():
-                rows.append(
-                    {
-                        "KPI (Delay Reason)": row["Transit Remarks"],
-                        "Responsible": row["Transit Group"],
-                        **{m: int(row.get(m, 0)) for m in months_to_show},
-                    }
-                )
-
-            total_row = {"KPI (Delay Reason)": "Total", "Responsible": "-"}
-            for m in months_to_show:
-                total_row[m] = sum(r[m] for r in rows if m in r)
-            rows.append(total_row)
-
-            pivot_transit_display = pd.DataFrame(
-                rows, columns=["KPI (Delay Reason)", "Responsible"] + months_to_show
-            )
-
-            transit_hit_percent = {
-                m: int((rows[0][m] / total_row[m]) * 100) if total_row[m] > 0 else 0
-                for m in months_to_show
-            }
-
-            transit_chart = [
-                {
-                    "title": f"Transit KPI (Hit %) - {sheet_name}",
-                    "type": "column",
-                    "name": "Transit Hit %",
-                    "color": "#b699d3",
-                    "dataPoints": [
-                        {"label": m, "y": transit_hit_percent[m]}
-                        for m in months_to_show
-                    ],
-                    "related_table": "Transit KPI Summary",
-                },
-                {
-                    "title": f"Transit KPI (Target) - {sheet_name}",
-                    "type": "line",
-                    "name": "Target (98%)",
-                    "color": "#f44336",
-                    "markerSize": 5,
-                    "dataPoints": [{"label": m, "y": 98} for m in months_to_show],
-                    "related_table": "Transit KPI Summary",
-                },
-            ]
-
-            transit_table = {
-                "id": "airport-transit-kpi-summary",
-                "title": "Transit KPI Summary",  # ✅ استخدام title ثابت بدون f-string
-                "columns": pivot_transit_display.columns.tolist(),
-                "data": pivot_transit_display.to_dict(orient="records"),
-                "chart_data": transit_chart,  # ✅ إضافة chart_data للجدول
-            }
-
-            # ✅ Debug: طباعة معلومات transit_table
-            print(f"🔍 [DEBUG Airport] transit_table title: {transit_table['title']}")
-            print(f"🔍 [DEBUG Airport] transit_table id: {transit_table['id']}")
-            print(f"🔍 [DEBUG Airport] transit_chart count: {len(transit_chart)}")
-            print(
-                f"🔍 [DEBUG Airport] transit_table chart_data count: {len(transit_table.get('chart_data', []))}"
-            )
-            if transit_table.get("chart_data"):
-                print(
-                    f"🔍 [DEBUG Airport] transit_table chart_data names: {[ds.get('name', 'N/A') for ds in transit_table['chart_data']]}"
-                )
-                print(
-                    f"🔍 [DEBUG Airport] transit_table chart_data types: {[ds.get('type', 'N/A') for ds in transit_table['chart_data']]}"
-                )
-
-            # ===========================================================
-            # ✅ تجميع كل الجداول والشارتات
-            # ===========================================================
-            tab_data = {
-                "name": sheet_name,
-                "sub_tables": [hit_table, roch_table, transit_table],
-                "chart_data": hit_chart + transit_chart,
-                "chart_title": f"{sheet_name} Overview",
-            }
-            month_norm_tab = self.apply_month_filter_to_tab(
-                tab_data,
-                selected_month if not selected_months_norm else None,
-                selected_months_norm or None,
-            )
-
-            html = render_to_string(
-                "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
-                {"tab": tab_data, "selected_month": month_norm_tab},
-            )
-
-            # ✅ حساب hit_pct مع تجنب القسمة على صفر
-            total_count = df.shape[0] if df.shape[0] > 0 else 1
-            hit_pct = (
-                int(round((df_hit.shape[0] / total_count) * 100, 0))
-                if total_count > 0
-                else 0
-            )
-
-            return {
-                "detail_html": html,
-                "count": df_hit.shape[0],
-                "hit_pct": hit_pct,
-                "chart_data": hit_chart + transit_chart,
-                "chart_title": f"{sheet_name} Overview",
-                "tab_data": tab_data,
-            }
-
-        except Exception as e:
-            import traceback
-
-            print(traceback.format_exc())
-            return {
-                "detail_html": f"<p class='text-danger'>⚠️ Error while processing data: {e}</p>",
-                "count": 0,
-            }
-
-    # filter_seaport_combined - تم حذفها (غير مستخدمة)
-    def _deleted_filter_seaport_combined(
-        self, request, selected_month=None, selected_months=None
-    ):
-        """
-        Seaport Clearance - Hit Summary + Roch Delay Reasons
-        """
-        cache.clear()
-        try:
-            import pandas as pd
-            from django.template.loader import render_to_string
-            import os
-
-            excel_path = self.get_excel_path()
-            if not excel_path or not os.path.exists(excel_path):
-                return {
-                    "detail_html": "<p class='text-danger'>⚠️ Excel file not found.</p>",
-                    "count": 0,
-                }
-
-            # تنظيف أسماء الشيتات
-            xls = pd.ExcelFile(excel_path, engine="openpyxl")
-            cleaned_sheets = {s.strip().lower(): s for s in xls.sheet_names}
-            target_sheet_key = "seaport clearance"
-            if target_sheet_key not in cleaned_sheets:
-                return {
-                    "detail_html": f"<p class='text-danger'>⚠️ Sheet '{target_sheet_key}' does not exist.</p>",
-                    "count": 0,
-                }
-            sheet_name = cleaned_sheets[target_sheet_key]
-
-            df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl")
-
-            # تنظيف الأعمدة
-            df.columns = (
-                df.columns.astype(str)
-                .str.strip()
-                .str.replace(r"[\n\r\t]+", "", regex=True)
-                .str.replace(r"\s+", " ", regex=True)
-            )
-
-            # العثور على الأعمدة الأساسية
-            container_col_candidates = [
-                c for c in df.columns if c.strip().lower() == "container no."
-            ]
-            if not container_col_candidates:
-                return {
-                    "detail_html": "⚠️ Column 'Container No.' does not exist.",
-                    "count": 0,
-                }
-            container_col = container_col_candidates[0]
-            container_index = df.columns.get_loc(container_col)
-            if container_index + 1 >= len(df.columns):
-                return {
-                    "detail_html": "⚠️ Column 'Month' was not found after 'Container No.'",
-                    "count": 0,
-                }
-            month_col = df.columns[container_index + 1]
-
-            kpi_candidates = [
-                c for c in df.columns if c.strip().lower() == "clearance handling kpi"
-            ]
-            if not kpi_candidates:
-                return {
-                    "detail_html": "⚠️ Column 'Clearance Handling KPI' does not exist.",
-                    "count": 0,
-                }
-            kpi_col = kpi_candidates[0]
-
-            # عمود Group و Remarks
-            group_candidates = [
-                c for c in df.columns if c.strip().lower() == "clearance group"
-            ]
-            if not group_candidates:
-                return {
-                    "detail_html": "⚠️ Column 'Clearance Group' does not exist.",
-                    "count": 0,
-                }
-            group_col = group_candidates[0]
-
-            remarks_candidates = [
-                c for c in df.columns if c.strip().lower() == "clearance remarks"
-            ]
-            if not remarks_candidates:
-                return {
-                    "detail_html": "⚠️ Column 'Clearance Remarks' does not exist.",
-                    "count": 0,
-                }
-            remarks_col = remarks_candidates[0]
-
-            # تنظيف القيم
-            df[container_col] = df[container_col].astype(str).str.strip()
-            df[month_col] = pd.to_datetime(df[month_col], errors="coerce")
-            df["MonthAbbr"] = df[month_col].dt.strftime("%b")
-            df[kpi_col] = df[kpi_col].astype(str).str.strip()
-            df[group_col] = df[group_col].astype(str).str.strip()
-            df[remarks_col] = df[remarks_col].astype(str).str.strip()
-
-            selected_months_norm = []
-            if selected_months:
-                if isinstance(selected_months, str):
-                    selected_months = [selected_months]
-                seen = set()
-                for month in selected_months:
-                    norm = self.normalize_month_label(month)
-                    if norm and norm.lower() not in seen:
-                        seen.add(norm.lower())
-                        selected_months_norm.append(norm)
-
-            if selected_months_norm:
-                month_lower_list = [m.lower() for m in selected_months_norm]
-                df = df[df["MonthAbbr"].str.lower().isin(month_lower_list)]
-                if df.empty:
-                    return {
-                        "detail_html": f"<p class='text-warning text-center p-4'>⚠️ No data available for months {', '.join(selected_months_norm)} in Seaport Clearance.</p>",
-                        "count": 0,
-                        "hit_pct": 0,
-                        "chart_data": [],
-                    }
-                selected_month = None
-
-            # ✅ فلترة الشهر المختار (لو موجود)
-            if selected_month:
-                selected_month_norm = str(selected_month).strip().capitalize()
-                df = df[df["MonthAbbr"].str.lower() == selected_month_norm.lower()]
-                print(f"🔍 [DEBUG Seaport] فلترة البيانات للشهر: {selected_month_norm}")
-                print(f"🔍 [DEBUG Seaport] عدد الصفوف بعد الفلترة: {len(df)}")
-
-                # ✅ التحقق من وجود بيانات بعد الفلترة
-                if df.empty:
-                    return {
-                        "detail_html": f"<p class='text-warning text-center p-4'>⚠️ No data available for {selected_month_norm} in Seaport Clearance.</p>",
-                        "count": 0,
-                        "hit_pct": 0,
-                        "chart_data": [],
-                    }
-
-            # ===========================================================
-            # 1️⃣ Hit Summary
-            # ===========================================================
-            df_hit = df[df[kpi_col].str.lower() == "hit"].drop_duplicates(
-                subset=[container_col, month_col]
-            )
-            df_hit["KPI"] = "On-time Delivery"
-            month_labels = (
-                df_hit.dropna(subset=[month_col])
-                .sort_values(month_col)["MonthAbbr"]
-                .unique()
-                .tolist()
-            )
-
-            pivot_hit = df_hit.pivot_table(
-                index="KPI",
-                columns="MonthAbbr",
-                values=container_col,
-                aggfunc="count",
-                fill_value=0,
-            ).reset_index()
-
-            total_row = {"KPI": "Total"}
-            for m in month_labels:
-                total_row[m] = int(pivot_hit[m].sum() if m in pivot_hit.columns else 0)
-            pivot_hit = pd.concat(
-                [pivot_hit, pd.DataFrame([total_row])], ignore_index=True
-            )
-
-            # ===========================================================
-            # Hit % لكل شهر فقط
-            # ===========================================================
-            hit_percent = {}
-            print("⚡ On-time Delivery % لكل شهر:")
-            for m in month_labels:
-                hit = (
-                    pivot_hit.at[0, m] if m in pivot_hit.columns else 0
-                )  # Hit = On-time Delivery
-                total = (
-                    pivot_hit.at[1, m] if m in pivot_hit.columns else 1
-                )  # Total في الشهر
-                percent = int((hit / total) * 100) if total > 0 else 0
-                hit_percent[m] = percent
-                print(f"  {m}: {percent}%")  # يطبع النسبة في التيرمينال
-
-            hit_chart = [
-                {
-                    "title": "Seaport Clearance (Hit Summary)",
-                    "type": "column",
-                    "name": "Hit %",
-                    "color": "#9fc0e4",
-                    "dataPoints": [
-                        {"label": m, "y": hit_percent[m]} for m in month_labels
-                    ],
-                    "related_table": "Seaport Clearance (Hit Summary)",
-                },
-                {
-                    "title": "Seaport Clearance (Hit Summary)",
-                    "type": "line",
-                    "name": "Target (98%)",
-                    "color": "#a3d977",
-                    "markerSize": 5,
-                    "dataPoints": [{"label": m, "y": 98} for m in month_labels],
-                    "related_table": "Seaport Clearance (Hit Summary)",
-                },
-            ]
-
-            hit_table = {
-                "id": "seaport-hit-summary",
-                "title": "Seaport Clearance (Hit Summary)",
-                "columns": pivot_hit.columns.tolist(),
-                "data": pivot_hit.to_dict(orient="records"),
-                "chart_data": hit_chart,
-            }
-
-            # ✅ Debug: طباعة معلومات hit_table
-            print(f"🔍 [DEBUG Seaport] hit_table title: {hit_table['title']}")
-            print(f"🔍 [DEBUG Seaport] hit_table id: {hit_table['id']}")
-            print(f"🔍 [DEBUG Seaport] hit_chart count: {len(hit_chart)}")
-            print(
-                f"🔍 [DEBUG Seaport] hit_table chart_data count: {len(hit_table.get('chart_data', []))}"
-            )
-            if hit_table.get("chart_data"):
-                print(
-                    f"🔍 [DEBUG Seaport] hit_table chart_data names: {[ds.get('name', 'N/A') for ds in hit_table['chart_data']]}"
-                )
-                print(
-                    f"🔍 [DEBUG Seaport] hit_table chart_data types: {[ds.get('type', 'N/A') for ds in hit_table['chart_data']]}"
-                )
-
-            # ===========================================================
-            # 2️⃣ Roch Delay Reasons
-            # ===========================================================
-            df_miss = df[df[kpi_col].str.lower() == "miss"].drop_duplicates(
-                subset=[container_col, month_col]
-            )
-            if selected_month:
-                df_miss = df_miss[
-                    df_miss["MonthAbbr"].str.lower() == selected_month.lower()
-                ]
-
-            if df_miss.empty:
-                roch_table = {
-                    "id": "seaport-roch-delay-reasons",
-                    "title": "Roch Delay Reasons",
-                    "columns": ["Reason", "Count"],
-                    "data": [{"Reason": "لا توجد أسباب تأخير", "Count": "-"}],
-                    "chart_data": [],  # لا يوجد شارت لهذا الجدول
-                }
-            else:
-                month_label = (
-                    selected_month.capitalize()
-                    if selected_month
-                    else df_miss["MonthAbbr"].iloc[0]
-                )
-                reasons_count = (
-                    df_miss.groupby(remarks_col)[container_col]
-                    .nunique()
-                    .reset_index()
-                    .rename(columns={remarks_col: "Reason", container_col: month_label})
-                    .sort_values(by=month_label, ascending=False)
-                )
-                roch_table = {
-                    "id": "seaport-roch-delay-reasons",
-                    "title": "Roch Delay Reasons",
-                    "columns": reasons_count.columns.tolist(),
-                    "data": reasons_count.to_dict(orient="records"),
-                    "chart_data": [],  # لا يوجد شارت لهذا الجدول
-                }
-
-            # ===========================================================
-            # 3️⃣ Transit KPI Summary
-            # ===========================================================
-            transit_kpi_col_candidates = [
-                c for c in df.columns if c.strip().lower() == "transit kpi"
-            ]
-            transit_group_col_candidates = [
-                c for c in df.columns if c.strip().lower() == "transit group"
-            ]
-            transit_remarks_col_candidates = [
-                c for c in df.columns if c.strip().lower() == "transit remarks"
-            ]
-            transit_container_candidates = [
-                c for c in df.columns if c.strip().lower() == "container no."
-            ]
-
-            if not transit_kpi_col_candidates:
-                return {
-                    "detail_html": "⚠️ Column 'Transit KPI' does not exist.",
-                    "count": 0,
-                }
-            if not transit_group_col_candidates:
-                return {
-                    "detail_html": "⚠️ Column 'Transit Group' does not exist.",
-                    "count": 0,
-                }
-            if not transit_remarks_col_candidates:
-                return {
-                    "detail_html": "⚠️ Column 'Transit Remarks' does not exist.",
-                    "count": 0,
-                }
-
-            transit_kpi_col = transit_kpi_col_candidates[0]
-            transit_group_col = transit_group_col_candidates[0]
-            transit_remarks_col = transit_remarks_col_candidates[0]
-            transit_container_col = transit_container_candidates[0]
-
-            # تنظيف القيم
-            df[transit_kpi_col] = df[transit_kpi_col].astype(str).str.strip()
-            df[transit_group_col] = df[transit_group_col].astype(str).str.strip()
-            df[transit_remarks_col] = df[transit_remarks_col].astype(str).str.strip()
-            df[transit_container_col] = (
-                df[transit_container_col].astype(str).str.strip()
-            )
-
-            # فلترة الشهر لو موجود
-            df_transit = df.copy()
-            if selected_month:
-                df_transit = df_transit[
-                    df_transit["MonthAbbr"].str.lower() == selected_month.lower()
-                ]
-
-            months_to_show = (
-                df_transit.sort_values(month_col)["MonthAbbr"].unique().tolist()
-            )
-
-            # Hit
-            df_hit_transit = df_transit[
-                df_transit[transit_kpi_col].str.lower() == "hit"
-            ].drop_duplicates(subset=[transit_container_col, month_col])
-            hit_counts = {
-                m: int(
-                    df_hit_transit[df_hit_transit["MonthAbbr"] == m][
-                        transit_container_col
-                    ].nunique()
-                )
-                for m in months_to_show
-            }
-
-            # Miss
-            df_miss_transit = df_transit[
-                df_transit[transit_kpi_col].str.lower() == "miss"
-            ].drop_duplicates(subset=[transit_container_col, month_col])
-            if not df_miss_transit.empty:
-                pivot_miss = (
-                    df_miss_transit.groupby(
-                        [transit_remarks_col, transit_group_col, "MonthAbbr"]
-                    )[transit_container_col]
-                    .nunique()
-                    .unstack(fill_value=0)
-                    .reset_index()
-                )
-            else:
-                pivot_miss = pd.DataFrame(
-                    columns=[transit_remarks_col, transit_group_col] + months_to_show
-                )
-
-            rows = [
-                {
-                    "KPI (Delay Reason)": "On-time Delivery",
-                    "Responsible": "Tamer",
-                    **{m: hit_counts.get(m, 0) for m in months_to_show},
-                }
-            ]
-            for _, row in pivot_miss.iterrows():
-                rows.append(
-                    {
-                        "KPI (Delay Reason)": row[transit_remarks_col],
-                        "Responsible": row[transit_group_col],
-                        **{m: int(row.get(m, 0)) for m in months_to_show},
-                    }
-                )
-
-            total_row = {"KPI (Delay Reason)": "Total", "Responsible": "-"}
-            for m in months_to_show:
-                total_row[m] = sum(r[m] for r in rows if m in r)
-            rows.append(total_row)
-
-            pivot_transit_display = pd.DataFrame(
-                rows, columns=["KPI (Delay Reason)", "Responsible"] + months_to_show
-            )
-
-            transit_hit_percent = {
-                m: int((rows[0][m] / total_row[m]) * 100) if total_row[m] > 0 else 0
-                for m in months_to_show
-            }
-
-            transit_chart = [
-                {
-                    "title": f"Transit KPI (Hit %) - {sheet_name}",
-                    "type": "column",
-                    "name": "Transit Hit %",
-                    "color": "#b699d3",
-                    "dataPoints": [
-                        {"label": m, "y": transit_hit_percent[m]}
-                        for m in months_to_show
-                    ],
-                    "related_table": "Transit KPI Summary",
-                },
-                {
-                    "title": f"Transit KPI (Target) - {sheet_name}",
-                    "type": "line",
-                    "name": "Target (98%)",
-                    "color": "#f44336",
-                    "markerSize": 5,
-                    "dataPoints": [{"label": m, "y": 98} for m in months_to_show],
-                    "related_table": "Transit KPI Summary",
-                },
-            ]
-
-            transit_table = {
-                "id": "seaport-transit-kpi-summary",
-                "title": "Transit KPI Summary",  # ✅ استخدام title ثابت بدون f-string
-                "columns": pivot_transit_display.columns.tolist(),
-                "data": pivot_transit_display.to_dict(orient="records"),
-                "chart_data": transit_chart,  # ✅ إضافة chart_data للجدول
-            }
-
-            # ✅ Debug: طباعة معلومات transit_table
-            print(f"🔍 [DEBUG Seaport] transit_table title: {transit_table['title']}")
-            print(f"🔍 [DEBUG Seaport] transit_table id: {transit_table['id']}")
-            print(f"🔍 [DEBUG Seaport] transit_chart count: {len(transit_chart)}")
-            print(
-                f"🔍 [DEBUG Seaport] transit_table chart_data count: {len(transit_table.get('chart_data', []))}"
-            )
-            if transit_table.get("chart_data"):
-                print(
-                    f"🔍 [DEBUG Seaport] transit_table chart_data names: {[ds.get('name', 'N/A') for ds in transit_table['chart_data']]}"
-                )
-                print(
-                    f"🔍 [DEBUG Seaport] transit_table chart_data types: {[ds.get('type', 'N/A') for ds in transit_table['chart_data']]}"
-                )
-
-            # ===========================================================
-            # إخراج النتائج
-            # ===========================================================
-            tab_data = {
-                "name": sheet_name,
-                "sub_tables": [hit_table, roch_table, transit_table],
-                "chart_data": hit_chart + transit_chart,
-            }
-            month_norm_tab = self.apply_month_filter_to_tab(
-                tab_data,
-                selected_month if not selected_months_norm else None,
-                selected_months_norm or None,
-            )
-
-            html = render_to_string(
-                "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
-                {"tab": tab_data, "selected_month": month_norm_tab},
-            )
-
-            return {
-                "detail_html": html,
-                "count": df_hit.shape[0],
-                "hit_pct": hit_percent,  # Hit % لكل شهر الآن
-                "chart_data": hit_chart + transit_chart,
-                "tab_data": tab_data,
-            }
-
-        except Exception as e:
-            import traceback
-
-            print(traceback.format_exc())
-            return {
-                "detail_html": f"<p class='text-danger'>⚠️ Error while processing data: {e}</p>",
                 "count": 0,
             }
 
@@ -7050,292 +6879,6 @@ class UploadExcelViewRoche(View):
                 "count": 0,
             }
 
-    def calculate_tab_progress(self, tab_name, selected_month=None):
-        print(
-            "🟢 [START] حساب نسبة التقدم للتاب:",
-            tab_name,
-            "— selected_month=",
-            selected_month,
-        )
-        try:
-            import pandas as pd, os
-
-            print("────────────────────────────────────────────────────")
-            print(
-                f"🟢 [START] حساب نسبة التقدم للتاب: '{tab_name}' — selected_month={selected_month}"
-            )
-            print(f"🟡 [DEBUG] tab_name.lower() = {tab_name.lower()}")
-            print("────────────────────────────────────────────────────")
-
-            excel_path = self.get_excel_path()
-            print(f"🟢 [DEBUG] استدعاء self.get_excel_path() => {excel_path}")
-
-            if not excel_path or not os.path.exists(excel_path):
-                print("⚠️ [DEBUG] ملف Excel غير موجود أو المسار غير صالح.")
-                return 0, 100
-
-            xls = pd.ExcelFile(excel_path, engine="openpyxl")
-            print(f"🟢 [DEBUG] أسماء شيتات الملف: {xls.sheet_names}")
-
-            # ============== 1) PODs Update ==============
-            if tab_name.lower() == "pods update":
-                print("🔷 [TAB] PODs Update — بداية المعالجة")
-                sheet_name = next(
-                    (s for s in xls.sheet_names if "pod" in s.lower()), None
-                )
-                if not sheet_name:
-                    print("⚠️ [DEBUG] لم يتم العثور على شيت PODs.")
-                    return 0, 100
-
-                df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl")
-                df.columns = df.columns.str.strip()
-
-                columns_map = {}
-                for col in df.columns:
-                    name = col.strip().lower()
-                    if "month" in name:
-                        columns_map["Month"] = col
-                    elif "closed" in name:
-                        columns_map["Closed"] = col
-                    elif "pending" in name:
-                        columns_map["Pending"] = col
-                if len(columns_map) < 3:
-                    print(
-                        "⚠️ [DEBUG] الأعمدة المطلوبة (Month, Closed, Pending) غير كافية."
-                    )
-                    return 0, 100
-
-                df = df.rename(columns=columns_map)
-                df = df.dropna(subset=["Month"])
-                df = df[~df["Month"].astype(str).str.lower().eq("total")]
-
-                if selected_month:
-                    prefix = selected_month[:3]
-                    df = df[df["Month"].astype(str).str.startswith(prefix)]
-
-                closed_sum = df["Closed"].apply(pd.to_numeric, errors="coerce").sum()
-                pending_sum = df["Pending"].apply(pd.to_numeric, errors="coerce").sum()
-                total_sum = closed_sum + pending_sum
-                hit_pct = (
-                    round((closed_sum / total_sum) * 100, 2) if total_sum != 0 else 0
-                )
-                print(f"✅ [RESULT] PODs Update -> hit_pct={hit_pct}%")
-                return hit_pct, 100
-
-            # ============== 2) Total Lead Time Performance ==============
-            elif tab_name.lower() == "total lead time performance":
-                print("🔷 [TAB] Total Lead Time Performance — بداية المعالجة")
-                sheet_name = next(
-                    (
-                        s
-                        for s in xls.sheet_names
-                        if "total lead time preformance" in s.lower()
-                        and "-r" not in s.lower()
-                    ),
-                    None,
-                )
-                if not sheet_name:
-                    print("⚠️ [DEBUG] لا يوجد شيت Total Lead Time Performance.")
-                    return 0, 100
-
-                df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl")
-                df.columns = df.columns.str.strip().str.lower()
-
-                if "month" not in df.columns or "kpi" not in df.columns:
-                    print("⚠️ [DEBUG] الأعمدة الأساسية غير موجودة.")
-                    return 0, 100
-
-                df["month"] = pd.to_datetime(df["month"], errors="coerce").dt.strftime(
-                    "%b"
-                )
-                if selected_month:
-                    sel = selected_month[:3]
-                    df = df[df["month"] == sel]
-
-                total = len(df)
-                hit = len(df[df["kpi"].astype(str).str.lower() != "miss"])
-                hit_pct = round((hit / total) * 100, 2) if total > 0 else 0
-                print(f"✅ [RESULT] Total Lead Time Performance -> hit_pct={hit_pct}%")
-                return hit_pct, 100
-
-            # ============== 3) Order General Information ==============
-            elif tab_name.lower() == "order general information":
-                print("🔷 [TAB] Order General Information — بداية المعالجة")
-                sheet_urgent = next(
-                    (
-                        s
-                        for s in xls.sheet_names
-                        if "urgent orders details" in s.lower()
-                    ),
-                    None,
-                )
-                sheet_outbound = next(
-                    (s for s in xls.sheet_names if "outbound details" in s.lower()),
-                    None,
-                )
-                if not sheet_urgent:
-                    print("⚠️ [DEBUG] لم يتم العثور على شيت Urgent orders details.")
-                    return 0, 100
-
-                df_urgent = pd.read_excel(
-                    excel_path, sheet_name=sheet_urgent, engine="openpyxl"
-                )
-                df_urgent.columns = df_urgent.columns.str.strip().str.lower()
-                total_orders = None
-                if sheet_outbound:
-                    df_out = pd.read_excel(
-                        excel_path, sheet_name=sheet_outbound, engine="openpyxl"
-                    )
-                    total_orders = len(df_out)
-
-                count_col_name = next(
-                    (c for c in df_urgent.columns if "count" in c and "urg" in c), None
-                )
-                pct_col_name = next(
-                    (c for c in df_urgent.columns if "%" in c or "percent" in c), None
-                )
-
-                if count_col_name and total_orders and total_orders > 0:
-                    urgent_sum = (
-                        pd.to_numeric(df_urgent[count_col_name], errors="coerce")
-                        .fillna(0)
-                        .sum()
-                    )
-                    non_urgent = max(total_orders - urgent_sum, 0)
-                    hit_pct = round((non_urgent / total_orders) * 100, 2)
-                    return hit_pct, 100
-
-                if pct_col_name:
-                    pct_vals = pd.to_numeric(
-                        df_urgent[pct_col_name].astype(str).str.replace("%", ""),
-                        errors="coerce",
-                    ).dropna()
-                    if len(pct_vals) > 0:
-                        avg_urgent_pct = pct_vals.mean()
-                        hit_pct = round(100 - avg_urgent_pct, 2)
-                        return hit_pct, 100
-
-                return 0, 100
-
-            # ============== 4) Rejections ==============
-            elif tab_name.lower() == "rejections":
-                print("🔷 [TAB] Rejections — بداية المعالجة")
-                # نحاول حساب نسبة بسيطة من Booking orders
-                sheet_rejection = next(
-                    (
-                        s
-                        for s in xls.sheet_names
-                        if "rejection" in s.lower() and "breakdown" not in s.lower()
-                    ),
-                    None,
-                )
-                if not sheet_rejection:
-                    print("⚠️ [DEBUG] لم يتم العثور على شيت Rejection.")
-                    return 0, 100
-
-                df = pd.read_excel(
-                    excel_path, sheet_name=sheet_rejection, engine="openpyxl"
-                )
-                df.columns = df.columns.str.strip()
-                if "Booking orders" in df.columns:
-                    vals = pd.to_numeric(
-                        df["Booking orders"].astype(str).str.replace("%", ""),
-                        errors="coerce",
-                    ).dropna()
-                    if len(vals) > 0:
-                        avg_val = vals.mean()
-                        hit_pct = round(100 - avg_val, 2)
-                        print(f"✅ [RESULT] Rejections -> hit_pct={hit_pct}%")
-                        return hit_pct, 100
-                print("⚠️ [DEBUG] لم يتم العثور على عمود Booking orders.")
-                return 0, 100
-
-            # ============== 5) Dock to Stock ==============
-            elif tab_name.lower() == "dock to stock":
-                print("🔷 [TAB] Dock to stock — بداية المعالجة")
-
-                try:
-                    res = self.filter_dock_to_stock_combined(None, selected_month)
-                    print("🟢 [DEBUG] نتيجة filter_dock_to_stock_combined:", bool(res))
-
-                    chart_data = res.get("chart_data", [])
-                    if chart_data:
-                        on_time_series = next(
-                            (s for s in chart_data if "on time" in s["name"].lower()),
-                            None,
-                        )
-                        target_series = next(
-                            (s for s in chart_data if "target" in s["name"].lower()),
-                            None,
-                        )
-
-                        if on_time_series and target_series:
-                            # نجيب آخر قيمة صالحة
-                            on_time_points = [
-                                p["y"]
-                                for p in on_time_series["dataPoints"]
-                                if isinstance(p["y"], (int, float))
-                            ]
-                            target_points = [
-                                p["y"]
-                                for p in target_series["dataPoints"]
-                                if isinstance(p["y"], (int, float))
-                            ]
-
-                            if on_time_points:
-                                last_hit = on_time_points[-1]
-                            else:
-                                last_hit = 0
-
-                            if target_points:
-                                last_target = target_points[-1]
-                            else:
-                                last_target = 100
-
-                            # 🔹 تأكد أن النسبة لا تتعدى 100%
-                            hit_pct = min(round(float(last_hit), 2), 100)
-                            target_pct = min(round(float(last_target), 2), 100)
-
-                            print(
-                                f"📊 [RESULT] Dock to stock (من الشارت): Hit={hit_pct}%, Target={target_pct}%"
-                            )
-                            return hit_pct, target_pct
-
-                    # ✅ fallback لو مفيش chart_data
-                    detail_html = res.get("detail_html", "")
-                    if "On time" in detail_html and "%" in detail_html:
-                        import re
-
-                        matches = re.findall(r"(\d+(?:\.\d+)?)\s*%", detail_html)
-                        if matches:
-                            hit_pct = float(matches[-1])
-                            hit_pct = min(hit_pct, 100)
-                            print(
-                                f"📊 [RESULT] Dock to stock (من HTML): Hit={hit_pct}%"
-                            )
-                            return hit_pct, 100
-
-                    print("⚠️ [INFO] لا توجد بيانات Dock to stock صالحة.")
-                    return 0, 100
-
-                except Exception as e:
-                    print(f"⚠️ [ERROR] أثناء حساب progress للتاب Dock to stock: {e}")
-                    return 0, 100
-
-            # باقي التابات (افتراضي)
-            else:
-                print(
-                    "ℹ️ [INFO] لم يتم تعريف حساب خاص لهذا التاب. سيتم إرجاع النسبة 0%."
-                )
-                return 0, 100
-
-        except Exception:
-            import traceback
-
-            print("❌ [EXCEPTION] حدث خطأ غير متوقع في calculate_tab_progress():")
-            traceback.print_exc()
-            return 0, 100
-
     def overview_tab(
         self,
         request=None,
@@ -7442,12 +6985,9 @@ class UploadExcelViewRoche(View):
 
         tabs_order = [
             "Dock to stock",
-            "Data logger Measurement",
             "Total Lead Time Performance",
             "PODs update",
             "Return & Refusal",
-            "Airport Clearance",
-            "Seaport Clearance",
         ]
 
         with ThreadPoolExecutor(max_workers=5) as executor:
@@ -7492,17 +7032,138 @@ class UploadExcelViewRoche(View):
 
         return {"tab_cards": tab_cards, "detail_html": all_progress_html}
 
+    def _get_dashboard_include_context(self, request):
+        """
+        يُرجع سياق الداشبورد (نفس منطق dashboard_tab) لاستخدامه عند include
+        container-fluid-dashboard في التمبلت حتى تورث base واللينكات والشارتس.
+        """
+        context = get_dashboard_tab_context(request)
+        context["title"] = self.DASHBOARD_TAB_NAME
+        excel_path = _get_dashboard_excel_path(request) or _get_excel_path_for_request(request)
+        if excel_path:
+            inbound_data = _read_inbound_data_from_excel(excel_path)
+            if inbound_data:
+                context["inbound_kpi"] = inbound_data["inbound_kpi"]
+                context["pending_shipments"] = inbound_data["pending_shipments"]
+            # شارتات دينامك من الإكسل (نفس فكرة chart_data في rejection)
+            charts_from_excel = _read_dashboard_charts_from_excel(excel_path)
+            for key, value in charts_from_excel.items():
+                if value is not None:
+                    context[key] = value
+            outbound_data = _read_outbound_data_from_excel(excel_path)
+            if outbound_data:
+                context.setdefault(
+                    "outbound_kpi",
+                    {
+                        "released_orders": 146,
+                        "picked_orders": 120,
+                        "pod_compliance_pct": 94,
+                        "insight_text": "Delays mainly caused by transportation issues or customer confirmation.",
+                    },
+                )
+                context["outbound_kpi"]["released_orders"] = outbound_data["released_orders"]
+                context["outbound_kpi"]["picked_orders"] = outbound_data["picked_orders"]
+            pods_chart = _read_pods_data_from_excel(excel_path)
+            if pods_chart:
+                context["pod_compliance_chart_data"] = pods_chart
+            returns_data = _read_returns_data_from_excel(excel_path)
+            if returns_data:
+                context["returns_kpi"] = returns_data["returns_kpi"]
+                context["returns_chart_data"] = returns_data["returns_chart_data"]
+            inventory_data = _read_inventory_data_from_excel(excel_path)
+            if inventory_data:
+                context["inventory_kpi"] = inventory_data["inventory_kpi"]
+            capacity_data = _read_inventory_snapshot_capacity_from_excel(excel_path)
+            if capacity_data:
+                context["inventory_capacity_data"] = capacity_data["inventory_capacity_data"]
+            warehouse_table = _read_inventory_warehouse_table_from_excel(excel_path)
+            if warehouse_table:
+                context["inventory_warehouse_table"] = warehouse_table["inventory_warehouse_table"]
+            returns_region = _read_returns_region_table_from_excel(excel_path)
+            if returns_region:
+                context["returns_region_table"] = returns_region["returns_region_table"]
+        context.setdefault("inbound_kpi", INBOUND_DEFAULT_KPI.copy())
+        context.setdefault("pending_shipments", list(INBOUND_DEFAULT_PENDING_SHIPMENTS))
+        context.setdefault(
+            "outbound_kpi",
+            {
+                "released_orders": 146,
+                "picked_orders": 120,
+                "pod_compliance_pct": 94,
+                "insight_text": "Delays mainly caused by transportation issues or customer confirmation.",
+            },
+        )
+        context.setdefault("outbound_chart_data", DASHBOARD_DEFAULT_CHART_DATA["outbound_chart_data"].copy())
+        context.setdefault(
+            "pod_compliance_chart_data",
+            {
+                "categories": ["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
+                "series": [
+                    {"name": "On Time", "data": [70, 72, 68, 75, 74, 78]},
+                    {"name": "Pending", "data": [15, 14, 18, 12, 13, 10]},
+                    {"name": "Late", "data": [15, 14, 14, 13, 13, 12]},
+                ],
+            },
+        )
+        context.setdefault("returns_kpi", {"total_skus": 2538, "total_lpns": 4810})
+        context.setdefault("returns_chart_data", DASHBOARD_DEFAULT_CHART_DATA["returns_chart_data"].copy())
+        context.setdefault(
+            "returns_region_table",
+            [
+                {"region": "Main warehouse", "skus": "2,538", "available": "1118", "utilization_pct": "71%"},
+                {"region": "Dammam DC", "skus": "501", "available": "200", "utilization_pct": "—"},
+                {"region": "Riyadh DC", "skus": "3,996", "available": "209", "utilization_pct": "—"},
+                {"region": "Jeddah DC", "skus": "7,996", "available": "300", "utilization_pct": "—"},
+            ],
+        )
+        context.setdefault("inventory_kpi", {"total_skus": 2538, "total_lpns": 4810, "utilization_pct": "78"})
+        context.setdefault("inventory_capacity_data", DASHBOARD_DEFAULT_CHART_DATA["inventory_capacity_data"].copy())
+        context.setdefault(
+            "inventory_warehouse_table",
+            [
+                {"warehouse": "Main Warehouse", "skus": "117", "available_space": "9,536,995", "utilization_pct": "223"},
+                {"warehouse": "Dammam DC", "skus": "108", "available_space": "9,260,995", "utilization_pct": "553"},
+                {"warehouse": "Riyadh DC", "skus": "145", "available_space": "9,827,955", "utilization_pct": "535"},
+                {"warehouse": "Jeddah DC", "skus": "159", "available_space": "5,324,353", "utilization_pct": "279"},
+            ],
+        )
+        return context
+
     def dashboard_tab(self, request):
         """
-        🔹 تاب Dashboard مخصص للتصميم اليدوي (بدون قراءة شيت مباشر)
+        🔹 تاب Dashboard: يعرض تصميم الداشبورد (container-fluid-dashboard).
+        التمبلت منفصل عن excel-sheet-table ويُحمّل داخل منطقة المحتوى عند اختيار تاب Dashboard.
+        نفس فكرة rejection: نرجع detail_html + chart_data + chart_title عشان الشارتات تبقى دينامك.
         """
         try:
+            context = self._get_dashboard_include_context(request)
             html = render_to_string(
-                "dashboard_custom.html",
-                {"title": self.DASHBOARD_TAB_NAME},
+                "container-fluid-dashboard.html",
+                context,
                 request=request,
             )
-            return {"detail_html": html}
+            # نفس شكل الـ rejection: chart_data و chart_title للشارتات الدينامك
+            outbound_chart = context.get("outbound_chart_data")
+            chart_data = []
+            if outbound_chart and isinstance(outbound_chart, dict):
+                categories = outbound_chart.get("categories", [])
+                series = outbound_chart.get("series", [])
+                if categories and series is not None:
+                    chart_data.append({
+                        "type": "line",
+                        "name": "POD Compliance",
+                        "dataPoints": [{"label": c, "y": float(s)} for c, s in zip(categories, series)],
+                    })
+            return {
+                "detail_html": html,
+                "chart_data": chart_data,
+                "chart_title": "Dashboard – POD Compliance",
+                "dashboard_charts": {
+                    "outbound": context.get("outbound_chart_data"),
+                    "returns": context.get("returns_chart_data"),
+                    "inventory": context.get("inventory_capacity_data"),
+                },
+            }
         except Exception as e:
             import traceback
 
@@ -7579,54 +7240,6 @@ class UploadExcelViewRoche(View):
             traceback.print_exc()
             return JsonResponse(
                 {"error": f"An error occurred while loading data: {e}"}, status=500
-            )
-
-    # cross_docking_tab - تم حذفها (غير مستخدمة)
-    def _deleted_cross_docking_tab(self, request):
-        """
-        🔹 عرض تاب Cross Docking يحتوي على تابين (رسمتين لجدة والرياض)
-        """
-        import traceback
-        from django.template.loader import render_to_string
-        from django.http import JsonResponse
-
-        try:
-            # ✅ تجهيز السياق لكل رسمه
-            context_jeddah = {
-                "title": "Jeddah Cross-Docking Performance",
-            }
-            context_riyadh = {
-                "title": "Riyadh Cross-Docking Performance",
-            }
-
-            # ✅ تحميل التمبلتين (كل واحدة فيها رسمه Chart)
-            jeddah_html = render_to_string(
-                "includes_cross_docking/jeddah_crossdock.html",
-                context_jeddah,
-                request=request,
-            )
-            riyadh_html = render_to_string(
-                "includes_cross_docking/riyadh_crossdock.html",
-                context_riyadh,
-                request=request,
-            )
-
-            # ✅ بناء التابات
-            html = render_to_string(
-                "cross_docking.html",
-                {
-                    "jeddah_html": jeddah_html,
-                    "riyadh_html": riyadh_html,
-                },
-                request=request,
-            )
-
-            return JsonResponse({"detail_html": html}, safe=False)
-
-        except Exception as e:
-            traceback.print_exc()
-            return JsonResponse(
-                {"error": f"An error occurred while loading tabs: {e}"}, status=500
             )
 
 

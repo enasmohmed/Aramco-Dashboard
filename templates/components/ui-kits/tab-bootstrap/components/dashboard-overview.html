@@ -273,13 +273,21 @@
     function ensureChartPlugins() {
       if (pluginsRegistered) return;
       try {
-        Chart.register(ChartDataLabels);
-        Chart.register(window["chartjs-plugin-annotation"]);
+        if (typeof ChartDataLabels !== "undefined") {
+          Chart.register(ChartDataLabels);
+        }
+        if (typeof window["chartjs-plugin-annotation"] !== "undefined") {
+          Chart.register(window["chartjs-plugin-annotation"]);
+        }
         pluginsRegistered = true;
         console.log("✅ Chart.js plugins registered successfully");
       } catch (e) {
         console.error("⚠️ Error registering Chart.js plugins:", e);
       }
+    }
+
+    function getChartPlugins() {
+      return typeof ChartDataLabels !== "undefined" ? [ChartDataLabels] : [];
     }
 
     window.chartInstances = window.chartInstances || {};
@@ -395,7 +403,7 @@
                     },
                   },
                 },
-                plugins: [ChartDataLabels],
+                plugins: getChartPlugins(),
               };
             } else {
               chartConfig = {
@@ -478,7 +486,7 @@
                     },
                   },
                 },
-                plugins: [ChartDataLabels],
+                plugins: getChartPlugins(),
               };
             }
 

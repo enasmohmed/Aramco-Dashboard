@@ -625,17 +625,6 @@
             </select>
           </div>
           {% endif %}
-          {% if sub.filter_options.cities %}
-          <div class="col-12 col-sm-6 col-md-3">
-            <label class="form-label small fw-semibold mb-1">City</label>
-            <select class="form-select pods-detail-filter w-100" data-filter="city">
-              <option value="">All</option>
-              {% for opt in sub.filter_options.cities %}
-              <option value="{{ opt }}">{{ opt }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          {% endif %}
           {% if sub.filter_options.statuses %}
           <div class="col-12 col-sm-6 col-md-3">
             <label class="form-label small fw-semibold mb-1">Hit or Miss</label>
@@ -674,7 +663,6 @@
             <tbody>
               {% for row in sub.data %}
               <tr data-whname="{{ row|get_item:'W.HNAME'|default:'' }}"
-                  data-city="{{ row|get_item:'City'|default:'' }}"
                   data-status="{{ row|get_item:'Hit or Miss'|default:'' }}"
                   data-month="{{ row|get_item:'Month'|default:'' }}">
                 {% for col in sub.columns %}
@@ -691,7 +679,7 @@
                   <span class="badge bg-secondary rounded-pill">{{ value|default:"N/A" }}</span>
                   {% endif %}
                 </td>
-                {% elif col|lower == "city" %}
+                {% elif col|lower == "w.hname" or col|lower == "whname" %}
                 <td>
                   <span class="badge bg-info text-dark rounded-pill">{{ value|default:"—" }}</span>
                 </td>
@@ -720,7 +708,8 @@
     {% endfor %}
   </div>
 
-  {# ================= LESS THAN 4 ================= #} {% else %}
+  {# ================= LESS THAN 4 ================= #}
+  {% else %}
   <div class="col-12">
     {# ===== ROW 1: KPI TABLES + CHART ===== #}
     <div class="row">
@@ -1116,16 +1105,14 @@
         var tbody = table.querySelector('tbody');
         function applyPodsFilters() {
           var whname = (card.querySelector('[data-filter="whname"]') || {}).value || '';
-          var city = (card.querySelector('[data-filter="city"]') || {}).value || '';
           var status = (card.querySelector('[data-filter="status"]') || {}).value || '';
           var month = (card.querySelector('[data-filter="month"]') || {}).value || '';
           var rows = tbody ? tbody.querySelectorAll('tr[data-whname]') : [];
           rows.forEach(function(tr) {
             var w = (tr.getAttribute('data-whname') || '').trim();
-            var c = (tr.getAttribute('data-city') || '').trim();
             var s = (tr.getAttribute('data-status') || '').trim();
             var m = (tr.getAttribute('data-month') || '').trim();
-            var show = (!whname || w === whname) && (!city || c === city) && (!status || s === status) && (!month || m === month);
+            var show = (!whname || w === whname) && (!status || s === status) && (!month || m === month);
             tr.style.display = show ? '' : 'none';
           });
         }

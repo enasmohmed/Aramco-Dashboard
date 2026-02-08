@@ -200,8 +200,8 @@
         >
           <!-- 🟦 اللوجو -->
           <img
-            src="{% static 'assets/images/logo-roch.png' %}"
-            alt="Roche Logo"
+            src="{% static 'assets/images/logo-ecam.png' %}"
+            alt="Saudi Aramco Logo"
             style="
               height: 48px;
               width: auto;
@@ -217,7 +217,7 @@
             <h4
               style="font-size: 20px; font-weight: 800; color: #000; margin: 0"
             >
-              Roche Monthly Business Review
+              Saudi Aramco
             </h4>
             <p
               class="mt-1 f-m-light"
@@ -312,6 +312,8 @@
                 </select>
               </div>
               <!-- فلتر الكوارتر -->
+
+              <!-- 
               <div class="custom-select-wrapper">
                 <select id="quarter-select" class="custom-select">
                   <option value="">-- All Quarters --</option>
@@ -321,6 +323,7 @@
                   <option value="Q4-2025">Q4 - 2025 (Oct - Nov - Dec)</option>
                 </select>
               </div>
+              -->
               <button id="export-excel-btn" class="btn btn-download-excel ms-3">
                 📥 Download Excel
               </button>
@@ -401,10 +404,11 @@
             {% if active_tab == "all" %}
             {% include 'components/ui-kits/tab-bootstrap/components/dashboard-overview.html' %}
             {% elif active_tab == "overview" %}
-            <!-- ✅ الآن Overview يظهر من الـ include -->
             {% include 'general/widget/general-widget/components/top.html' %}
+            {% elif active_tab == "dashboard" %}
+            {% include 'container-fluid-dashboard.html' %}
             {% else %} {% if raw_tab_data %}
-            {% include "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html"  with tab=raw_tab_data %}
+            {% include "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html" with tab=raw_tab_data %}
             {% else %}
             <p class="text-muted text-center mb-0">
               No data available for this tab.
@@ -524,7 +528,7 @@
     console.log("🚀 Page is ready");
 
     const csrftoken = document.querySelector(
-      "[name=csrfmiddlewaretoken]"
+      "[name=csrfmiddlewaretoken]",
     ).value;
     let selectedTab = "all";
     let selectedQuarter = "";
@@ -564,7 +568,7 @@
       try {
         localStorage.setItem(
           key,
-          JSON.stringify({ timestamp: Date.now(), payload })
+          JSON.stringify({ timestamp: Date.now(), payload }),
         );
       } catch (err) {
         console.warn("⚠️ Failed to write tab cache:", err);
@@ -613,7 +617,7 @@
       scripts.forEach((oldScript) => {
         const newScript = document.createElement("script");
         Array.from(oldScript.attributes).forEach((attr) =>
-          newScript.setAttribute(attr.name, attr.value)
+          newScript.setAttribute(attr.name, attr.value),
         );
         newScript.text = oldScript.textContent;
         oldScript.parentNode.replaceChild(newScript, oldScript);
@@ -623,7 +627,7 @@
     function attachInnerTabListeners(container) {
       if (!container) return;
       const tabTriggers = container.querySelectorAll(
-        'button[data-bs-toggle="tab"]'
+        'button[data-bs-toggle="tab"]',
       );
       tabTriggers.forEach((tab) => {
         tab.addEventListener("shown.bs.tab", function (event) {
@@ -707,7 +711,7 @@
 
       if (data.error) {
         $("#tab-content").html(
-          `<div class='alert alert-warning text-center'>${data.error}</div>`
+          `<div class='alert alert-warning text-center'>${data.error}</div>`,
         );
         $("#cards-section").html("");
         return;
@@ -724,7 +728,7 @@
             .show();
         }
         $("#tab-content").html(
-          "<div class='text-center text-muted'>📊 Overview Tabs</div>"
+          "<div class='text-center text-muted'>📊 Overview Tabs</div>",
         );
         return;
       }
@@ -758,11 +762,43 @@
       }
 
       if (data.detail_html && data.detail_html.trim() !== "") {
-        $("#tab-content").html(data.detail_html);
+        $("#tab-content").html(data.detail_html).show();
         reinitializeScripts(document.getElementById("tab-content"));
         attachInnerTabListeners(document.getElementById("tab-content"));
         queueInitialChartRefresh(document.getElementById("tab-content"));
         initInboundShipmentsDataTable(document.getElementById("tab-content"));
+        if (selectedTab && selectedTab.toLowerCase() === "dashboard") {
+          setTimeout(function () {
+            if (window.initInboundPendingDonut) {
+              window.initInboundPendingDonut();
+              window.dispatchEvent(new Event("resize"));
+            }
+          }, 100);
+          setTimeout(function () {
+            if (window.initInboundPendingDonut) {
+              window.initInboundPendingDonut();
+              window.dispatchEvent(new Event("resize"));
+            }
+          }, 500);
+          setTimeout(function () {
+            if (window.initInboundPendingDonut) {
+              window.initInboundPendingDonut();
+              window.dispatchEvent(new Event("resize"));
+            }
+          }, 1200);
+          if (window.initPodsComplianceChart) {
+            setTimeout(window.initPodsComplianceChart, 100);
+            setTimeout(window.initPodsComplianceChart, 500);
+          }
+          if (window.initReturnsComplianceChart) {
+            setTimeout(window.initReturnsComplianceChart, 100);
+            setTimeout(window.initReturnsComplianceChart, 500);
+          }
+          if (window.initInventoryCapacityChart) {
+            setTimeout(window.initInventoryCapacityChart, 100);
+            setTimeout(window.initInventoryCapacityChart, 500);
+          }
+        }
         setTimeout(function () {
           initInboundShipmentsDataTable(document.getElementById("tab-content"));
         }, 300);
@@ -774,7 +810,7 @@
         }, 1000);
       } else {
         $("#tab-content").html(
-          "<div class='text-center text-muted'>No data available to display.</div>"
+          "<div class='text-center text-muted'>No data available to display.</div>",
         );
       }
     }
@@ -809,7 +845,7 @@
             $("#quarter-loader").show();
           }
           $("#tab-content").html(
-            "<div class='text-center p-3 text-muted'>⏳ Loading data...</div>"
+            "<div class='text-center p-3 text-muted'>⏳ Loading data...</div>",
           );
         },
         success: function (data) {
@@ -825,7 +861,7 @@
             if (resp && resp.error) msg = resp.error;
           } catch (e) {}
           $("#tab-content").html(
-            "<div class='alert alert-danger text-center'>" + msg + "</div>"
+            "<div class='alert alert-danger text-center'>" + msg + "</div>",
           );
         },
       });
@@ -999,4 +1035,5 @@
       window.location.href = `?${params.toString()}`;
     });
 </script>
+
 {% endblock %}

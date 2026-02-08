@@ -18,6 +18,7 @@
 
   // function that sets clock to current time and adds a second to it every time it is called
   function runClock() {
+    if (!HOURHAND || !MINUTEHAND || !SECONDHAND) return;
     // adds degrees in an hour divide by seconds in an hour to previous time
     hrPosition += 30 / 3600;
 
@@ -33,6 +34,8 @@
     SECONDHAND.style.transform = "rotate(" + secPosition + "deg)";
   }
 
-  // intival that automates the clock by calling the runClock function every second
-  var interval = setInterval(runClock, 1000);
+  // interval that automates the clock by calling the runClock function every second (only if clock exists)
+  if (HOURHAND && MINUTEHAND && SECONDHAND) {
+    setInterval(runClock, 1000);
+  }
 })();
