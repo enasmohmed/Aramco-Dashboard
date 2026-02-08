@@ -1792,12 +1792,12 @@ class UploadExcelViewRoche(View):
 
             virtual_tabs = [
                 self.DASHBOARD_TAB_NAME,
-                "Return & Refusal",
                 "Dock to stock",
                 "Total Lead Time Performance",
+                "Return & Refusal",
                 "PODs update",
-                "Meeting Points & Action",
                 "Expiry",
+                "Meeting Points & Action",
             ]
             if include_only:
                 include_set_v = {s.strip() for s in include_only}
@@ -1809,10 +1809,10 @@ class UploadExcelViewRoche(View):
                 self.DASHBOARD_TAB_NAME,
                 "Dock to stock",
                 "Total Lead Time Performance",
-                "PODs update",
                 "Return & Refusal",
-                "Meeting Points & Action",
+                "PODs update",
                 "Expiry",
+                "Meeting Points & Action",
             ]
 
             filtered_tabs = [tab for tab in ordered_tabs if tab in filtered_tabs]
@@ -6986,8 +6986,8 @@ class UploadExcelViewRoche(View):
         tabs_order = [
             "Dock to stock",
             "Total Lead Time Performance",
-            "PODs update",
             "Return & Refusal",
+            "PODs update",
         ]
 
         with ThreadPoolExecutor(max_workers=5) as executor:

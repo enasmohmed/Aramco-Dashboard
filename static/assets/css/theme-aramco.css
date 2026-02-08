@@ -80,7 +80,7 @@ body .page-body-wrapper {
 .border-primary,
 .table-primary,
 .bg-primary .svg-fill {
-  background-color: var(--aramco-primary-blue) !important;
+  /* background-color: var(--aramco-primary-blue) !important; */
   color: #fff !important;
   border-color: var(--aramco-primary-blue) !important;
 }
@@ -94,7 +94,7 @@ body .page-body-wrapper {
 .text-primary,
 .txt-primary { color: var(--aramco-primary-blue) !important; }
 .btn-primary:not(.bg-primary) {
-  background-color: var(--aramco-primary-blue) !important;
+  /* background-color: var(--aramco-primary-blue) !important; */
   border-color: var(--aramco-primary-blue) !important;
 }
 .btn-primary:hover {
@@ -111,7 +111,7 @@ body .page-body-wrapper {
 .text-success,
 .border-success,
 .table-success {
-  background-color: var(--aramco-primary-green) !important;
+  /* background-color: var(--aramco-primary-green) !important; */
   color: #fff !important;
   border-color: var(--aramco-primary-green) !important;
 }
@@ -139,7 +139,7 @@ body .page-body-wrapper {
 .badge.bg-warning,
 .text-warning,
 .txt-warning {
-  background-color: var(--aramco-capacity-orange) !important;
+  /* background-color: var(--aramco-capacity-orange) !important; */
   color: var(--aramco-title) !important;
   border-color: var(--aramco-capacity-orange) !important;
 }
@@ -156,7 +156,7 @@ body .page-body-wrapper {
 .alert-danger,
 .text-danger,
 .txt-danger {
-  background-color: var(--aramco-alert-red) !important;
+  /* background-color: var(--aramco-alert-red) !important; */
   color: #fff !important;
   border-color: var(--aramco-alert-red) !important;
 }
