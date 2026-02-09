@@ -200,9 +200,49 @@
     {{ tab.inbound_html|safe }}
   </div>
   {% endif %} {% if tab.sub_tables %}
-  {# ================= RETURN & REFUSAL: جدول Return فقط بعرض الصفحة ================= #}
+  {# ================= RETURN & REFUSAL: كروت KPI ثم جدول Return ================= #}
   {% if tab_name_lower == 'return & refusal' %}
   <div class="col-12">
+    {% if tab.return_kpi %}
+    <div class="row g-4 mx-0 mb-3">
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center">
+          <div class="kpi-icon text-primary">
+            <i class="bi bi-truck"></i>
+          </div>
+          <div class="kpi-title">Total Shipments</div>
+          <div class="kpi-value">{{ tab.return_kpi.total_shipments|default:0 }}</div>
+        </div>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center success">
+          <div class="kpi-icon text-success">
+            <i class="bi bi-check-circle-fill"></i>
+          </div>
+          <div class="kpi-title">Successful Shipments</div>
+          <div class="kpi-value">{{ tab.return_kpi.successful|default:0 }}</div>
+        </div>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center danger">
+          <div class="kpi-icon text-danger">
+            <i class="bi bi-x-circle-fill"></i>
+          </div>
+          <div class="kpi-title">Failed Shipments</div>
+          <div class="kpi-value">{{ tab.return_kpi.failed|default:0 }}</div>
+        </div>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center">
+          <div class="kpi-icon text-secondary">
+            <i class="bi bi-bullseye"></i>
+          </div>
+          <div class="kpi-title">Target</div>
+          <div class="kpi-value">≥ {{ tab.return_kpi.target|default:99 }}%</div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
     {% for sub in tab.sub_tables %}
     <div class="table-card mb-4">
       <h5 class="text-center mt-3 mb-3 fw-bold" style="color: #9084ad">{{ sub.title }}</h5>

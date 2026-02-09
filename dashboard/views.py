@@ -1620,12 +1620,17 @@ class UploadExcelViewRoche(View):
                     effective_month,
                     selected_months=quarter_months or None,
                 ),
-                "total lead time performance": lambda: self.filter_total_lead_time_performance(
+                "inbound": lambda: self.filter_dock_to_stock_combined(
                     request,
                     effective_month,
                     selected_months=quarter_months or None,
                 ),
-                "dock to stock": lambda: self.filter_dock_to_stock_combined(
+                "outbound": lambda: self.filter_total_lead_time_performance(
+                    request,
+                    effective_month,
+                    selected_months=quarter_months or None,
+                ),
+                "total lead time performance": lambda: self.filter_total_lead_time_performance(
                     request,
                     effective_month,
                     selected_months=quarter_months or None,
@@ -1703,6 +1708,7 @@ class UploadExcelViewRoche(View):
                 )
             # airport / seaport tabs تم إلغاؤها
             elif selected_tab in [
+                "outbound",
                 "total lead time performance",
                 "total lead time preformance",
             ]:
@@ -1723,6 +1729,15 @@ class UploadExcelViewRoche(View):
             elif "dock to stock - roche" in selected_tab:
                 return JsonResponse(
                     self.filter_dock_to_stock_roche(request, effective_month),
+                    safe=False,
+                )
+            elif (selected_tab or "").lower() == "inbound":
+                return JsonResponse(
+                    self.filter_dock_to_stock_combined(
+                        request,
+                        effective_month,
+                        selected_months=quarter_months or None,
+                    ),
                     safe=False,
                 )
             elif selected_tab == "pods update":
@@ -1792,8 +1807,8 @@ class UploadExcelViewRoche(View):
 
             virtual_tabs = [
                 self.DASHBOARD_TAB_NAME,
-                "Dock to stock",
-                "Total Lead Time Performance",
+                "Inbound",
+                "Outbound",
                 "Return & Refusal",
                 "PODs update",
                 "Expiry",
@@ -1807,8 +1822,8 @@ class UploadExcelViewRoche(View):
 
             ordered_tabs = [
                 self.DASHBOARD_TAB_NAME,
-                "Dock to stock",
-                "Total Lead Time Performance",
+                "Inbound",
+                "Outbound",
                 "Return & Refusal",
                 "PODs update",
                 "Expiry",
@@ -2631,8 +2646,8 @@ class UploadExcelViewRoche(View):
 
             # ✅ ترتيب التابات حسب الأولوية (بدون التابات المحذوفة)
             desired_order = [
-                "Total Lead Time Performance",
-                "Dock to stock",
+                "Inbound",
+                "Outbound",
                 "PODs update",
             ]
             clean_tabs.sort(
@@ -3953,7 +3968,8 @@ class UploadExcelViewRoche(View):
                 hit_row["2025"] = int(sum(r["Hit (≤24h)"] for r in kpi_rows))
                 miss_row["2025"] = int(sum(r["Miss (>24h)"] for r in kpi_rows))
 
-            summary_data_pivot = [hit_pct_row, total_row, hit_row, miss_row]
+            # Total Shipments آخر صف في الجدول
+            summary_data_pivot = [hit_pct_row, hit_row, miss_row, total_row]
             summary_columns = pivot_cols
             summary_data = summary_data_pivot
 
@@ -4003,8 +4019,9 @@ class UploadExcelViewRoche(View):
                 "months_with_hit_only": months_with_hit_only_ob,
             }
 
-            # جدول التفاصيل: الأعمدة المطلوبة
+            # جدول التفاصيل: Order Nbr أولاً ثم Customer Name وباقي الأعمدة
             detail_columns = [
+                "Order Nbr",
                 "Customer Name",
                 "Create Timestamp",
                 "Customer City",
@@ -4049,7 +4066,6 @@ class UploadExcelViewRoche(View):
                     "Cycle Hours",
                     "Cycle Days",
                     "is_hit",
-                    "Order Nbr",
                 ]
                 if c in detail_df.columns
             ]
@@ -4425,9 +4441,7 @@ class UploadExcelViewRoche(View):
                 .astype(str)
                 .str.strip()
             )
-            df_miss.loc[df_miss["Reason"].isin(["", "nan", "NaN"]), "Reason"] = (
-                "(No reason)"
-            )
+            # لا نعيّن "(No reason)" — سنستبعد صفوف الـ Reason الفارغة من الجدول لاحقاً
 
             reason_pivot = None
             if not df_miss.empty and "Reason" in df_miss.columns:
@@ -4440,13 +4454,20 @@ class UploadExcelViewRoche(View):
                     reason_pivot = reason_counts.pivot_table(
                         index="Reason", columns="Month", values="cnt", fill_value=0
                     ).reset_index()
+                    # استبعاد "(No reason)" أو صفوف Reason فارغة من العرض
+                    reason_pivot = reason_pivot[
+                        reason_pivot["Reason"].astype(str).str.strip().isin(["", "nan", "NaN", "(No reason)"]) == False
+                    ].copy()
                     for m in ordered_months:
                         if m not in reason_pivot.columns:
                             reason_pivot[m] = 0
-                    reason_pivot = reason_pivot.reindex(
-                        columns=["Reason"]
-                        + [c for c in ordered_months if c in reason_pivot.columns]
-                    )
+                    if not reason_pivot.empty:
+                        reason_pivot = reason_pivot.reindex(
+                            columns=["Reason"]
+                            + [c for c in ordered_months if c in reason_pivot.columns]
+                        )
+                    else:
+                        reason_pivot = None
 
             kpi_rows = []
             for _, row in summary_df.iterrows():
@@ -4492,7 +4513,8 @@ class UploadExcelViewRoche(View):
                 hit_row["2025"] = int(sum(r["Hit (≤24h)"] for r in kpi_rows))
                 miss_row["2025"] = int(sum(r["Miss (>24h)"] for r in kpi_rows))
 
-            summary_data_pivot = [hit_pct_row, total_row, hit_row, miss_row]
+            # ترتيب الصفوف: Hit % ثم Hit (≤24h) ثم Miss (>24h) ثم أسباب الـ Miss ثم Total Shipments آخراً
+            summary_data_pivot = [hit_pct_row, hit_row, miss_row]
 
             if reason_pivot is not None and not reason_pivot.empty:
                 for _, r in reason_pivot.iterrows():
@@ -4508,6 +4530,7 @@ class UploadExcelViewRoche(View):
                             )
                         )
                     summary_data_pivot.append(reason_row)
+            summary_data_pivot.append(total_row)
 
             def _to_display_int(val):
                 if val is None or (
@@ -5443,11 +5466,48 @@ class UploadExcelViewRoche(View):
                                     except Exception:
                                         pass
 
+                        # حساب Hit/Miss للـ Return (≤24h بين Create Timestamp و Last LPN Rcv TS)
+                        return_kpi = None
+                        try:
+                            ts_create = pd.to_datetime(
+                                df_in["Create Timestamp"], errors="coerce"
+                            )
+                            ts_last = pd.to_datetime(
+                                df_in["Last LPN Rcv TS"], errors="coerce"
+                            )
+                            hours = (ts_last - ts_create).dt.total_seconds() / 3600.0
+                            df_in["_is_hit"] = (hours <= 24) & (hours.notna())
+                            total_ret = len(df_in)
+                            successful_ret = int(df_in["_is_hit"].sum())
+                            failed_ret = total_ret - successful_ret
+                            hit_pct_ret = (
+                                round(100.0 * successful_ret / total_ret, 2)
+                                if total_ret else 0
+                            )
+                            return_kpi = {
+                                "total_shipments": total_ret,
+                                "successful": successful_ret,
+                                "failed": failed_ret,
+                                "target": 99,
+                                "hit_pct": hit_pct_ret,
+                            }
+                            df_in = df_in.drop(columns=["_is_hit"], errors="ignore")
+                        except Exception:
+                            total_ret = len(df_in)
+                            return_kpi = {
+                                "total_shipments": total_ret,
+                                "successful": total_ret,
+                                "failed": 0,
+                                "target": 99,
+                                "hit_pct": 100.0 if total_ret else 0,
+                            }
+
                         sub_tables.append(
                             {
                                 "title": "Return",
                                 "columns": return_columns_display,
                                 "data": df_in.to_dict(orient="records"),
+                                "return_kpi": return_kpi,
                             }
                         )
                     else:
@@ -5498,12 +5558,16 @@ class UploadExcelViewRoche(View):
                     "count": 0,
                 }
 
-            # 🧩 بناء الـ HTML
+            # 🧩 بناء الـ HTML — نمرّر return_kpi من أول sub_table للكروت فوق الجدول
+            return_kpi_for_tab = None
+            if sub_tables:
+                return_kpi_for_tab = sub_tables[0].get("return_kpi")
             tab_data = {
                 "name": "Return & Refusal",
                 "sub_tables": sub_tables,
                 "chart_data": chart_data,
                 "chart_title": "Return & Refusal Overview",
+                "return_kpi": return_kpi_for_tab,
             }
             month_norm_tab = self.apply_month_filter_to_tab(
                 tab_data,
@@ -6294,7 +6358,7 @@ class UploadExcelViewRoche(View):
             #         dataset.setdefault("related_table", "Total Lead Time Performance")
 
             tab_data = {
-                "name": "Total Lead Time Performance",
+                "name": "Outbound",
                 "sub_tables": sub_tables,
                 "outbound_html": outbound_html,
                 "chart_data": chart_data,
@@ -6390,7 +6454,7 @@ class UploadExcelViewRoche(View):
                 }
 
             tab_data = {
-                "name": "Dock to stock — Inbound",
+                "name": "Inbound",
                 "sub_tables": sub_tables,
                 "chart_data": chart_data,
                 "canvas_id": "chart-inbound-kpi",
@@ -6799,42 +6863,41 @@ class UploadExcelViewRoche(View):
             # =======================================
             if chart_data:
                 for dataset in chart_data:
-                    dataset.setdefault("related_table", "Dock to stock")
+                    dataset.setdefault("related_table", "Inbound")
 
             # ✅ إضافة chart_data لكل sub_table بشكل منفصل
             chart_data_3pl = []
             chart_data_roche = []
             if chart_data:
                 for dataset in chart_data:
-                    # ✅ نسخ dataset لكل sub_table مع related_table الصحيح
                     dataset_3pl = dataset.copy()
-                    dataset_3pl["related_table"] = "Dock to stock — 3PL"
+                    dataset_3pl["related_table"] = "Inbound — 3PL"
                     chart_data_3pl.append(dataset_3pl)
 
                     dataset_roche = dataset.copy()
-                    dataset_roche["related_table"] = "Dock to stock — Roche"
+                    dataset_roche["related_table"] = "Inbound — Roche"
                     chart_data_roche.append(dataset_roche)
 
             tab_data = {
-                "name": "Dock to stock",
+                "name": "Inbound",
                 "sub_tables": [
                     {
-                        "id": "sub-table-dock-to-stock-3pl",  # ✅ إضافة ID فريد
-                        "title": "Dock to stock — 3PL",
+                        "id": "sub-table-inbound-3pl",
+                        "title": "Inbound — 3PL",
                         "columns": df_3pl_table.columns.tolist(),
                         "data": df_3pl_table.to_dict(orient="records"),
-                        "chart_data": chart_data_3pl,  # ✅ إضافة chart_data لكل sub_table
+                        "chart_data": chart_data_3pl,
                     },
                     {
-                        "id": "sub-table-dock-to-stock-roche",  # ✅ إضافة ID فريد
-                        "title": "Dock to stock — Roche",
+                        "id": "sub-table-inbound-roche",
+                        "title": "Inbound — Roche",
                         "columns": df_roche_table.columns.tolist(),
                         "data": df_roche_table.to_dict(orient="records"),
-                        "chart_data": chart_data_roche,  # ✅ إضافة chart_data لكل sub_table
+                        "chart_data": chart_data_roche,
                     },
                 ],
                 "combined_reasons": combined_reasons,
-                "canvas_id": f"chart-{slugify('dock-to-stock')}",
+                "canvas_id": f"chart-{slugify('inbound')}",
                 "inbound_html": inbound_html,
                 "chart_data": chart_data,  # ✅ الاحتفاظ بـ chart_data العام أيضاً
             }
@@ -6857,7 +6920,7 @@ class UploadExcelViewRoche(View):
 
             total_count = len(df_3pl_table) + len(df_roche_table)
 
-            print(f"📊 [RESULT] Dock to stock — Hit={hit_pct}%, Target={target_pct}")
+            print(f"📊 [RESULT] Inbound — Hit={hit_pct}%, Target={target_pct}")
 
             return {
                 "chart_data": chart_data,
@@ -6892,8 +6955,9 @@ class UploadExcelViewRoche(View):
         tab_cards = []
 
         target_manual = {
+            "inbound": 99,
+            "outbound": 98,
             "total lead time performance": 98,
-            "dock to stock": 99,
             "pods update": 98,
             "return & refusal": 100,
         }
@@ -6911,7 +6975,7 @@ class UploadExcelViewRoche(View):
                         month_for_filters,
                         selected_months=selected_months,
                     )
-                elif tab_lower == "dock to stock":
+                elif tab_lower == "inbound":
                     res = self.filter_dock_to_stock_combined(
                         request,
                         month_for_filters,
@@ -6919,7 +6983,7 @@ class UploadExcelViewRoche(View):
                     )
                 elif "pods update" in tab_lower:
                     res = self.filter_pods_update(request, month_for_filters)
-                elif "total lead time performance" in tab_lower:
+                elif tab_lower == "outbound" or "total lead time performance" in tab_lower:
                     res = self.filter_total_lead_time_performance(
                         request,
                         month_for_filters,
@@ -6942,10 +7006,7 @@ class UploadExcelViewRoche(View):
 
                 hit_pct_val = max(0, min(hit_pct_val, 100))
 
-                if tab_lower == "dock to stock":
-                    target_pct = hit_pct_val
-                else:
-                    target_pct = target_manual.get(tab_lower, 100)
+                target_pct = target_manual.get(tab_lower, 100)
                 color_class = "bg-success" if hit_pct >= target_pct else "bg-danger"
 
                 progress_html = f"""
@@ -6970,10 +7031,7 @@ class UploadExcelViewRoche(View):
             except Exception:
                 detail_html = "<p class='text-muted'>No data available.</p>"
                 hit_pct = 0
-                if tab_name.lower() == "dock to stock":
-                    target_pct = hit_pct
-                else:
-                    target_pct = target_manual.get(tab_name.lower(), 100)
+                target_pct = target_manual.get(tab_name.lower(), 100)
 
             return {
                 "name": tab_name,
@@ -6984,8 +7042,8 @@ class UploadExcelViewRoche(View):
             }
 
         tabs_order = [
-            "Dock to stock",
-            "Total Lead Time Performance",
+            "Inbound",
+            "Outbound",
             "Return & Refusal",
             "PODs update",
         ]
