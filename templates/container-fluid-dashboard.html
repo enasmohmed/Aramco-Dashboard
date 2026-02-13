@@ -794,80 +794,87 @@
           </div>
         </div>
         <div class="card-body">
-          <div class="row g-3 mb-4">
-            <div class="col-12 col-sm-6">
-              <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Number of Vehicles</div>
-                <div class="d-flex align-items-center justify-content-between">
-                  <div class="inbound-kpi-value">
-                    {{ inbound_kpi.number_of_vehicles|default:12 }}
-                  </div>
-                  <div class="inbound-kpi-icon bg-success-soft text-success">
-                    <i class="bi bi-truck"></i>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="col-12 col-sm-6">
+          <div class="row g-3 mb-2">
+            <div class="col-12 col-md-6">
               <div class="inbound-kpi-card p-3">
                 <div class="inbound-kpi-label mb-2">Number of Shipments</div>
-
-                <!-- Value + Icon -->
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
-                    {{ inbound_kpi.number_of_shipments|default:287 }}
+                    {{ inbound_kpi.number_of_shipments|default:0 }}
                   </div>
-
                   <div class="inbound-kpi-icon bg-primary-soft text-primary">
                     <i class="bi-truck-flatbed"></i>
                   </div>
                 </div>
               </div>
             </div>
-
-            <div class="col-12 col-sm-6">
+            <div class="col-12 col-md-6">
               <div class="inbound-kpi-card p-3">
-                <!-- Title -->
-                <div class="inbound-kpi-label mb-2">
-                  Number of Pallets (LPNs)
-                </div>
-
-                <!-- Value + Icon -->
+                <div class="inbound-kpi-label mb-2">Number of Pallets (LPNs)</div>
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
-                    {{ inbound_kpi.number_of_pallets|default:1105 }}
+                    {{ inbound_kpi.number_of_pallets|default:0 }}
                   </div>
-
                   <div class="inbound-kpi-icon bg-info-soft text-info">
                     <i class="bi bi-truck"></i>
                   </div>
                 </div>
               </div>
             </div>
-
-            <div class="col-12 col-sm-6">
+          </div>
+          <div class="row g-3 mb-4">
+            {% if inbound_kpi.card4_label %}
+            <div class="col-12 col-md-6">
               <div class="inbound-kpi-card p-3">
-                <!-- Title -->
                 <div class="inbound-kpi-label mb-2">Total Quantity</div>
-
-                <!-- Value + Icon -->
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
-                    {{ inbound_kpi.total_quantity_display|default:inbound_kpi.total_quantity|default:"65.4k" }}
+                    {{ inbound_kpi.total_quantity_display|default:inbound_kpi.total_quantity|default:"0" }}
                   </div>
-
                   <div class="inbound-kpi-icon bg-warning-soft text-warning">
                     <i class="bi bi-truck"></i>
                   </div>
                 </div>
               </div>
             </div>
+            <div class="col-12 col-md-6">
+              <div class="inbound-kpi-card p-3">
+                <div class="inbound-kpi-label mb-2">{{ inbound_kpi.card4_label }}</div>
+                <div class="d-flex align-items-center justify-content-between">
+                  <div class="inbound-kpi-value">
+                    {{ inbound_kpi.card4_value|default:"" }}
+                  </div>
+                  <div class="inbound-kpi-icon bg-secondary bg-opacity-25 text-secondary">
+                    <i class="bi bi-truck"></i>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {% else %}
+            <div class="col-12">
+              <div class="inbound-kpi-card p-3">
+                <div class="inbound-kpi-label mb-2">Total Quantity</div>
+                <div class="d-flex align-items-center justify-content-between">
+                  <div class="inbound-kpi-value">
+                    {{ inbound_kpi.total_quantity_display|default:inbound_kpi.total_quantity|default:"0" }}
+                  </div>
+                  <div class="inbound-kpi-icon bg-warning-soft text-warning">
+                    <i class="bi bi-truck"></i>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {% endif %}
           </div>
 
           <div class="row g-3">
             <div class="col-12">
-              <div class="pending-shipments-card p-3 dashboard-card-elevated rounded-3">
-                <h5 class="dashboard-section-title text-dark mb-3">Pending Shipments</h5>
+              <div
+                class="pending-shipments-card p-3 dashboard-card-elevated rounded-3"
+              >
+                <h5 class="dashboard-section-title text-dark mb-3">
+                  Pending Shipments
+                </h5>
 
                 <div class="row align-items-center">
                   <!-- LEFT: list -->
@@ -896,12 +903,37 @@
                   <div
                     class="col-12 col-lg-6 d-flex justify-content-center align-items-center"
                   >
-                    <div class="pending-donut-wrapper" style="position: relative; width: 100%; min-height: 280px; max-width: 320px;">
+                    <div
+                      class="pending-donut-wrapper"
+                      style="
+                        position: relative;
+                        width: 100%;
+                        min-height: 280px;
+                        max-width: 320px;
+                      "
+                    >
                       <div
                         id="inbound-pending-donut"
-                        style="width: 100%; min-height: 280px;"
+                        style="width: 100%; min-height: 280px"
                       ></div>
-                      <div id="inbound-pending-donut-center" class="pending-donut-center-label" aria-hidden="true" style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; pointer-events: none; z-index: 5; font-size: 22px; font-weight: 700; color: #2C2F33; line-height: 1;"></div>
+                      <div
+                        id="inbound-pending-donut-center"
+                        class="pending-donut-center-label"
+                        aria-hidden="true"
+                        style="
+                          position: absolute;
+                          left: 50%;
+                          top: 50%;
+                          transform: translate(-50%, -50%);
+                          text-align: center;
+                          pointer-events: none;
+                          z-index: 5;
+                          font-size: 22px;
+                          font-weight: 700;
+                          color: #2c2f33;
+                          line-height: 1;
+                        "
+                      ></div>
                     </div>
                     {{ pending_shipments|json_script:"pending-shipments-data" }}
                   </div>
@@ -931,13 +963,13 @@
           </div>
         </div>
         <div class="card-body">
-          <div class="row g-3 mb-4">
-            <div class="col-12 col-sm-6">
+          <div class="row g-3 mb-2">
+            <div class="col-12 col-md-6">
               <div class="inbound-kpi-card p-3">
                 <div class="inbound-kpi-label mb-2">Released Orders</div>
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
-                    {{ outbound_kpi.released_orders|default:146 }}
+                    {{ outbound_kpi.released_orders|default:0 }}
                   </div>
                   <div class="inbound-kpi-icon bg-primary-soft text-primary">
                     <i class="bi bi-truck"></i>
@@ -945,26 +977,71 @@
                 </div>
               </div>
             </div>
-            <div class="col-12 col-sm-6">
+            <div class="col-12 col-md-6">
               <div class="inbound-kpi-card p-3">
                 <div class="inbound-kpi-label mb-2">Picked Orders</div>
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
-                    {{ outbound_kpi.picked_orders|default:120 }}
+                    {{ outbound_kpi.picked_orders|default:0 }}
                   </div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
                     <i class="bi bi-check2-square"></i>
                   </div>
                 </div>
-                <!--                {% if outbound_kpi.picked_orders_badge %}-->
-                <!--                <div class="mt-1 small text-muted">{{ outbound_kpi.picked_orders_badge }}</div>-->
-                <!--                {% endif %}-->
               </div>
             </div>
           </div>
-          <div class="pod-compliance-block mb-3 p-3 dashboard-card-elevated rounded-3">
+          <div class="row g-3 mb-4">
+            {% if outbound_kpi.card4_label %}
+            <div class="col-12 col-md-6">
+              <div class="inbound-kpi-card p-3">
+                <div class="inbound-kpi-label mb-2">Number of Pallets (LPNs)</div>
+                <div class="d-flex align-items-center justify-content-between">
+                  <div class="inbound-kpi-value">
+                    {{ outbound_kpi.number_of_pallets|default:0 }}
+                  </div>
+                  <div class="inbound-kpi-icon bg-info-soft text-info">
+                    <i class="bi bi-truck"></i>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-12 col-md-6">
+              <div class="inbound-kpi-card p-3">
+                <div class="inbound-kpi-label mb-2">{{ outbound_kpi.card4_label }}</div>
+                <div class="d-flex align-items-center justify-content-between">
+                  <div class="inbound-kpi-value">
+                    {{ outbound_kpi.card4_value|default:"" }}
+                  </div>
+                  <div class="inbound-kpi-icon bg-secondary bg-opacity-25 text-secondary">
+                    <i class="bi bi-truck"></i>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {% else %}
+            <div class="col-12">
+              <div class="inbound-kpi-card p-3">
+                <div class="inbound-kpi-label mb-2">Number of Pallets (LPNs)</div>
+                <div class="d-flex align-items-center justify-content-between">
+                  <div class="inbound-kpi-value">
+                    {{ outbound_kpi.number_of_pallets|default:0 }}
+                  </div>
+                  <div class="inbound-kpi-icon bg-info-soft text-info">
+                    <i class="bi bi-truck"></i>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+          <div
+            class="pod-compliance-block mb-3 p-3 dashboard-card-elevated rounded-3"
+          >
             <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-              <span class="dashboard-section-title fw-bold text-dark">PODs Compliance</span>
+              <span class="dashboard-section-title fw-bold text-dark"
+                >PODs Compliance</span
+              >
               <!--              <span class="dashboard-kpi-value mb-0">{{ outbound_kpi.pod_compliance_pct|default:94 }}%</span>-->
               <!--              <select class="form-select form-select-sm w-auto" id="outbound-period">-->
               <!--                <option value="6">Last 6 Months</option>-->
@@ -976,9 +1053,20 @@
               class="pods-chart-container"
               style="height: 280px; min-height: 280px"
             ></div>
-            <!--            <p class="small text-muted mt-2 mb-0">-->
-            <!--              {{ outbound_kpi.insight_text|default:"Delays mainly caused by transportation issues or customer confirmation." }}-->
-            <!--            </p>-->
+            <div class="d-flex flex-wrap justify-content-center gap-3 gap-md-4 mt-2 pt-2 border-top border-light">
+              <div class="d-flex align-items-center gap-2">
+                <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #7FB7A6;"></span>
+                <span class="small text-dark">On Time</span>
+              </div>
+              <div class="d-flex align-items-center gap-2">
+                <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #A8C8EB;"></span>
+                <span class="small text-dark">Pending</span>
+              </div>
+              <div class="d-flex align-items-center gap-2">
+                <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #E8A8A2;"></span>
+                <span class="small text-dark">Late</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1011,7 +1099,7 @@
                 <div class="inbound-kpi-label mb-2">Total SKUs</div>
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
-                    {{ returns_kpi.total_skus|default:2538 }}
+                    {{ returns_kpi.total_skus|default:0 }}
                   </div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
                     <i class="bi bi-truck"></i>
@@ -1024,7 +1112,7 @@
                 <div class="inbound-kpi-label mb-2">Total LPNs</div>
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
-                    {{ returns_kpi.total_lpns|default:4810 }}
+                    {{ returns_kpi.total_lpns|default:0 }}
                   </div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
                     <i class="bi bi-truck"></i>
@@ -1034,9 +1122,13 @@
             </div>
           </div>
 
-          <div class="pod-compliance-block mb-3 p-3 dashboard-card-elevated rounded-3">
+          <div
+            class="pod-compliance-block mb-3 p-3 dashboard-card-elevated rounded-3"
+          >
             <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-              <span class="dashboard-section-title fw-bold text-dark">Order Process Time</span>
+              <span class="dashboard-section-title fw-bold text-dark"
+                >Order Process Time</span
+              >
             </div>
             <div
               id="chart-returns-sla"
@@ -1066,7 +1158,9 @@
                   </tr>
                   {% empty %}
                   <tr>
-                    <td colspan="4" class="text-center text-muted">No region data available.</td>
+                    <td colspan="4" class="text-center text-muted">
+                      No region data available.
+                    </td>
                   </tr>
                   {% endfor %}
                 </tbody>
@@ -1101,7 +1195,7 @@
                 <div class="inbound-kpi-label mb-2">Total SKUs</div>
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
-                    {{ inventory_kpi.total_skus|default:2538 }}
+                    {{ inventory_kpi.total_skus|default:0 }}
                   </div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
                     <i class="bi bi-truck"></i>
@@ -1115,7 +1209,7 @@
                 <div class="inbound-kpi-label mb-2">Total LPNs</div>
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
-                    {{ inventory_kpi.total_lpns|default:4810 }}
+                    {{ inventory_kpi.total_lpns|default:0 }}
                   </div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
                     <i class="bi bi-truck"></i>
@@ -1125,9 +1219,14 @@
             </div>
           </div>
 
-          <div id="inventory-capacity-section" class="mb-3 p-3 dashboard-card-elevated rounded-3">
+          <div
+            id="inventory-capacity-section"
+            class="mb-3 p-3 dashboard-card-elevated rounded-3"
+          >
             <div class="mb-2">
-              <span class="dashboard-section-title fw-bold text-dark">Capacity Used vs Available</span>
+              <span class="dashboard-section-title fw-bold text-dark"
+                >Capacity Used vs Available</span
+              >
             </div>
             <div
               id="chart-inventory-capacity"
@@ -1156,34 +1255,34 @@
                     <td>{{ row.utilization_pct|default:"" }}</td>
                   </tr>
                   {% empty %}
-                <tr>
-                  <td>Main Warehouse</td>
-                  <td>117</td>
-                  <td>9,536,995</td>
-                  <td>223</td>
-                </tr>
-                <tr>
-                  <td>Dammam DC</td>
-                  <td>108</td>
-                  <td>9,260,995</td>
-                  <td>553</td>
-                </tr>
-                <tr>
-                  <td>Riyadh DC</td>
-                  <td>145</td>
-                  <td>9,827,955</td>
-                  <td>535</td>
-                </tr>
-                <tr>
-                  <td>Jeddah DC</td>
-                  <td>159</td>
-                  <td>5,324,353</td>
-                  <td>279</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
+                  <tr>
+                    <td>Main Warehouse</td>
+                    <td>117</td>
+                    <td>9,536,995</td>
+                    <td>223</td>
+                  </tr>
+                  <tr>
+                    <td>Dammam DC</td>
+                    <td>108</td>
+                    <td>9,260,995</td>
+                    <td>553</td>
+                  </tr>
+                  <tr>
+                    <td>Riyadh DC</td>
+                    <td>145</td>
+                    <td>9,827,955</td>
+                    <td>535</td>
+                  </tr>
+                  <tr>
+                    <td>Jeddah DC</td>
+                    <td>159</td>
+                    <td>5,324,353</td>
+                    <td>279</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
@@ -1295,7 +1394,9 @@
           centerEl.style.display = "";
         }
         if (wrapper) {
-          var oldCenter = wrapper.querySelector(".pending-donut-center-label:not(#inbound-pending-donut-center)");
+          var oldCenter = wrapper.querySelector(
+            ".pending-donut-center-label:not(#inbound-pending-donut-center)",
+          );
           if (oldCenter) oldCenter.remove();
         }
       });

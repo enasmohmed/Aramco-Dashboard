@@ -363,15 +363,11 @@ def _read_inbound_data_from_excel(excel_path):
     if qty_col:
         n_qty = _to_int(df[qty_col].sum()) or 0
 
-    # قيم افتراضية لو مفيش أعمدة مناسبة
-    if not vehicle_col:
-        n_vehicles = 12
-    if not shipment_col:
-        n_shipments = 287
-    if not lpn_col:
-        n_pallets = 1105
-    if not qty_col:
-        n_qty = 65400
+    # لا نضع قيم يدوية — لو مفيش عمود القيمة تبقى 0 (الداتا من الشيت فقط)
+    # if not vehicle_col: n_vehicles = 0  (already 0)
+    # if not shipment_col: n_shipments = 0
+    # if not lpn_col: n_pallets = 0
+    # if not qty_col: n_qty = 0
 
     if n_qty >= 1000:
         qty_display = f"{n_qty / 1000:.1f}k".rstrip("0").rstrip(".")
@@ -434,12 +430,9 @@ def _read_inbound_data_from_excel(excel_path):
                     "pct": pct,
                     "color": color,
                 })
+    # لو مفيش داتا Pending من الشيت نرجع قائمة فاضية (الداتا من الشيت فقط)
     if not pending:
-        pending = [
-            {"label": "In Transit", "value": "1%", "pct": 1, "color": "#87CEEB"},
-            {"label": "Receiving Complete", "value": "96%", "pct": 96, "color": "#2E7D32"},
-            {"label": "Verified", "value": "3%", "pct": 3, "color": "#1565C0"},
-        ]
+        pending = []
 
     return {"inbound_kpi": inbound_kpi, "pending_shipments": pending}
 
@@ -505,9 +498,18 @@ def _read_outbound_data_from_excel(excel_path):
     if picked_mask.any():
         picked_orders = df.loc[picked_mask, order_col].dropna().astype(str).str.strip().nunique()
 
+    # Number of Pallets (LPNs) من الشيت إن وُجد عمود
+    lpn_col = _col("LPNs", "LPN", "Nbr_LPNs", "Nbr LPNs", "Pallets", "Number of Pallets")
+    number_of_pallets = 0
+    if lpn_col:
+        number_of_pallets = int(pd.to_numeric(df[lpn_col], errors="coerce").fillna(0).sum())
+
     return {
-        "released_orders": int(released_orders),
-        "picked_orders": int(picked_orders),
+        "outbound_kpi": {
+            "released_orders": int(released_orders),
+            "picked_orders": int(picked_orders),
+            "number_of_pallets": number_of_pallets,
+        },
     }
 
 
@@ -593,6 +595,23 @@ def _read_pods_data_from_excel(excel_path):
             series_pending.append(round(100.0 * pending / total, 1))
             series_late.append(round(100.0 * late / total, 1))
 
+    # تجميع النسب الإجمالية للـ pod_status_breakdown (من نفس الشيت)
+    total_on = (df["_status_norm"] == "on time").sum()
+    total_pend = (df["_status_norm"] == "pending").sum()
+    total_late = (df["_status_norm"] == "late").sum()
+    total_all = total_on + total_pend + total_late
+    if total_all > 0:
+        pct_on = int(round(100.0 * total_on / total_all))
+        pct_pend = int(round(100.0 * total_pend / total_all))
+        pct_late = int(round(100.0 * total_late / total_all))
+    else:
+        pct_on = pct_pend = pct_late = 0
+    pod_status_breakdown = [
+        {"label": "On Time", "pct": pct_on, "color": "#7FB7A6"},
+        {"label": "Pending", "pct": pct_pend, "color": "#A8C8EB"},
+        {"label": "Late", "pct": pct_late, "color": "#E8A8A2"},
+    ]
+
     return {
         "categories": months_sorted,
         "series": [
@@ -600,6 +619,7 @@ def _read_pods_data_from_excel(excel_path):
             {"name": "Pending", "data": series_pending},
             {"name": "Late", "data": series_late},
         ],
+        "pod_status_breakdown": pod_status_breakdown,
     }
 
 
@@ -786,7 +806,7 @@ def _read_inventory_data_from_excel(excel_path):
         "inventory_kpi": {
             "total_skus": total_skus,
             "total_lpns": total_lpns,
-            "utilization_pct": "78",
+            "utilization_pct": "",
         },
     }
 
@@ -844,7 +864,7 @@ def _read_inventory_snapshot_capacity_from_excel(excel_path):
     total_avail = pd.to_numeric(df[avail_col], errors="coerce").fillna(0).sum()
     total = total_used + total_avail
     if total <= 0:
-        return {"inventory_capacity_data": {"used": 78, "available": 22}}
+        return {"inventory_capacity_data": {"used": 0, "available": 0}}
 
     used_pct = round(100.0 * total_used / total, 1)
     available_pct = round(100.0 - used_pct, 1)
@@ -1535,12 +1555,24 @@ class UploadExcelViewRoche(View):
         print("🟢 [GET] Loading main dashboard with Overview/All-in-One tabs")
         cache.clear()  # Clear cache on each load
 
-        # --------------------------
-        # Resolve Excel path
-        # --------------------------
-        excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
-        data_is_uploaded = os.path.exists(excel_path)
+        # مسح بيانات الجلسة أولاً لو الطلب clear_excel (حتى تظهر رسالة رفع الملف)
+        action_param = request.GET.get("action", "").strip().lower()
+        if action_param == "clear_excel":
+            request.session.pop("uploaded_excel_path", None)
+            request.session.pop("dashboard_excel_path", None)
+            try:
+                request.session.save()
+            except Exception:
+                pass
+            from django.shortcuts import redirect
+            return redirect(request.path or "/")
 
+        # --------------------------
+        # Resolve Excel path — نعتبر "مرفوع" فقط لو الجلسة فيها مسار والملف موجود
+        # --------------------------
+        session_path = request.session.get("uploaded_excel_path")
+        data_is_uploaded = bool(session_path and os.path.exists(session_path))
+        excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
         if not data_is_uploaded:
             form = ExcelUploadForm()
             return render(
@@ -2034,71 +2066,47 @@ class UploadExcelViewRoche(View):
         self, request, selected_month=None, selected_months=None
     ):
         """
-        تصدير الملف الأصلي المرفوع (Roche KPI new.xlsx) فقط مع الحفاظ على الألوان والتنسيق
+        تحميل الملف الأصلي للإكسل (all_sheet) — نفس الملف المستخدم لكل التابات.
+        أولوية: ملف الجلسة المرفوع ثم latest ثم all_sheet في المجلد.
         """
-        from openpyxl import load_workbook
-
-        # 📂 البحث عن الملف الأصلي "Roche KPI new.xlsx" في مجلد media
-        folder_path = os.path.join(settings.MEDIA_ROOT, "excel_uploads")
-        original_excel_path = os.path.join(folder_path, "Roche KPI new.xlsx")
-
-        # إذا لم يوجد، جرب البحث عن latest.xlsx كبديل
-        if not os.path.exists(original_excel_path):
-            latest_path = os.path.join(folder_path, "latest.xlsx")
-            if os.path.exists(latest_path):
-                original_excel_path = latest_path
-                print(
-                    f"📄 [EXPORT] تم العثور على latest.xlsx بدلاً من Roche KPI new.xlsx"
-                )
-            else:
-                # جرب من الجلسة
-                saved_path = request.session.get("uploaded_excel_path")
-                if saved_path and os.path.exists(saved_path):
-                    original_excel_path = saved_path
-                    print(f"📄 [EXPORT] تم استخدام الملف من الجلسة: {saved_path}")
-                else:
-                    print(f"⚠️ [EXPORT] لم يتم العثور على الملف الأصلي")
-                    return HttpResponse(
-                        "❌ لم يتم العثور على الملف الأصلي (Roche KPI new.xlsx)",
-                        status=404,
-                    )
+        # استخدام نفس مصدر الملف الذي تُقرأ منه كل التابات (all_sheet / ملف مرفوع)
+        excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
+        if not excel_path or not os.path.exists(excel_path):
+            html = (
+                "<!DOCTYPE html><html><head><meta charset='utf-8'><title>File not found</title></head><body style='font-family:sans-serif;padding:2rem;'>"
+                "<h2>Excel file not found</h2>"
+                "<p>Please upload the Excel file first (use <strong>Upload File</strong> on the main page).</p>"
+                "<p><a href='javascript:window.close()'>Close this tab</a></p>"
+                "</body></html>"
+            )
+            return HttpResponse(html, status=404, content_type="text/html")
 
         try:
-            print(f"📄 [EXPORT] جاري قراءة الملف الأصلي: {original_excel_path}")
+            # اسم الملف للتنزيل: اسم الملف الأصلي إن أمكن
+            download_name = os.path.basename(excel_path)
+            if not download_name or download_name == "latest.xlsx":
+                download_name = "All_Sheets.xlsx"
 
-            # قراءة الملف باستخدام openpyxl للحفاظ على التنسيق والألوان
-            workbook = load_workbook(original_excel_path)
+            # تحديد نوع المحتوى حسب الامتداد
+            ext = os.path.splitext(download_name)[1].lower()
+            if ext == ".xlsm":
+                content_type = "application/vnd.ms-excel.sheet.macroEnabled.12"
+            else:
+                content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-            # حفظ الملف في BytesIO مع الحفاظ على كل التنسيق
-            output = BytesIO()
-            workbook.save(output)
-            output.seek(0)
+            with open(excel_path, "rb") as f:
+                file_data = f.read()
 
-            print(f"✅ [EXPORT] تم نسخ الملف الأصلي بنجاح مع الحفاظ على التنسيق")
-
-            # إنشاء اسم الملف للتنزيل
-            filename_parts = ["Roche KPI Dashboard Data"]
-            if selected_months:
-                filename_parts.append("-".join(selected_months))
-            elif selected_month:
-                filename_parts.append(selected_month)
-            safe_filename = " ".join(filename_parts)
-
-            response = HttpResponse(
-                output.getvalue(),
-                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+            response = HttpResponse(file_data, content_type=content_type)
             response["Content-Disposition"] = (
-                f'attachment; filename="{safe_filename}.xlsx"'
+                f'attachment; filename="{download_name}"'
             )
             return response
 
         except Exception as e:
-            print(f"⚠️ [EXPORT] حدث خطأ عند قراءة الملف الأصلي: {e}")
             import traceback
-
             traceback.print_exc()
-            return HttpResponse(f"❌ حدث خطأ عند تصدير الملف: {str(e)}", status=500)
+            return HttpResponse(f"❌ حدث خطأ عند تحميل الملف: {str(e)}", status=500)
 
     def render_raw_sheet(self, request, sheet_name):
         """عرض أي شيت كجدول خام إذا مفيش فلتر خاص"""
@@ -7098,93 +7106,86 @@ class UploadExcelViewRoche(View):
         context = get_dashboard_tab_context(request)
         context["title"] = self.DASHBOARD_TAB_NAME
         excel_path = _get_dashboard_excel_path(request) or _get_excel_path_for_request(request)
+
+        # كل الداتا من الشيت فقط — لا قيم يدوية. لو مفيش ملف أو الشيت فاضي نستخدم قيم فارغة/صفر.
         if excel_path:
             inbound_data = _read_inbound_data_from_excel(excel_path)
             if inbound_data:
                 context["inbound_kpi"] = inbound_data["inbound_kpi"]
                 context["pending_shipments"] = inbound_data["pending_shipments"]
-            # شارتات دينامك من الإكسل (نفس فكرة chart_data في rejection)
+
             charts_from_excel = _read_dashboard_charts_from_excel(excel_path)
             for key, value in charts_from_excel.items():
                 if value is not None:
                     context[key] = value
+
             outbound_data = _read_outbound_data_from_excel(excel_path)
-            if outbound_data:
-                context.setdefault(
-                    "outbound_kpi",
-                    {
-                        "released_orders": 146,
-                        "picked_orders": 120,
-                        "pod_compliance_pct": 94,
-                        "insight_text": "Delays mainly caused by transportation issues or customer confirmation.",
-                    },
-                )
-                context["outbound_kpi"]["released_orders"] = outbound_data["released_orders"]
-                context["outbound_kpi"]["picked_orders"] = outbound_data["picked_orders"]
-            pods_chart = _read_pods_data_from_excel(excel_path)
-            if pods_chart:
-                context["pod_compliance_chart_data"] = pods_chart
+            if outbound_data and "outbound_kpi" in outbound_data:
+                context["outbound_kpi"] = outbound_data["outbound_kpi"]
+
+            pods_data = _read_pods_data_from_excel(excel_path)
+            if pods_data:
+                context["pod_compliance_chart_data"] = {
+                    "categories": pods_data.get("categories", []),
+                    "series": pods_data.get("series", []),
+                }
+                if "pod_status_breakdown" in pods_data:
+                    context["pod_status_breakdown"] = pods_data["pod_status_breakdown"]
+
             returns_data = _read_returns_data_from_excel(excel_path)
             if returns_data:
-                context["returns_kpi"] = returns_data["returns_kpi"]
-                context["returns_chart_data"] = returns_data["returns_chart_data"]
+                context["returns_kpi"] = returns_data.get("returns_kpi", {})
+                if "returns_chart_data" in returns_data:
+                    context["returns_chart_data"] = returns_data["returns_chart_data"]
+
             inventory_data = _read_inventory_data_from_excel(excel_path)
             if inventory_data:
-                context["inventory_kpi"] = inventory_data["inventory_kpi"]
+                context["inventory_kpi"] = inventory_data.get("inventory_kpi", {})
+
             capacity_data = _read_inventory_snapshot_capacity_from_excel(excel_path)
             if capacity_data:
-                context["inventory_capacity_data"] = capacity_data["inventory_capacity_data"]
+                context["inventory_capacity_data"] = capacity_data.get("inventory_capacity_data", {})
+
             warehouse_table = _read_inventory_warehouse_table_from_excel(excel_path)
             if warehouse_table:
-                context["inventory_warehouse_table"] = warehouse_table["inventory_warehouse_table"]
+                context["inventory_warehouse_table"] = warehouse_table.get("inventory_warehouse_table", [])
+
             returns_region = _read_returns_region_table_from_excel(excel_path)
             if returns_region:
-                context["returns_region_table"] = returns_region["returns_region_table"]
-        context.setdefault("inbound_kpi", INBOUND_DEFAULT_KPI.copy())
-        context.setdefault("pending_shipments", list(INBOUND_DEFAULT_PENDING_SHIPMENTS))
-        context.setdefault(
-            "outbound_kpi",
-            {
-                "released_orders": 146,
-                "picked_orders": 120,
-                "pod_compliance_pct": 94,
-                "insight_text": "Delays mainly caused by transportation issues or customer confirmation.",
-            },
-        )
-        context.setdefault("outbound_chart_data", DASHBOARD_DEFAULT_CHART_DATA["outbound_chart_data"].copy())
-        context.setdefault(
-            "pod_compliance_chart_data",
-            {
-                "categories": ["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
-                "series": [
-                    {"name": "On Time", "data": [70, 72, 68, 75, 74, 78]},
-                    {"name": "Pending", "data": [15, 14, 18, 12, 13, 10]},
-                    {"name": "Late", "data": [15, 14, 14, 13, 13, 12]},
-                ],
-            },
-        )
-        context.setdefault("returns_kpi", {"total_skus": 2538, "total_lpns": 4810})
-        context.setdefault("returns_chart_data", DASHBOARD_DEFAULT_CHART_DATA["returns_chart_data"].copy())
-        context.setdefault(
-            "returns_region_table",
-            [
-                {"region": "Main warehouse", "skus": "2,538", "available": "1118", "utilization_pct": "71%"},
-                {"region": "Dammam DC", "skus": "501", "available": "200", "utilization_pct": "—"},
-                {"region": "Riyadh DC", "skus": "3,996", "available": "209", "utilization_pct": "—"},
-                {"region": "Jeddah DC", "skus": "7,996", "available": "300", "utilization_pct": "—"},
-            ],
-        )
-        context.setdefault("inventory_kpi", {"total_skus": 2538, "total_lpns": 4810, "utilization_pct": "78"})
-        context.setdefault("inventory_capacity_data", DASHBOARD_DEFAULT_CHART_DATA["inventory_capacity_data"].copy())
-        context.setdefault(
-            "inventory_warehouse_table",
-            [
-                {"warehouse": "Main Warehouse", "skus": "117", "available_space": "9,536,995", "utilization_pct": "223"},
-                {"warehouse": "Dammam DC", "skus": "108", "available_space": "9,260,995", "utilization_pct": "553"},
-                {"warehouse": "Riyadh DC", "skus": "145", "available_space": "9,827,955", "utilization_pct": "535"},
-                {"warehouse": "Jeddah DC", "skus": "159", "available_space": "5,324,353", "utilization_pct": "279"},
-            ],
-        )
+                context["returns_region_table"] = returns_region.get("returns_region_table", [])
+
+        # قيم فارغة/صفر فقط عند غياب الملف أو فشل القراءة (حتى لا يكسر القالب)
+        _empty_inbound_kpi = {
+            "number_of_vehicles": 0,
+            "number_of_shipments": 0,
+            "number_of_pallets": 0,
+            "total_quantity": 0,
+            "total_quantity_display": "0",
+        }
+        _empty_outbound_kpi = {
+            "released_orders": 0,
+            "picked_orders": 0,
+            "number_of_pallets": 0,
+        }
+        _empty_pod_chart = {"categories": [], "series": []}
+        _empty_pod_breakdown = [
+            {"label": "On Time", "pct": 0, "color": "#7FB7A6"},
+            {"label": "Pending", "pct": 0, "color": "#A8C8EB"},
+            {"label": "Late", "pct": 0, "color": "#E8A8A2"},
+        ]
+
+        context.setdefault("inbound_kpi", _empty_inbound_kpi)
+        context.setdefault("pending_shipments", [])
+        context.setdefault("outbound_kpi", _empty_outbound_kpi)
+        context.setdefault("outbound_chart_data", _empty_pod_chart)
+        context.setdefault("pod_compliance_chart_data", _empty_pod_chart)
+        context.setdefault("pod_status_breakdown", _empty_pod_breakdown)
+        context.setdefault("returns_kpi", {"total_skus": 0, "total_lpns": 0})
+        context.setdefault("returns_chart_data", _empty_pod_chart)
+        context.setdefault("returns_region_table", [])
+        context.setdefault("inventory_kpi", {"total_skus": 0, "total_lpns": 0, "utilization_pct": ""})
+        context.setdefault("inventory_capacity_data", {"used": 0, "available": 0})
+        context.setdefault("inventory_warehouse_table", [])
         return context
 
     def dashboard_tab(self, request):

@@ -229,6 +229,11 @@
         </div>
         <div class="card-body mb-5">
           {% if not data_is_uploaded %}
+          <!-- رسالة في أول الموقع عند عدم رفع ملف الإكسل -->
+          <div class="alert alert-info d-flex align-items-center mb-4" role="alert">
+            <span class="me-2">ℹ️</span>
+            <span><strong>Please upload the Excel file to complete and display the data.</strong></span>
+          </div>
           <!-- ✅ أول مرة (رفع ملف Excel) -->
           <div class="card shadow-sm p-4 border-0 text-center">
             <h5 class="fw-bold mb-3 text-primary">
@@ -327,6 +332,9 @@
               <button id="export-excel-btn" class="btn btn-download-excel ms-3">
                 📥 Download Excel
               </button>
+<!--              <a href="?action=clear_excel" class="btn btn-outline-secondary ms-2" title="Clear data to see upload message again">-->
+<!--                🗑️ Clear Data-->
+<!--              </a>-->
             </div>
             <!-- زر رفع الملف -->
             <button id="uploadBtn" class="upload-btn-small mb-0">
@@ -790,6 +798,10 @@
             setTimeout(window.initPodsComplianceChart, 100);
             setTimeout(window.initPodsComplianceChart, 500);
           }
+          if (window.initPodsStatusDonut) {
+            setTimeout(window.initPodsStatusDonut, 100);
+            setTimeout(window.initPodsStatusDonut, 500);
+          }
           if (window.initReturnsComplianceChart) {
             setTimeout(window.initReturnsComplianceChart, 100);
             setTimeout(window.initReturnsComplianceChart, 500);
@@ -1028,11 +1040,12 @@
     .addEventListener("click", function () {
       const month = document.getElementById("month-select").value || "";
       const quarter = document.getElementById("quarter-select").value || "";
-      const params = new URLSearchParams();
+      const params = new URLSearchParams(window.location.search);
       params.set("action", "export_excel");
       if (month) params.set("month", month);
       if (quarter) params.set("quarter", quarter);
-      window.location.href = `?${params.toString()}`;
+      const url = window.location.pathname + "?" + params.toString();
+      window.open(url, "_blank", "noopener,noreferrer");
     });
 </script>
 
