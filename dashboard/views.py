@@ -501,8 +501,10 @@ def _read_outbound_data_from_excel(excel_path):
     # Number of Pallets (LPNs) من الشيت إن وُجد عمود
     lpn_col = _col("LPNs", "LPN", "Nbr_LPNs", "Nbr LPNs", "Pallets", "Number of Pallets")
     number_of_pallets = 0
+    keys_from_sheet = ["released_orders", "picked_orders"]
     if lpn_col:
         number_of_pallets = int(pd.to_numeric(df[lpn_col], errors="coerce").fillna(0).sum())
+        keys_from_sheet.append("number_of_pallets")
 
     return {
         "outbound_kpi": {
@@ -510,6 +512,7 @@ def _read_outbound_data_from_excel(excel_path):
             "picked_orders": int(picked_orders),
             "number_of_pallets": number_of_pallets,
         },
+        "outbound_kpi_keys_from_sheet": keys_from_sheet,
     }
 
 
@@ -1568,11 +1571,10 @@ class UploadExcelViewRoche(View):
             return redirect(request.path or "/")
 
         # --------------------------
-        # Resolve Excel path — نعتبر "مرفوع" فقط لو الجلسة فيها مسار والملف موجود
+        # Resolve Excel path — نفتح الصفحة عادي لو في ملف (جلسة أو مجلد)، بدون إجبار على صفحة الرفع
         # --------------------------
-        session_path = request.session.get("uploaded_excel_path")
-        data_is_uploaded = bool(session_path and os.path.exists(session_path))
         excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
+        data_is_uploaded = bool(excel_path and os.path.exists(excel_path))
         if not data_is_uploaded:
             form = ExcelUploadForm()
             return render(
@@ -1921,14 +1923,16 @@ class UploadExcelViewRoche(View):
             "all_tab_data": all_tab_data,
             "raw_tab_data": None,
         }
-        if (selected_tab or "").lower() == "dashboard":
-            try:
-                dashboard_ctx = self._get_dashboard_include_context(request)
+        try:
+            dashboard_ctx = self._get_dashboard_include_context(request)
+            render_context["dashboard_missing_data"] = dashboard_ctx.get("dashboard_missing_data", [])
+            if (selected_tab or "").lower() == "dashboard":
                 render_context.update(dashboard_ctx)
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"⚠️ [Dashboard include context] {e}")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"⚠️ [Dashboard include context] {e}")
+            render_context.setdefault("dashboard_missing_data", [])
 
         return render(request, self.template_name, render_context)
 
@@ -7122,6 +7126,7 @@ class UploadExcelViewRoche(View):
             outbound_data = _read_outbound_data_from_excel(excel_path)
             if outbound_data and "outbound_kpi" in outbound_data:
                 context["outbound_kpi"] = outbound_data["outbound_kpi"]
+                context["outbound_kpi_keys_from_sheet"] = outbound_data.get("outbound_kpi_keys_from_sheet", [])
 
             pods_data = _read_pods_data_from_excel(excel_path)
             if pods_data:
@@ -7174,18 +7179,41 @@ class UploadExcelViewRoche(View):
             {"label": "Late", "pct": 0, "color": "#E8A8A2"},
         ]
 
+        # تتبع أي أقسام تعرض قيماً افتراضية (صفر) لعرض تنبيه "ارفع الملف مرة أخرى"
+        missing_by_section = {}
+        if "inbound_kpi" not in context:
+            missing_by_section["Dashboard – Inbound"] = ["Number of Shipments", "Number of Pallets (LPNs)", "Total Quantity", "Pending Shipments"]
         context.setdefault("inbound_kpi", _empty_inbound_kpi)
         context.setdefault("pending_shipments", [])
+
+        _outbound_card_names = {"released_orders": "Released Orders", "picked_orders": "Picked Orders", "number_of_pallets": "Number of Pallets (LPNs)"}
+        if "outbound_kpi" not in context:
+            missing_by_section.setdefault("Dashboard – Outbound", []).extend(["Released Orders", "Picked Orders", "Number of Pallets (LPNs)"])
+        else:
+            keys_from_sheet = context.get("outbound_kpi_keys_from_sheet") or []
+            for key, card_name in _outbound_card_names.items():
+                if key not in keys_from_sheet:
+                    missing_by_section.setdefault("Dashboard – Outbound", []).append(card_name)
         context.setdefault("outbound_kpi", _empty_outbound_kpi)
+        if "pod_compliance_chart_data" not in context:
+            missing_by_section.setdefault("Dashboard – Outbound", []).append("PODs Compliance (chart)")
         context.setdefault("outbound_chart_data", _empty_pod_chart)
         context.setdefault("pod_compliance_chart_data", _empty_pod_chart)
         context.setdefault("pod_status_breakdown", _empty_pod_breakdown)
+
+        if "returns_kpi" not in context:
+            missing_by_section["Dashboard – Returns"] = ["Total SKUs", "Total LPNs", "Returns chart"]
         context.setdefault("returns_kpi", {"total_skus": 0, "total_lpns": 0})
         context.setdefault("returns_chart_data", _empty_pod_chart)
         context.setdefault("returns_region_table", [])
+
+        if "inventory_kpi" not in context:
+            missing_by_section["Dashboard – Inventory"] = ["Total SKUs", "Total LPNs", "Utilization %", "Capacity chart", "Warehouse table"]
         context.setdefault("inventory_kpi", {"total_skus": 0, "total_lpns": 0, "utilization_pct": ""})
         context.setdefault("inventory_capacity_data", {"used": 0, "available": 0})
         context.setdefault("inventory_warehouse_table", [])
+
+        context["dashboard_missing_data"] = [{"section": k, "cards": v} for k, v in missing_by_section.items()]
         return context
 
     def dashboard_tab(self, request):

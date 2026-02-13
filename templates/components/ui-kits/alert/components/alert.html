@@ -58,6 +58,18 @@
                                 style="filter: invert(41%) sepia(95%) saturate(378%) hue-rotate(161deg) brightness(92%) contrast(90%)">
                         </button>
                     </div>
+                    {% if dashboard_missing_data %}
+                    <div class="alert alert-warning alert-dismissible fade show mt-2 mb-0" role="alert">
+                        <strong>Please upload the Excel file again (use &quot;Upload File&quot; above) to complete displaying the rest of the data.</strong>
+                        <span class="d-block mt-2 small">The following section(s) are showing zero (default) — data missing:</span>
+                        <ul class="mb-0 mt-1 small">
+                            {% for item in dashboard_missing_data %}
+                            <li><strong>{{ item.section }}</strong>: {{ item.cards|join:", " }}</li>
+                            {% endfor %}
+                        </ul>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>

@@ -1035,18 +1035,19 @@
     });
 </script>
 <script>
-  document
-    .getElementById("export-excel-btn")
-    .addEventListener("click", function () {
-      const month = document.getElementById("month-select").value || "";
-      const quarter = document.getElementById("quarter-select").value || "";
-      const params = new URLSearchParams(window.location.search);
+  (function () {
+    var btn = document.getElementById("export-excel-btn");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var monthEl = document.getElementById("month-select");
+      var month = (monthEl && monthEl.value) ? monthEl.value : "";
+      var params = new URLSearchParams(window.location.search);
       params.set("action", "export_excel");
       if (month) params.set("month", month);
-      if (quarter) params.set("quarter", quarter);
-      const url = window.location.pathname + "?" + params.toString();
+      var url = window.location.pathname + "?" + params.toString();
       window.open(url, "_blank", "noopener,noreferrer");
     });
+  })();
 </script>
 
 {% endblock %}
