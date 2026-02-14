@@ -498,8 +498,8 @@ def _read_outbound_data_from_excel(excel_path):
     if picked_mask.any():
         picked_orders = df.loc[picked_mask, order_col].dropna().astype(str).str.strip().nunique()
 
-    # Number of Pallets (LPNs) من الشيت إن وُجد عمود
-    lpn_col = _col("LPNs", "LPN", "Nbr_LPNs", "Nbr LPNs", "Pallets", "Number of Pallets")
+    # Number of Pallets (LPNs) من الشيت — عمود Pallets_number أو أي اسم معروف، نجمع القيم
+    lpn_col = _col("Pallets_number", "Pallets number", "LPNs", "LPN", "Nbr_LPNs", "Nbr LPNs", "Pallets", "Number of Pallets")
     number_of_pallets = 0
     keys_from_sheet = ["released_orders", "picked_orders"]
     if lpn_col:
