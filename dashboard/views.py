@@ -3692,6 +3692,9 @@ class UploadExcelViewRoche(View):
             ship_date_col = find_col(
                 df1, ["Ship Date", "Shipment Date", "Shipped Date"]
             )
+            facility_code_col = find_col(
+                df1, ["Facility Code", "Facility Code.", "Facility"]
+            )
 
             required_ob1 = [
                 order_nbr_col,
@@ -3719,11 +3722,15 @@ class UploadExcelViewRoche(View):
                 rename_ob1[city_col] = "Customer City"
             if order_type_col and order_type_col in df1.columns:
                 rename_ob1[order_type_col] = "Order Type"
+            if facility_code_col and facility_code_col in df1.columns:
+                rename_ob1[facility_code_col] = "Facility Code"
             df1 = df1.rename(columns=rename_ob1)
             if "Customer City" not in df1.columns:
                 df1["Customer City"] = ""
             if "Order Type" not in df1.columns:
                 df1["Order Type"] = ""
+            if "Facility Code" not in df1.columns:
+                df1["Facility Code"] = ""
 
             for dt_col in ["Create Timestamp", "Ship Date"]:
                 if dt_col in df1.columns:
@@ -3927,6 +3934,16 @@ class UploadExcelViewRoche(View):
                 * 100
             )
             summary_df["Hit %"] = summary_df["Hit %"].fillna(0).round(2)
+            
+            # حساب عدد الـ Facilities الفريدة لكل شهر
+            facility_per_month = (
+                df_summary.groupby("Month")["Facility Code"]
+                .nunique()
+                .reset_index(name="Facility_Count")
+            )
+            summary_df = summary_df.merge(facility_per_month, on="Month", how="left")
+            summary_df["Facility_Count"] = summary_df["Facility_Count"].fillna(0).astype(int)
+            
             summary_df = summary_df.sort_values(
                 by="Month", key=lambda col: col.map(month_order_value)
             )
@@ -3947,6 +3964,7 @@ class UploadExcelViewRoche(View):
                         "Hit (≤24h)": int(row["Hits"]),
                         "Miss (>24h)": int(row["Misses"]),
                         "Hit %": float(row["Hit %"]),
+                        "Facility Count": int(row["Facility_Count"]),
                     }
                 )
 
@@ -3993,26 +4011,27 @@ class UploadExcelViewRoche(View):
             )
 
             chart_data = []
-            hit_pct_for_chart = next(
-                (r for r in summary_data if r.get("KPI") == "Hit %"), None
+            # عمود Hit (عدد الـ Hits)
+            hit_row_for_chart = next(
+                (r for r in summary_data if r.get("KPI") == "Hit (≤24h)"), None
             )
-            if hit_pct_for_chart:
-                data_points = [
-                    {"label": m, "y": float(hit_pct_for_chart.get(m, 0))}
-                    for m in ordered_months
-                    if hit_pct_for_chart.get(m) is not None
-                ]
-                if "2025" in hit_pct_for_chart:
-                    data_points.append(
-                        {"label": "2025", "y": float(hit_pct_for_chart["2025"])}
+            if hit_row_for_chart:
+                hit_data_points = []
+                for m in ordered_months:
+                    v = hit_row_for_chart.get(m)
+                    if v is not None and isinstance(v, (int, float)):
+                        hit_data_points.append({"label": m, "y": float(v)})
+                if "2025" in hit_row_for_chart:
+                    hit_data_points.append(
+                        {"label": "2025", "y": float(hit_row_for_chart["2025"])}
                     )
                 chart_data.append(
                     {
                         "type": "column",
-                        "name": "Outbound Hit %",
+                        "name": "Hit",
                         "color": "#74c0fc",
                         "related_table": "sub-table-outbound-hit-summary",
-                        "dataPoints": data_points,
+                        "dataPoints": hit_data_points,
                     }
                 )
 
@@ -4031,8 +4050,9 @@ class UploadExcelViewRoche(View):
                 "months_with_hit_only": months_with_hit_only_ob,
             }
 
-            # جدول التفاصيل: Order Nbr أولاً ثم Customer Name وباقي الأعمدة
+            # جدول التفاصيل: Facility Code ثم Order Nbr ثم Customer Name وباقي الأعمدة
             detail_columns = [
+                "Facility Code",
                 "Order Nbr",
                 "Customer Name",
                 "Create Timestamp",
@@ -4165,6 +4185,16 @@ class UploadExcelViewRoche(View):
                 .tolist()
             )
             hit_miss_options = ["Hit", "Miss", "Pending"]
+            facility_code_options = sorted(
+                detail_df_for_options["Facility Code"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .replace("", None)
+                .dropna()
+                .unique()
+                .tolist()
+            )
 
             detail_table = {
                 "id": "sub-table-outbound-detail",
@@ -4175,6 +4205,7 @@ class UploadExcelViewRoche(View):
                 "full_width": True,
                 "filter_options": {
                     "facility_codes": facility_options,
+                    "facility_code_list": facility_code_options,
                     "statuses": status_options,
                     "months": month_options,
                     "customer_cities": city_options,
@@ -4437,6 +4468,16 @@ class UploadExcelViewRoche(View):
                 * 100
             )
             summary_df["Hit %"] = summary_df["Hit %"].fillna(0).round(2)
+            
+            # حساب عدد الـ Facilities الفريدة لكل شهر
+            facility_per_month = (
+                df_summary.groupby("Month")["Facility Code"]
+                .nunique()
+                .reset_index(name="Facility_Count")
+            )
+            summary_df = summary_df.merge(facility_per_month, on="Month", how="left")
+            summary_df["Facility_Count"] = summary_df["Facility_Count"].fillna(0).astype(int)
+            
             summary_df = summary_df.sort_values(
                 by="Month", key=lambda col: col.map(month_order_value)
             )
@@ -4491,6 +4532,7 @@ class UploadExcelViewRoche(View):
                         "Hit (≤24h)": int(row["Hits"]),
                         "Miss (>24h)": int(row["Misses"]),
                         "Hit %": float(row["Hit %"]),
+                        "Facility Count": int(row["Facility_Count"]),
                         "_has_miss": row["Misses"] > 0,
                     }
                 )
@@ -4574,26 +4616,27 @@ class UploadExcelViewRoche(View):
             )
 
             chart_data = []
-            hit_pct_for_chart = next(
-                (r for r in summary_data if r.get("KPI") == "Hit %"), None
+            # عمود Hit (عدد الـ Hits)
+            hit_row_for_chart = next(
+                (r for r in summary_data if r.get("KPI") == "Hit (≤24h)"), None
             )
-            if hit_pct_for_chart:
-                data_points = []
+            if hit_row_for_chart:
+                hit_data_points = []
                 for m in ordered_months:
-                    v = hit_pct_for_chart.get(m)
+                    v = hit_row_for_chart.get(m)
                     if v is not None and isinstance(v, (int, float)):
-                        data_points.append({"label": m, "y": float(v)})
-                if "2025" in hit_pct_for_chart:
-                    data_points.append(
-                        {"label": "2025", "y": float(hit_pct_for_chart["2025"])}
+                        hit_data_points.append({"label": m, "y": float(v)})
+                if "2025" in hit_row_for_chart:
+                    hit_data_points.append(
+                        {"label": "2025", "y": float(hit_row_for_chart["2025"])}
                     )
                 chart_data.append(
                     {
                         "type": "column",
-                        "name": "Inbound Hit %",
+                        "name": "Hit",
                         "color": "#74c0fc",
                         "related_table": "sub-table-inbound-hit-summary",
-                        "dataPoints": data_points,
+                        "dataPoints": hit_data_points,
                     }
                 )
 

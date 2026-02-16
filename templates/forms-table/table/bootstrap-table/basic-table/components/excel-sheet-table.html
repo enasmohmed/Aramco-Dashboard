@@ -813,6 +813,18 @@
 
                 <div class="row g-3 align-items-end filter-row">
 
+                  <!-- Facility Code (Outbound only) -->
+                  {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}
+                  <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                    <label class="form-label small fw-semibold mb-1">Facility Code</label>
+                    <select class="form-select inbound-detail-filter w-100" data-filter="facility-code">
+                      <option value="">All</option>
+                      {% for opt in sub.filter_options.facility_code_list %}
+                      <option value="{{ opt }}">{{ opt }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  {% endif %}
                   <!-- Facility / Customer -->
                   <div class="col-12 col-sm-6 col-md-4 col-lg-3">
                     <label class="form-label small fw-semibold mb-1">
@@ -894,7 +906,7 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{% if sub.id == 'sub-table-outbound-detail' %}{{ row|get_item:'Customer Name'|default:'' }}{% else %}{{ row|get_item:'Facility Code'|default:'' }}{% endif %}" data-status="{{ row|get_item:'Status'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %} data-hit-miss="{{ row|get_item:'HIT or MISS'|default:'' }}"{% endif %}>
+                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{% if sub.id == 'sub-table-outbound-detail' %}{{ row|get_item:'Customer Name'|default:'' }}{% else %}{{ row|get_item:'Facility Code'|default:'' }}{% endif %}" {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}"{% endif %} data-status="{{ row|get_item:'Status'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %} data-hit-miss="{{ row|get_item:'HIT or MISS'|default:'' }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {# ===== STATUS BADGE ===== #}
@@ -1091,6 +1103,7 @@
         var selects = card ? card.querySelectorAll('.inbound-detail-filter') : [];
         function applyFilters() {
           var facility = (card.querySelector('[data-filter="facility"]') || {}).value || '';
+          var facilityCode = (card.querySelector('[data-filter="facility-code"]') || {}).value || '';
           var status = (card.querySelector('[data-filter="status"]') || {}).value || '';
           var month = (card.querySelector('[data-filter="month"]') || {}).value || '';
           var cityEl = card.querySelector('[data-filter="city"]');
@@ -1099,11 +1112,12 @@
           var rows = tbody ? tbody.querySelectorAll('tr[data-facility]') : [];
           rows.forEach(function(tr) {
             var f = (tr.getAttribute('data-facility') || '').trim();
+            var fc = (tr.getAttribute('data-facility-code') || '').trim();
             var s = (tr.getAttribute('data-status') || '').trim();
             var m = (tr.getAttribute('data-month') || '').trim();
             var c = (tr.getAttribute('data-city') || '').trim();
             var h = (tr.getAttribute('data-hit-miss') || '').trim();
-            var show = (!facility || f === facility) && (!status || s === status) && (!month || m === month) && (!city || c === city) && (!hitMiss || h === hitMiss);
+            var show = (!facility || f === facility) && (!facilityCode || fc === facilityCode) && (!status || s === status) && (!month || m === month) && (!city || c === city) && (!hitMiss || h === hitMiss);
             tr.style.display = show ? '' : 'none';
           });
         }
