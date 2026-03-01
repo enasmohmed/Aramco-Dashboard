@@ -4448,7 +4448,7 @@ class UploadExcelViewRoche(View):
 
             return {
                 "detail_html": "",
-                "sub_tables": facility_tables + [detail_table],
+                "sub_tables": [summary_table] + facility_tables + [detail_table],
                 "chart_data": chart_data,
                 "stats": {
                     "total": overall_total,
@@ -4931,6 +4931,7 @@ class UploadExcelViewRoche(View):
 
         except Exception as e:
             import traceback
+
             print(traceback.format_exc())
             return {
                 "detail_html": f"<p class='text-danger'>⚠️ Error while processing inbound data: {e}</p>",
