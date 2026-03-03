@@ -1653,10 +1653,11 @@ class UploadExcelViewRoche(View):
                     effective_month,
                     selected_months=quarter_months or None,
                 ),
-                "return & refusal": lambda: self.filter_rejections_combined(
+                "return & refusal": lambda: self.filter_inbound(
                     request,
                     effective_month,
                     selected_months=quarter_months or None,
+                    tab_name="Return & Refusal",
                 ),
                 "rejections": lambda: self.filter_rejections_combined(
                     request,
@@ -1682,12 +1683,12 @@ class UploadExcelViewRoche(View):
                     request, effective_month
                 ),
                 "meeting points": lambda: self.meeting_points_tab(request),
-                "expiry": lambda: self.filter_expiry(
+                "inventory": lambda: self.filter_expiry(
                     request,
                     effective_month,
                     selected_months=quarter_months or None,
                 ),
-                "Expiry": lambda: self.filter_expiry(
+                "Inventory": lambda: self.filter_expiry(
                     request,
                     effective_month,
                     selected_months=quarter_months or None,
@@ -1854,7 +1855,7 @@ class UploadExcelViewRoche(View):
                 "Outbound",
                 "Return & Refusal",
                 "PODs update",
-                "Expiry",
+                "Inventory",
                 "Meeting Points & Action",
             ]
             if include_only:
@@ -1869,7 +1870,7 @@ class UploadExcelViewRoche(View):
                 "Outbound",
                 "Return & Refusal",
                 "PODs update",
-                "Expiry",
+                "Inventory",
                 "Meeting Points & Action",
             ]
 
@@ -4157,10 +4158,11 @@ class UploadExcelViewRoche(View):
                 "months_with_hit_only": months_with_hit_only_ob,
             }
 
-            # ====== جداول KPI لكل مدينة (Riyadh / Dammam / Jeddah) — شبيهة بجداول Inbound ======
+            # ====== جداول KPI لكل مدينة (Riyadh / Dammam / Jeddah) بنفس فكرة Inbound FS ======
             FACILITIES_OB = ["Riyadh", "Dammam", "Jeddah"]
             facility_tables = []
-            hit_data_points = []
+            facility_stats = {}
+
             for f in FACILITIES_OB:
                 fdf = df1[df1["_FacilityNorm"] == f].copy()
                 if fdf.empty:
@@ -4195,111 +4197,114 @@ class UploadExcelViewRoche(View):
                     by="Month", key=lambda col: col.map(month_order_value)
                 )
 
-                f_months_with_miss = f_summary_df[
-                    f_summary_df["Misses"] > 0
-                ]["Month"].tolist()
-                f_months_with_hit_only = f_summary_df[
-                    f_summary_df["Misses"] == 0
-                ]["Month"].tolist()
-                # ترتيب الأعمدة زمنيًا فقط (Jan → Dec) مثل Inbound،
-                # وقائمة الأشهر التي بها Miss للاستخدام في العنوان فقط.
-                f_ordered_months = f_summary_df["Month"].tolist()
-
-                f_kpi_rows = []
+                # حفظ إحصائيات كل مدينة بالشهور لاستخدامها في الشارت والجدول الموحّد
+                by_month = {}
+                total_all = 0
+                hits_all = 0
+                misses_all = 0
                 for _, row in f_summary_df.iterrows():
                     m = row["Month"]
                     total_val = int(row["Total_Shipments"])
                     hits_val = int(row["Hits"])
                     misses_val = int(row["Misses"])
-                    f_kpi_rows.append(
-                        {
-                            "Month": m,
-                            "Total Shipments": total_val,
-                            "Hit (≤2d)": hits_val,
-                            "Miss (>2d)": misses_val,
-                        }
+                    hit_pct_val = (
+                        int(round((hits_val / total_val) * 100)) if total_val > 0 else 0
                     )
-                    if total_val > 0:
-                        hit_data_points.append(
-                            {"label": f"{m} — {f}", "y": float(hits_val)}
-                        )
+                    by_month[m] = {
+                        "total": total_val,
+                        "hit": hits_val,
+                        "miss": misses_val,
+                        "hit_pct": hit_pct_val,
+                    }
+                    total_all += total_val
+                    hits_all += hits_val
+                    misses_all += misses_val
 
-                f_pivot_cols = ["KPI"] + f_ordered_months
-                if len(f_ordered_months) >= 2:
-                    f_pivot_cols.append("2025")
-
-                f_hit_pct_row = {"KPI": "Hit %"}
-                f_total_row = {"KPI": "Total Shipments"}
-                f_hit_row = {"KPI": "Hit (≤2d)"}
-                f_miss_row = {"KPI": "Miss (>2d)"}
-                for m in f_ordered_months:
-                    r = next((x for x in f_kpi_rows if x["Month"] == m), None)
-                    if r:
-                        total_val = int(r["Total Shipments"])
-                        hit_val = int(r["Hit (≤2d)"])
-                        miss_val = int(r["Miss (>2d)"])
-                        f_total_row[m] = total_val
-                        f_hit_row[m] = hit_val
-                        f_miss_row[m] = miss_val
-                        f_hit_pct_row[m] = (
-                            int(round(hit_val / total_val * 100))
-                            if total_val > 0
-                            else 0
-                        )
-                if "2025" in f_pivot_cols:
-                    total_2025 = sum(r["Total Shipments"] for r in f_kpi_rows)
-                    hit_2025 = sum(r["Hit (≤2d)"] for r in f_kpi_rows)
-                    f_hit_pct_row["2025"] = (
-                        int(round(hit_2025 / total_2025 * 100))
-                        if total_2025 > 0
-                        else 0
-                    )
-                    f_total_row["2025"] = total_2025
-                    f_hit_row["2025"] = hit_2025
-                    f_miss_row["2025"] = sum(
-                        r["Miss (>2d)"] for r in f_kpi_rows
-                    )
-
-                f_summary_data_pivot = [
-                    f_hit_pct_row,
-                    f_hit_row,
-                    f_miss_row,
-                    f_total_row,
+                hit_pct_all = (
+                    round((hits_all / total_all) * 100, 2) if total_all else 0
+                )
+                ordered_months = list(f_summary_df["Month"].tolist())
+                months_with_miss = [
+                    m for m in ordered_months if by_month.get(m, {}).get("miss", 0) > 0
                 ]
 
-                f_months_label = (
-                    " — Months with Miss: " + ", ".join(f_months_with_miss)
-                    if f_months_with_miss
-                    else " — All Hit"
-                )
+                facility_stats[f] = {
+                    "total": total_all,
+                    "hit": hits_all,
+                    "miss": misses_all,
+                    "hit_pct": hit_pct_all,
+                    "by_month": by_month,
+                    "ordered_months": ordered_months,
+                    "months_with_miss": months_with_miss,
+                }
+
+            # الشهور الموحدة لكل المناطق
+            all_months_ob = set()
+            for s in facility_stats.values():
+                all_months_ob.update((s.get("by_month") or {}).keys())
+            ordered_months_overall_ob = sorted(
+                all_months_ob, key=lambda x: month_order_value(x)
+            )
+
+            # شارت Hit %: لكل شهر ٣ أعمدة (Riyadh / Dammam / Jeddah)
+            # ألوان الأعمدة (بالترتيب): أول لون #9084ad، الثاني #e8f1fb، الثالث #0d6efd
+            facility_colors_ob = {
+                "Riyadh": "#9084ad",
+                "Dammam": "#e8f1fb",
+                "Jeddah": "#538fe7",
+            }
+            chart_data = []
+            if ordered_months_overall_ob:
+                for f in FACILITIES_OB:
+                    stats_f = facility_stats.get(f, {})
+                    by_month = stats_f.get("by_month", {}) or {}
+                    data_points = [
+                        {
+                            "label": m,
+                            "y": by_month.get(m, {}).get("hit_pct", 0),
+                        }
+                        for m in ordered_months_overall_ob
+                    ]
+                    chart_data.append(
+                        {
+                            "type": "column",
+                            "name": f"{f} Hit %",
+                            "color": facility_colors_ob.get(f, "#007fa3"),
+                            "valueSuffix": "%",
+                            "related_table": "sub-table-outbound-facilities-hit",
+                            "dataPoints": data_points,
+                        }
+                    )
+
+            # جدول واحد موحّد: الصفوف = المناطق، الأعمدة = (Jan Hit / Jan Miss / Feb Hit / Feb Miss / ...)
+            if ordered_months_overall_ob:
+                pivot_cols = ["KPI"]
+                for m in ordered_months_overall_ob:
+                    pivot_cols.append(f"{m} Hit")
+                    pivot_cols.append(f"{m} Miss")
+
+                summary_rows = []
+                for f in FACILITIES_OB:
+                    stats_f = facility_stats.get(f, {})
+                    by_month = stats_f.get("by_month", {}) or {}
+                    row = {"KPI": f}
+                    for m in ordered_months_overall_ob:
+                        month_stats = by_month.get(m, {}) or {}
+                        row[f"{m} Hit"] = month_stats.get("hit", 0)
+                        row[f"{m} Miss"] = month_stats.get("miss", 0)
+                    summary_rows.append(row)
 
                 facility_tables.append(
                     {
-                        "id": f"sub-table-outbound-{f.lower()}",
-                        "title": "Outbound KPI ≤ 2d"
-                        + f_months_label
-                        + " — "
-                        + f,
-                        "columns": f_pivot_cols,
-                        "data": f_summary_data_pivot,
+                        "id": "sub-table-outbound-facilities-hit",
+                        "title": "Outbound KPI ≤ 2d — Hit by Facility",
+                        "columns": pivot_cols,
+                        "data": summary_rows,
                         "chart_data": [],
                         "full_width": False,
-                        "facility_name": f,
+                        "facility_name": "All Facilities",
                     }
                 )
-
-            # الشارت الرئيسي: Hit لكل شهر/منطقة، مع تسمية "Month — Region"
-            if hit_data_points:
-                chart_data = [
-                    {
-                        "type": "column",
-                        "name": "Hit",
-                        "color": "#74c0fc",
-                        "related_table": "sub-table-outbound-hit-summary",
-                        "dataPoints": hit_data_points,
-                    }
-                ]
-                summary_table["chart_data"] = chart_data
 
             detail_df = df1.copy()
             detail_df["_sort_ts"] = detail_df["Ship Date"]
@@ -4470,9 +4475,11 @@ class UploadExcelViewRoche(View):
                 "stats": {},
             }
 
-    def filter_inbound(self, request, selected_month=None, selected_months=None):
+    def filter_inbound(self, request, selected_month=None, selected_months=None, tab_name=None):
         """
-        تاب Inbound: يقرأ من الملف الرئيسي all_sheet.xlsx (أو latest.xlsx)، شيت "ARAMCO Inbound Report".
+        تاب Inbound أو Return & Refusal: يقرأ من شيت Inbound (أو Return).
+        tab_name: عند الاستدعاء لتاب Return نمرّر "Return & Refusal" لعرض المحتوى بنفس شكل Inbound.
+        يقرأ من الملف الرئيسي all_sheet.xlsx (أو latest.xlsx)، شيت "ARAMCO Inbound Report" أو "Inbound".
         - فلترة بعمود Facility: Jeddah, Dammam, Riyadh → 3 جداول (و3 أعمدة في الشارت).
         - لكل شحنة (Shipment_nbr): عدد LPN الفريدة؛ إن < 50 فالمسموح يوم واحد، وإلا يومين.
         - الفرق بين Create shipment D&T و Received LPN D&T (بالأيام): ≤ مسموح = Hit، وإلا Miss.
@@ -4492,15 +4499,21 @@ class UploadExcelViewRoche(View):
 
             xls = pd.ExcelFile(excel_path, engine="openpyxl")
             sheet_name = None
-            for s in xls.sheet_names:
-                if "ARAMCO Inbound Report" in (s or "").strip():
-                    sheet_name = s
-                    break
+            is_return_tab = (tab_name or "").strip().lower() == "return & refusal"
+            if is_return_tab:
+                sheet_name = next((s for s in xls.sheet_names if "return" in (s or "").lower() and "refusal" not in (s or "").lower()), None)
+                if not sheet_name:
+                    sheet_name = next((s for s in xls.sheet_names if (s or "").strip().lower() == "return"), None)
+            if not sheet_name:
+                for s in xls.sheet_names:
+                    if "ARAMCO Inbound Report" in (s or "").strip():
+                        sheet_name = s
+                        break
             if not sheet_name:
                 sheet_name = next((s for s in xls.sheet_names if "inbound" in (s or "").lower()), None)
             if not sheet_name:
                 return {
-                    "detail_html": "<p class='text-warning'>⚠️ Sheet 'ARAMCO Inbound Report' was not found.</p>",
+                    "detail_html": "<p class='text-warning'>⚠️ Sheet 'ARAMCO Inbound Report' or 'Inbound' (or 'Return' for Return tab) was not found.</p>",
                     "sub_tables": [],
                     "chart_data": [],
                 }
@@ -4771,83 +4784,76 @@ class UploadExcelViewRoche(View):
 
             facility_stats = {f: compute_facility_kpi(f) for f in FACILITIES}
 
-            # تجميع Hit / Miss لكل شهر عبر كل الفاسيليتيز لعرضها في الشارت
-            overall_by_month = {}
-            for f, s in facility_stats.items():
-                for m, vals in (s.get("by_month", {}) or {}).items():
-                    if m not in overall_by_month:
-                        overall_by_month[m] = {"total": 0, "hit": 0, "miss": 0}
-                    overall_by_month[m]["total"] += vals.get("total", 0)
-                    overall_by_month[m]["hit"] += vals.get("hit", 0)
-                    overall_by_month[m]["miss"] += vals.get("miss", 0)
+            # الشهور المجمعة عبر كل الفاسيليتيز (للاستخدام في الشارت والجدول)
+            all_months = set()
+            for s in facility_stats.values():
+                by_month = s.get("by_month", {}) or {}
+                all_months.update(by_month.keys())
+            ordered_months_overall = sorted(all_months, key=lambda x: month_order_value(x))
 
-            # الشارت بالشهور + المنطقة: فقط شهر-منطقة فيها بيانات (إخفاء الصفر)
-            ordered_months_overall = sorted(overall_by_month.keys(), key=lambda x: month_order_value(x))
-            points_with_data = [
-                (m, f) for m in ordered_months_overall for f in FACILITIES
-                if (facility_stats[f]["by_month"].get(m, {}).get("hit", 0) +
-                    facility_stats[f]["by_month"].get(m, {}).get("miss", 0)) > 0
-            ]
-            chart_data = [{
-                "type": "column",
-                "name": "Hit",
-                "color": "#74c0fc",
-                "valueSuffix": "",
-                "related_table": "sub-table-inbound-riyadh",
-                "dataPoints": [
-                    {"label": f"{m} — {f}", "y": facility_stats[f]["by_month"].get(m, {}).get("hit", 0)}
-                    for m, f in points_with_data
-                ],
-            }, {
-                "type": "column",
-                "name": "Miss",
-                "color": "#ff6b6b",
-                "valueSuffix": "",
-                "related_table": "sub-table-inbound-riyadh",
-                "dataPoints": [
-                    {"label": f"{m} — {f}", "y": facility_stats[f]["by_month"].get(m, {}).get("miss", 0)}
-                    for m, f in points_with_data
-                ],
-            }]
+            # شارت Hit % فقط لكل منطقة، مع 3 أعمدة لكل شهر (جدة / الدمام / الرياض)
+            # ألوان الأعمدة (بالترتيب): أول لون #9084ad، الثاني #e8f1fb، الثالث #0d6efd
+            facility_colors = {
+                "Riyadh": "#9084ad",
+                "Dammam": "#e8f1fb",
+                "Jeddah": "#538fe7",
+            }
+            chart_data = []
+            if ordered_months_overall:
+                for f in FACILITIES:
+                    stats_f = facility_stats.get(f, {})
+                    by_month = stats_f.get("by_month", {}) or {}
+                    data_points = [
+                        {
+                            "label": m,
+                            "y": by_month.get(m, {}).get("hit_pct", 0),
+                        }
+                        for m in ordered_months_overall
+                    ]
+                    chart_data.append(
+                        {
+                            "type": "column",
+                            "name": f"{f} Hit %",
+                            "color": facility_colors.get(f, "#74c0fc"),
+                            "valueSuffix": "%",
+                            "related_table": "sub-table-inbound-facilities-hit",
+                            "dataPoints": data_points,
+                        }
+                    )
 
+            # جدول واحد كبير لكل المناطق:
+            # الأعمدة = KPI (المناطق) + لكل شهر عمودين (Hit / Miss)
+            # الصفوف = منطقة واحدة في كل صف (Riyadh / Dammam / Jeddah)
             facility_tables = []
-            for f in FACILITIES:
-                s = facility_stats[f]
-                by_month = s.get("by_month", {})
-                ordered_months = s.get("ordered_months", [])
-                months_with_miss = s.get("months_with_miss", [])
-                base_title = f"Inbound KPI ≤ 24h — {f}"
-                if months_with_miss:
-                    title = base_title + " — Months with Miss: " + ", ".join(months_with_miss)
-                else:
-                    title = base_title + " — All Hit"
-                pivot_cols = ["KPI"] + ordered_months + ["2025"]
-                hit_pct_row = {"KPI": "Hit %"}
-                hit_row = {"KPI": "Hit"}
-                miss_row = {"KPI": "Miss"}
-                total_row = {"KPI": "Total Shipments"}
-                for m in ordered_months:
-                    b = by_month.get(m, {})
-                    hit_pct_row[m] = int(round(b.get("hit_pct", 0)))
-                    hit_row[m] = b.get("hit", 0)
-                    miss_row[m] = b.get("miss", 0)
-                    total_row[m] = b.get("total", 0)
-                hit_pct_row["2025"] = int(round(s["hit_pct"])) if s["total"] else 0
-                hit_row["2025"] = s["hit"]
-                miss_row["2025"] = s["miss"]
-                total_row["2025"] = s["total"]
-                summary_data = [hit_pct_row, hit_row, miss_row, total_row]
-                months_label_f = " — Months with Miss: " + ", ".join(months_with_miss) if months_with_miss else " — All Hit"
-                facility_tables.append({
-                    "id": f"sub-table-inbound-{f.lower()}",
-                    "title": "Inbound KPI ≤ 24h" + months_label_f + " — " + f,
-                    "columns": pivot_cols,
-                    "data": summary_data,
-                    "chart_data": chart_data if f == FACILITIES[0] else [],
-                    "full_width": False,
-                    "facility_name": f,
-                    "is_first_facility": f == FACILITIES[0],
-                })
+            if ordered_months_overall:
+                pivot_cols = ["KPI"]
+                for m in ordered_months_overall:
+                    pivot_cols.append(f"{m} Hit")
+                    pivot_cols.append(f"{m} Miss")
+                summary_rows = []
+
+                for f in FACILITIES:
+                    s = facility_stats[f]
+                    by_month = s.get("by_month", {}) or {}
+                    row = {"KPI": f}
+                    for m in ordered_months_overall:
+                        b = by_month.get(m, {}) or {}
+                        row[f"{m} Hit"] = b.get("hit", 0)
+                        row[f"{m} Miss"] = b.get("miss", 0)
+                    summary_rows.append(row)
+
+                facility_tables.append(
+                    {
+                        "id": "sub-table-inbound-facilities-hit",
+                        "title": "Inbound KPI ≤ 24h — Hit % by Facility",
+                        "columns": pivot_cols,
+                        "data": summary_rows,
+                        "chart_data": [],
+                        "full_width": False,
+                        "facility_name": "All Facilities",
+                        "is_first_facility": True,
+                    }
+                )
 
             overall_total = sum(facility_stats[f]["total"] for f in FACILITIES)
             overall_hits = sum(facility_stats[f]["hit"] for f in FACILITIES)
@@ -4855,8 +4861,8 @@ class UploadExcelViewRoche(View):
             overall_hit_pct = round((overall_hits / overall_total) * 100, 2) if overall_total else 0
             aggregated_kpi_rows = [
                 {"KPI": "Hit %", "2025": int(round(overall_hit_pct))},
-                {"KPI": "Hit", "2025": overall_hits},
-                {"KPI": "Miss", "2025": overall_miss},
+                {"KPI": "Hit (≤2d)", "2025": overall_hits},
+                {"KPI": "Miss (>2d)", "2025": overall_miss},
                 {"KPI": "Total Shipments", "2025": overall_total},
             ]
             aggregated_kpi_table = {
@@ -4917,8 +4923,42 @@ class UploadExcelViewRoche(View):
 
             sub_tables = [aggregated_kpi_table] + facility_tables + [detail_table]
 
+            from django.template.loader import render_to_string
+
+            display_name = (tab_name or "Inbound").strip()
+            tab_data = {
+                "name": display_name,
+                "sub_tables": sub_tables,
+                "chart_data": chart_data,
+                "stats": {
+                    "total": overall_total,
+                    "hit": overall_hits,
+                    "miss": overall_miss,
+                    "hit_pct": overall_hit_pct,
+                },
+            }
+            selected_months_norm = []
+            if selected_months:
+                if isinstance(selected_months, str):
+                    selected_months = [selected_months]
+                seen = set()
+                for m in selected_months:
+                    norm = self.normalize_month_label(m)
+                    if norm and norm not in seen:
+                        seen.add(norm)
+                        selected_months_norm.append(norm)
+            month_norm_tab = self.apply_month_filter_to_tab(
+                tab_data,
+                None if selected_months_norm else selected_month,
+                selected_months_norm or None,
+            )
+            html = render_to_string(
+                "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
+                {"tab": tab_data, "selected_month": month_norm_tab},
+            )
+
             return {
-                "detail_html": "",
+                "detail_html": html,
                 "sub_tables": sub_tables,
                 "chart_data": chart_data,
                 "stats": {
@@ -4943,11 +4983,10 @@ class UploadExcelViewRoche(View):
     def filter_pods_update(self, request, selected_month=None, selected_months=None):
         """
         تاب PODs: قراءة من شيت PODs.
-        - فلترة بـ W.HNAME، Created on، PGI Date.
-        - حساب الأيام بين Created on و PGI Date (باستثناء يوم الجمعة).
-        - Hit = استلام خلال 7 أيام أو أقل، Miss = أكثر من 7 أيام.
-        - الجدول العلوي: KPI + صفوف المدن لكل شهر.
-        - الجدول السفلي: التفاصيل مع فلتر W.HNAME، الشهور، Hit/Miss؛ البادجات على المدن و Hit/Miss.
+        - فلترة أولاً بعمود Org. Date ثم OBD Number.
+        - المقارنة بين Out of Warehouse و POD: أيام عمل (بدون الجمعة).
+        - Hit = خلال 7 أيام عمل أو أقل، Miss = أكثر من 7 أيام عمل.
+        - جدول KPI (Hit / Miss) + شارت Hit % لكل شهر جنب الجدول، وتحته جدول الإكسل الخام.
         """
         import pandas as pd
         from django.template.loader import render_to_string
@@ -4955,17 +4994,13 @@ class UploadExcelViewRoche(View):
         from datetime import datetime, timedelta
 
         try:
-            excel_path = self.get_excel_path()
+            excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
             if not excel_path or not os.path.exists(excel_path):
                 return {"error": "⚠️ Excel file not found."}
 
             xls = pd.ExcelFile(excel_path, engine="openpyxl")
             sheet_name = next(
-                (
-                    s
-                    for s in xls.sheet_names
-                    if "pod" in s.lower() and "update" not in s.lower()
-                ),
+                (s for s in xls.sheet_names if "pod" in (s or "").lower()),
                 None,
             )
             if not sheet_name:
@@ -4994,69 +5029,75 @@ class UploadExcelViewRoche(View):
                         return col
                 return None
 
-            col_created = _find_col(df, ["created on", "createdon", "created"])
-            col_pgi = _find_col(df, ["pgi date", "pgidate", "pgi"])
-            col_whname = _find_col(
-                df, ["w.hname", "whname", "warehouse name", "warehouse"]
+            col_org_date = _find_col(df, ["org. date", "org date", "orgdate", "org"])
+            col_obd = _find_col(df, ["obd number", "obdnumber", "obd no", "obd"])
+            col_out_wh = _find_col(
+                df,
+                [
+                    "out of warehouse",
+                    "outofwarehouse",
+                    "out of wh",
+                    "out of warehouse date",
+                ],
             )
-            col_shpng = _find_col(df, ["shpng pnt", "shpngpnt", "shipping point"])
-            col_plant = _find_col(df, ["plant"])
-            col_whno = _find_col(df, ["wh no", "whno", "warehouse no"])
-            col_delivery = _find_col(df, ["delivery"])
-            col_inv = _find_col(df, ["inv", "invoice"])
-            col_shipto = _find_col(df, ["ship-to party", "shiptoparty", "ship to"])
-            col_shipto_name = _find_col(
-                df, ["name of the ship-to party", "ship-to party name"]
-            )
-            col_qty = _find_col(df, ["qty", "quantity"])
-            col_unit = _find_col(df, ["unit"])
-            col_city = _find_col(df, ["city"])
+            col_pod = _find_col(df, ["pod", "pod date", "pod date time"])
 
-            if not col_created or not col_pgi or not col_whname:
+            if not col_org_date:
+                return {"error": "⚠️ Required column 'Org. Date' not found in PODs sheet."}
+            if not col_out_wh or not col_pod:
                 return {
-                    "error": "⚠️ Required columns (Created on, PGI Date, W.HNAME) not found."
+                    "error": "⚠️ Required columns 'Out of Warehouse' and 'POD' not found in PODs sheet."
                 }
 
-            # تحويل التواريخ
-            df["_created_dt"] = pd.to_datetime(df[col_created], errors="coerce")
-            df["_pgi_dt"] = pd.to_datetime(df[col_pgi], errors="coerce")
+            df["_org_dt"] = pd.to_datetime(df[col_org_date], errors="coerce")
+            df["_out_wh_dt"] = pd.to_datetime(df[col_out_wh], errors="coerce")
+            df["_pod_dt"] = pd.to_datetime(df[col_pod], errors="coerce")
 
-            # حساب Days (باستثناء يوم الجمعة) - الفرق بين Created on و PGI Date
+            # أيام عمل بين Out of Warehouse و POD (بدون الجمعة)
             def business_days_between(start, end):
                 if pd.isna(start) or pd.isna(end):
                     return None
-                if start > end:
+                try:
+                    s = pd.Timestamp(start).date()
+                    e = pd.Timestamp(end).date()
+                except Exception:
+                    return None
+                if s > e:
                     return None
                 days = 0
-                current = start.date()
-                end_date = end.date()
-                # نحسب الأيام بدون الجمعة (من Created on إلى PGI Date)
-                while current < end_date:  # < وليس <= لأننا لا نحسب اليوم الأخير
-                    if current.weekday() != 4:  # 4 = Friday
+                current = s
+                while current < e:
+                    if current.weekday() != 4:
                         days += 1
                     current += timedelta(days=1)
                 return days
 
-            df["Days"] = df.apply(
-                lambda row: business_days_between(row["_created_dt"], row["_pgi_dt"]),
+            df["_work_days"] = df.apply(
+                lambda row: business_days_between(row["_out_wh_dt"], row["_pod_dt"]),
                 axis=1,
             )
-            # Hit = استلام خلال 7 أيام أو أقل (بدون الجمعة)، Miss = أكثر من 7 أيام
-            df["Hit or Miss"] = df["Days"].apply(
-                lambda d: (
-                    "Hit"
-                    if d is not None and d <= 7
-                    else ("Miss" if d is not None else "Pending")
-                )
-            )
-            df["Days"] = df["Days"].apply(
-                lambda d: str(int(d)) if d is not None else ""
-            )
 
-            # استخراج الشهر من Created on (نحتفظ بـ _created_dt و _pgi_dt لجدول التفاصيل)
-            df["Month"] = df["_created_dt"].dt.strftime("%b").fillna("")
+            def _days_to_str(d):
+                if d is None or (isinstance(d, float) and pd.isna(d)):
+                    return ""
+                try:
+                    return str(int(float(d)))
+                except (ValueError, TypeError):
+                    return ""
 
-            # فلترة الشهر
+            df["Days"] = df["_work_days"].apply(_days_to_str)
+            def _hit_or_miss(d):
+                if d is None or (isinstance(d, float) and pd.isna(d)):
+                    return "Pending"
+                try:
+                    return "Hit" if float(d) <= 7 else "Miss"
+                except (ValueError, TypeError):
+                    return "Pending"
+
+            df["Hit or Miss"] = df["_work_days"].apply(_hit_or_miss)
+            df["Month"] = df["_org_dt"].dt.strftime("%b").fillna("")
+
+            # فلترة أولاً بـ Org. Date (الشهر)
             selected_months_norm = []
             if selected_months:
                 if isinstance(selected_months, str):
@@ -5079,6 +5120,9 @@ class UploadExcelViewRoche(View):
                 if month_norm:
                     df = df[df["Month"].str.lower() == month_norm.lower()]
 
+            # فلترة بـ OBD Number (اختياري: نعرض كل الصفوف، الفلتر في الواجهة)
+            # لا نستبعد أي صف هنا؛ OBD Number يكون متاحاً كفلتر في جدول التفاصيل
+
             if df.empty:
                 return {
                     "detail_html": "<p class='text-warning text-center p-4'>⚠️ No data available for selected period.</p>",
@@ -5086,7 +5130,23 @@ class UploadExcelViewRoche(View):
                     "hit_pct": 0,
                 }
 
-            # إحصائيات عامة (لكروت KPI): عدد الشحنات الكل = Hit + Miss فقط
+            month_order = [
+                "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+            ]
+            months_raw = df["Month"].dropna().unique().tolist()
+            months = sorted(
+                months_raw,
+                key=lambda m: month_order.index(m) if m in month_order else 999,
+            )
+            if not months:
+                return {
+                    "detail_html": "<p class='text-warning text-center p-4'>⚠️ No months found in data.</p>",
+                    "count": 0,
+                    "hit_pct": 0,
+                }
+
+            # إحصائيات عامة
             hit_count = len(df[df["Hit or Miss"] == "Hit"])
             miss_count = len(df[df["Hit or Miss"] == "Miss"])
             total_shipments = hit_count + miss_count
@@ -5101,202 +5161,76 @@ class UploadExcelViewRoche(View):
                 else 0
             )
 
-            # تجميع كل المدن مع بعض (جدول واحد وشارت واحد)
-            month_order = [
-                "Jan",
-                "Feb",
-                "Mar",
-                "Apr",
-                "May",
-                "Jun",
-                "Jul",
-                "Aug",
-                "Sep",
-                "Oct",
-                "Nov",
-                "Dec",
-            ]
-            months_raw = df["Month"].dropna().unique().tolist()
-            months = sorted(
-                months_raw,
-                key=lambda m: month_order.index(m) if m in month_order else 999,
-            )
-
-            # الحصول على قائمة المدن
-            cities = sorted(
-                df[col_whname]
-                .astype(str)
-                .str.strip()
-                .replace("", pd.NA)
-                .dropna()
-                .unique()
-                .tolist()
-            )
-
-            if not months:
-                return {
-                    "detail_html": "<p class='text-warning text-center p-4'>⚠️ No months found in data.</p>",
-                    "count": 0,
-                    "hit_pct": 0,
-                }
-
-            # تجميع حسب المدينة والشهر: Hit (Closed), Miss (Pending), Total
-            # لكل مدينة: Closed, Pending, Total
-            city_data = {}
-            for city in cities:
-                df_city = df[df[col_whname].astype(str).str.strip() == city].copy()
-                if df_city.empty:
-                    continue
-
-                closed_by_month_city = []
-                pending_by_month_city = []
-                total_by_month_city = []
-
-                for month in months:
-                    df_month_city = df_city[df_city["Month"] == month]
-                    hit_month = len(
-                        df_month_city[df_month_city["Hit or Miss"] == "Hit"]
-                    )
-                    miss_month = len(
-                        df_month_city[df_month_city["Hit or Miss"] == "Miss"]
-                    )
-                    closed_by_month_city.append(hit_month)
-                    pending_by_month_city.append(miss_month)
-                    total_by_month_city.append(hit_month + miss_month)
-
-                # YTD لكل مدينة
-                closed_ytd_city = sum(closed_by_month_city)
-                pending_ytd_city = sum(pending_by_month_city)
-                total_ytd_city = sum(total_by_month_city)
-
-                city_data[city] = {
-                    "closed": closed_by_month_city + [closed_ytd_city],
-                    "pending": pending_by_month_city + [pending_ytd_city],
-                    "total": total_by_month_city + [total_ytd_city],
-                }
-
-            # تجميع حسب الشهر: Hit (Closed), Miss (Pending), Total (كل المدن مجمعة)
-            closed_by_month = []
-            pending_by_month = []
+            # جدول KPI: Hit %, Hit, Miss, Total — أعمدة الشهور + 2025
+            hit_by_month = []
+            miss_by_month = []
             total_by_month = []
-
+            hit_pct_by_month = []
             for month in months:
-                df_month = df[df["Month"] == month]
-                hit_month = len(df_month[df_month["Hit or Miss"] == "Hit"])
-                miss_month = len(df_month[df_month["Hit or Miss"] == "Miss"])
-                closed_by_month.append(hit_month)
-                pending_by_month.append(miss_month)
-                total_by_month.append(hit_month + miss_month)
+                df_m = df[df["Month"] == month]
+                h = len(df_m[df_m["Hit or Miss"] == "Hit"])
+                m = len(df_m[df_m["Hit or Miss"] == "Miss"])
+                t = h + m
+                hit_by_month.append(h)
+                miss_by_month.append(m)
+                total_by_month.append(t)
+                hit_pct_by_month.append(
+                    int(round((h / t * 100))) if t > 0 else 0
+                )
 
-            # إضافة YTD
-            closed_ytd = sum(closed_by_month)
-            pending_ytd = sum(pending_by_month)
-            total_ytd = sum(total_by_month)
+            ytd_hit = sum(hit_by_month)
+            ytd_miss = sum(miss_by_month)
+            ytd_total = ytd_hit + ytd_miss
+            ytd_hit_pct = int(round((ytd_hit / ytd_total * 100))) if ytd_total > 0 else 0
 
-            months_display = months + ["YTD"]
-            closed_by_month.append(closed_ytd)
-            pending_by_month.append(pending_ytd)
-            total_by_month.append(total_ytd)
-
-            # حساب النسب المئوية
-            closed_pct = [
-                round((c / t * 100), 2) if t > 0 else 0
-                for c, t in zip(closed_by_month, total_by_month)
+            kpi_columns = ["KPI"] + months + ["2025"]
+            kpi_rows = [
+                {"KPI": "Hit %", **{m: hit_pct_by_month[i] for i, m in enumerate(months)}, "2025": ytd_hit_pct},
+                {"KPI": "Hit", **{m: hit_by_month[i] for i, m in enumerate(months)}, "2025": ytd_hit},
+                {"KPI": "Miss", **{m: miss_by_month[i] for i, m in enumerate(months)}, "2025": ytd_miss},
+                {"KPI": "Total Shipments", **{m: total_by_month[i] for i, m in enumerate(months)}, "2025": ytd_total},
             ]
 
-            # بناء الجدول: KPI، ثم أعمدة المدن جانب أعمدة الشهور، ثم الشهور + YTD
-            # الأعمدة: KPI, City1, City2, ..., Jan, Feb, ..., YTD
-            columns = ["KPI"] + cities + months_display
-            table_rows = []
-
-            # صف Closed (الإجمالي): لكل مدينة نعرض YTD، ثم لكل شهر نعرض الإجمالي
-            closed_row = {"KPI": "Closed"}
-            for city in cities:
-                closed_row[city] = int(city_data.get(city, {}).get("closed", [0])[-1])
-            for i, month in enumerate(months_display):
-                closed_row[month] = int(closed_by_month[i])
-            table_rows.append(closed_row)
-
-            # صف Pending (الإجمالي)
-            pending_row = {"KPI": "Pending"}
-            for city in cities:
-                pending_row[city] = int(city_data.get(city, {}).get("pending", [0])[-1])
-            for i, month in enumerate(months_display):
-                pending_row[month] = int(pending_by_month[i])
-            table_rows.append(pending_row)
-
-            # صف Total (الإجمالي)
-            total_row = {"KPI": "Total"}
-            for city in cities:
-                total_row[city] = int(city_data.get(city, {}).get("total", [0])[-1])
-            for i, month in enumerate(months_display):
-                total_row[month] = int(total_by_month[i])
-            table_rows.append(total_row)
-
-            # شارت واحد (كل المدن مجمعة)
+            # شارت: Hit % لكل شهر
             chart_data = [
                 {
                     "type": "column",
-                    "name": "Closed %",
-                    "color": "#9fc0e4",
-                    "showInLegend": True,
-                    "indexLabel": "{y}%",
-                    "related_table": "PODs YTD",
+                    "name": "Hit %",
+                    "color": "#007fa3",
+                    "valueSuffix": "%",
+                    "related_table": "sub-table-pods-kpi",
                     "dataPoints": [
-                        {"label": m, "y": closed_pct[i]}
-                        for i, m in enumerate(months_display)
+                        {"label": m, "y": hit_pct_by_month[i]}
+                        for i, m in enumerate(months)
                     ],
-                },
-                {
-                    "type": "line",
-                    "name": "Target 100%",
-                    "color": "red",
-                    "showInLegend": True,
-                    "related_table": "PODs YTD",
-                    "dataPoints": [{"label": m, "y": 100} for m in months_display],
                 },
             ]
 
             sub_tables = [
                 {
-                    "id": "sub-table-pods-ytd",
-                    "title": "PODs YTD",
-                    "columns": columns,
-                    "data": table_rows,
+                    "id": "sub-table-pods-kpi",
+                    "title": "PODs KPI — Hit & Miss",
+                    "columns": kpi_columns,
+                    "data": kpi_rows,
                     "chart_data": chart_data,
                 }
             ]
 
-            # ✅ بناء جدول التفاصيل الكامل (مثل Outbound و Inbound)
-            detail_columns = [
-                col_shpng if col_shpng else "Shpng Pnt",
-                col_whname if col_whname else "W.HNAME",
-                col_plant if col_plant else "PLANT",
-                col_whno if col_whno else "WH No",
-                col_created if col_created else "Created on",
-                col_pgi if col_pgi else "PGI Date",
-                col_delivery if col_delivery else "Delivery",
-                col_inv if col_inv else "INV",
-                col_shipto if col_shipto else "Ship-to party",
-                col_shipto_name if col_shipto_name else "Name of the ship-to party",
-                col_qty if col_qty else "QTY",
-                col_unit if col_unit else "Unit",
-                col_city if col_city else "City",
-                "Days",
-                "Hit or Miss",
-                "Month",
-            ]
+            # جدول التفاصيل: أعمدة الإكسل الخام + Days, Hit or Miss, Month
+            raw_cols = [c for c in df.columns if not c.startswith("_")]
+            if col_org_date and col_org_date not in raw_cols:
+                raw_cols.append(col_org_date)
+            if col_obd and col_obd not in raw_cols:
+                raw_cols.append(col_obd)
+            if col_out_wh and col_out_wh not in raw_cols:
+                raw_cols.append(col_out_wh)
+            if col_pod and col_pod not in raw_cols:
+                raw_cols.append(col_pod)
+            for add in ["Days", "Hit or Miss", "Month"]:
+                if add not in raw_cols:
+                    raw_cols.append(add)
 
-            # تنظيف الأعمدة (إزالة None)
-            detail_columns = [c for c in detail_columns if c]
-
-            # إعداد البيانات للجدول التفصيلي
             detail_df = df.copy()
-
-            # حفظ عمود الترتيب قبل التحويل
-            if "_created_dt" in detail_df.columns:
-                detail_df["_sort_ts"] = detail_df["_created_dt"]
-
             def _fmt_date(x):
                 if pd.isna(x) or x is pd.NaT:
                     return ""
@@ -5304,28 +5238,26 @@ class UploadExcelViewRoche(View):
                     return pd.Timestamp(x).strftime("%Y-%m-%d %H:%M")
                 except Exception:
                     return ""
+            if "_org_dt" in detail_df.columns:
+                detail_df[col_org_date] = detail_df["_org_dt"].apply(_fmt_date)
+            if "_out_wh_dt" in detail_df.columns:
+                detail_df[col_out_wh] = detail_df["_out_wh_dt"].apply(_fmt_date)
+            if "_pod_dt" in detail_df.columns:
+                detail_df[col_pod] = detail_df["_pod_dt"].apply(_fmt_date)
 
-            # تحويل التواريخ إلى نص
-            if col_created in detail_df.columns and "_created_dt" in detail_df.columns:
-                detail_df[col_created] = detail_df["_created_dt"].apply(_fmt_date)
-            if col_pgi in detail_df.columns and "_pgi_dt" in detail_df.columns:
-                detail_df[col_pgi] = detail_df["_pgi_dt"].apply(_fmt_date)
-
-            # ترتيب البيانات قبل إزالة الأعمدة المؤقتة
-            if "_sort_ts" in detail_df.columns:
-                detail_df = detail_df.sort_values("_sort_ts", ascending=False)
-
-            # إزالة الأعمدة المؤقتة
-            drop_cols = ["_created_dt", "_pgi_dt", "_sort_ts"]
             detail_df = detail_df.drop(
-                columns=[c for c in drop_cols if c in detail_df.columns],
+                columns=[c for c in ["_org_dt", "_out_wh_dt", "_pod_dt", "_work_days"] if c in detail_df.columns],
                 errors="ignore",
             )
+            detail_columns = [c for c in raw_cols if c in detail_df.columns]
+            if not detail_columns:
+                detail_columns = list(detail_df.columns)
 
-            # استخراج البيانات
-            detail_rows_raw = detail_df.head(500)[detail_columns].to_dict(
-                orient="records"
+            detail_df = detail_df.sort_values(
+                col_org_date if col_org_date in detail_df.columns else detail_columns[0],
+                ascending=False,
             )
+            detail_rows_raw = detail_df.head(500)[detail_columns].to_dict(orient="records")
 
             def _to_blank(val):
                 if val is None:
@@ -5341,11 +5273,9 @@ class UploadExcelViewRoche(View):
                 {k: _to_blank(v) for k, v in row.items()} for row in detail_rows_raw
             ]
 
-            # بناء قائمة الفلاتر
-            detail_df_for_options = detail_df.copy()
-            whname_options = (
+            obd_options = (
                 sorted(
-                    detail_df_for_options[col_whname]
+                    detail_df[col_obd]
                     .fillna("")
                     .astype(str)
                     .str.strip()
@@ -5354,28 +5284,12 @@ class UploadExcelViewRoche(View):
                     .unique()
                     .tolist()
                 )
-                if col_whname in detail_df_for_options.columns
+                if col_obd and col_obd in detail_df.columns
                 else []
             )
-
-            city_options = (
-                sorted(
-                    detail_df_for_options[col_city]
-                    .fillna("")
-                    .astype(str)
-                    .str.strip()
-                    .replace("", None)
-                    .dropna()
-                    .unique()
-                    .tolist()
-                )
-                if col_city in detail_df_for_options.columns
-                else []
-            )
-
             status_options = (
                 sorted(
-                    detail_df_for_options["Hit or Miss"]
+                    detail_df["Hit or Miss"]
                     .fillna("")
                     .astype(str)
                     .str.strip()
@@ -5384,13 +5298,12 @@ class UploadExcelViewRoche(View):
                     .unique()
                     .tolist()
                 )
-                if "Hit or Miss" in detail_df_for_options.columns
+                if "Hit or Miss" in detail_df.columns
                 else []
             )
-
             month_options = (
                 sorted(
-                    detail_df_for_options["Month"]
+                    detail_df["Month"]
                     .fillna("")
                     .astype(str)
                     .str.strip()
@@ -5399,25 +5312,24 @@ class UploadExcelViewRoche(View):
                     .unique()
                     .tolist()
                 )
-                if "Month" in detail_df_for_options.columns
+                if "Month" in detail_df.columns
                 else []
             )
 
-            # إضافة جدول التفاصيل
             detail_table = {
                 "id": "sub-table-pods-detail",
-                "title": "PODs Shipments Detail",
+                "title": "PODs — Excel  Details",
                 "columns": detail_columns,
                 "data": detail_rows,
                 "chart_data": [],
                 "full_width": True,
                 "filter_options": {
-                    "whnames": whname_options,
+                    "obd_numbers": obd_options,
+                    "obd_column": col_obd or "OBD Number",
                     "statuses": status_options,
                     "months": month_options,
                 },
             }
-
             sub_tables.append(detail_table)
 
             # كروت KPI
@@ -5431,8 +5343,8 @@ class UploadExcelViewRoche(View):
             tab_data = {
                 "name": "PODs Update",
                 "sub_tables": sub_tables,
-                "chart_data": chart_data,
-                "chart_title": "PODs Closed % Performance",
+                "chart_data": sub_tables[0].get("chart_data", []) if sub_tables else [],
+                "chart_title": "PODs Hit % by Month",
                 "hit_pct": hit_pct,
                 "target_pct": 100,
                 "stats": stats,
@@ -5985,31 +5897,11 @@ class UploadExcelViewRoche(View):
                 "expiry_dates": expiry_dates,
             }
 
-            sub_tables = [
-                {
-                    "id": "sub-table-expiry-detail",
-                    "title": "Expiry",
-                    "columns": display_columns,
-                    "data": table_data,
-                    "filter_options": filter_options,
-                }
-            ]
-            tab_data = {
-                "name": "Expiry",
-                "sub_tables": sub_tables,
-                "chart_data": [],
-                "expiry_counts": expiry_counts,
-            }
-            month_norm = self.apply_month_filter_to_tab(tab_data, selected_month, None)
-            html = render_to_string(
-                "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
-                {"tab": tab_data, "selected_month": month_norm},
-            )
             return {
-                "detail_html": html,
+                "detail_html": "<div class='text-center p-4 text-muted fw-semibold'>Loading data...</div>",
                 "chart_data": [],
-                "count": len(table_data),
-                "tab_data": tab_data,
+                "count": 0,
+                "tab_data": {"name": "Inventory"},
             }
         except Exception as e:
             import traceback

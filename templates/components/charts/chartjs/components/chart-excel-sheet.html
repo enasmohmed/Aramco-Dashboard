@@ -412,11 +412,8 @@
             .replace(/&amp;/g, "&")
             .toLowerCase();
 
-        if (
-          safeTabName.includes("rejection") ||
-          safeTabName.includes("refusal") ||
-          safeTabName.includes("return")
-        ) {
+        // 🔸 استخدم الشارت الدائري فقط لتابات الـ Rejection
+        if (safeTabName.includes("rejection")) {
             console.log(
               "🎯 Identified tab as Rejection/Refusal/Return:",
               tabName

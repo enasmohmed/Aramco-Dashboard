@@ -344,6 +344,44 @@
   .dashboard-data-table th {
     background: #f8f9fa;
   }
+  /* Returns: عرض وطول ثابت بدون flex */
+  .dashboard-section-returns .returns-card-body {
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .dashboard-section-returns .inbound-kpi-row {
+    display: block;
+    overflow: hidden;
+  }
+  .dashboard-section-returns .inbound-kpi-row .inbound-kpi-value {
+    display: inline-block;
+    vertical-align: middle;
+  }
+  .dashboard-section-returns .inbound-kpi-row .inbound-kpi-icon {
+    display: inline-block;
+    vertical-align: middle;
+    float: right;
+  }
+  .returns-order-process-block {
+    width: 100%;
+    margin-top: 1rem;
+    margin-bottom: 0;
+    padding: 1rem;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-sizing: border-box;
+  }
+  .returns-order-process-title {
+    margin-bottom: 0.5rem;
+  }
+  .returns-chart-container {
+    width: 100%;
+    height: 320px;
+    min-height: 320px;
+    box-sizing: border-box;
+  }
   @media (max-width: 767.98px) {
     .dashboard-kpi-card .dashboard-kpi-value {
       font-size: 1.25rem;
@@ -1092,12 +1130,12 @@
             <hr class="line-button" />
           </div>
         </div>
-        <div class="card-body">
+        <div class="card-body returns-card-body">
           <div class="row g-2 mb-3">
             <div class="col-12 col-sm-6">
               <div class="inbound-kpi-card p-3">
                 <div class="inbound-kpi-label mb-2">Total SKUs</div>
-                <div class="d-flex align-items-center justify-content-between">
+                <div class="inbound-kpi-row">
                   <div class="inbound-kpi-value">
                     {{ returns_kpi.total_skus|default:0 }}
                   </div>
@@ -1110,7 +1148,7 @@
             <div class="col-12 col-sm-6">
               <div class="inbound-kpi-card p-3">
                 <div class="inbound-kpi-label mb-2">Total LPNs</div>
-                <div class="d-flex align-items-center justify-content-between">
+                <div class="inbound-kpi-row">
                   <div class="inbound-kpi-value">
                     {{ returns_kpi.total_lpns|default:0 }}
                   </div>
@@ -1122,50 +1160,13 @@
             </div>
           </div>
 
-          <div
-            class="pod-compliance-block mb-3 p-3 dashboard-card-elevated rounded-3"
-          >
-            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+          <div class="pod-compliance-block returns-order-process-block">
+            <div class="returns-order-process-title">
               <span class="dashboard-section-title fw-bold text-dark"
                 >Order Process Time</span
               >
             </div>
-            <div
-              id="chart-returns-sla"
-              class="pods-chart-container"
-              style="height: 280px; min-height: 280px"
-            ></div>
-          </div>
-          <div class="dashboard-card-elevated rounded-3 p-3 mt-3">
-            <h6 class="dashboard-section-title text-dark mb-2">Region</h6>
-            <div class="table-responsive">
-              <table class="table table-sm table-bordered dashboard-data-table">
-                <thead>
-                  <tr>
-                    <th>Region</th>
-                    <th>SKUs</th>
-                    <th>Available</th>
-                    <th>Utilization %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for row in returns_region_table %}
-                  <tr>
-                    <td>{{ row.region|default:"" }}</td>
-                    <td>{{ row.skus|default:"" }}</td>
-                    <td>{{ row.available|default:"" }}</td>
-                    <td>{{ row.utilization_pct|default:"" }}</td>
-                  </tr>
-                  {% empty %}
-                  <tr>
-                    <td colspan="4" class="text-center text-muted">
-                      No region data available.
-                    </td>
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
+            <div id="chart-returns-sla" class="returns-chart-container"></div>
           </div>
         </div>
       </div>
@@ -1192,29 +1193,27 @@
           <div class="row g-2 mb-3">
             <div class="col-12 col-sm-6">
               <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Total SKUs</div>
+                <div class="inbound-kpi-label mb-2">No of Location</div>
                 <div class="d-flex align-items-center justify-content-between">
-                  <div class="inbound-kpi-value">
-                    {{ inventory_kpi.total_skus|default:0 }}
-                  </div>
+                  <div class="inbound-kpi-value">796</div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
                     <i class="bi bi-truck"></i>
                   </div>
                 </div>
+                <div class="small text-success fw-semibold mt-1">Hit 100%</div>
               </div>
             </div>
 
             <div class="col-12 col-sm-6">
               <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Total LPNs</div>
+                <div class="inbound-kpi-label mb-2">Total Qty</div>
                 <div class="d-flex align-items-center justify-content-between">
-                  <div class="inbound-kpi-value">
-                    {{ inventory_kpi.total_lpns|default:0 }}
-                  </div>
+                  <div class="inbound-kpi-value">6,958</div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
                     <i class="bi bi-truck"></i>
                   </div>
                 </div>
+                <div class="small text-success fw-semibold mt-1">Hit 100%</div>
               </div>
             </div>
           </div>
