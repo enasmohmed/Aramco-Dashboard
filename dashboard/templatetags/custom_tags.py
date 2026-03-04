@@ -23,17 +23,42 @@ def get_item(dictionary, key):
 
 @register.filter
 def get_failed_shipments_count(kpi_table):
-    """من قائمة صفوف KPI يرجّع قيمة Failed Shipments (Miss أو Miss (>24h)) من عمود 2025، أو 0"""
+    """من قائمة صفوف KPI يرجّع قيمة Failed Shipments (Miss أو Miss (>24h) أو Miss (>2d)) من عمود 2025، أو 0"""
     if not kpi_table:
         return 0
     for row in kpi_table:
-        if isinstance(row, dict) and row.get("KPI") in ("Miss", "Miss (>24h)"):
+        if isinstance(row, dict) and row.get("KPI") in ("Miss", "Miss (>24h)", "Miss (>2d)"):
             val = row.get("2025") if isinstance(row.get("2025"), (int, float)) else row.get("2025")
             try:
                 return int(float(val)) if val is not None else 0
             except (TypeError, ValueError):
                 return 0
     return 0
+
+
+@register.filter
+def get_kpi_value(kpi_table, kpi_name):
+    """يرجع قيمة عمود 2025 للصف اللي KPI فيه = kpi_name، أو 0"""
+    if not kpi_table or not kpi_name:
+        return 0
+    for row in kpi_table:
+        if isinstance(row, dict) and row.get("KPI") == kpi_name:
+            val = row.get("2025")
+            try:
+                return int(float(val)) if val is not None else 0
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
+@register.filter
+def get_failed_shipments_percentage(kpi_table):
+    """يرجع نسبة الشحنات الفاشلة من الإجمالي (عدد صحيح للعرض في كارد Failed Shipments)"""
+    total = get_kpi_value(kpi_table, "Total Shipments")
+    if not total:
+        return 0
+    failed = get_failed_shipments_count(kpi_table)
+    return int(round((failed / total) * 100, 0))
 
 
 @register.filter

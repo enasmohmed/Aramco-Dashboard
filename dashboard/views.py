@@ -28,7 +28,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.utils.text import slugify
 
-from .models import MeetingPoint
+from .models import MeetingPoint, InboundShipmentRemark
 
 
 def make_json_serializable(df):
@@ -4906,6 +4906,50 @@ class UploadExcelViewRoche(View):
 
             detail_rows = [{k: _to_blank(v) for k, v in row.items()} for row in raw_df.head(500).to_dict(orient="records")]
 
+            # خريطة (Shipment_nbr, Facility_norm) -> "Hit" أو "Miss" من facility_stats
+            hit_miss_map = {}
+            for fac in FACILITIES:
+                for r in facility_stats.get(fac, {}).get("rows", []):
+                    sn = str(r.get("Shipment_nbr", "")).strip()
+                    if sn:
+                        hit_miss_map[(sn, fac)] = r.get("HIT or MISS", "")
+
+            def _row_facility_norm(r):
+                fc = str(r.get("Facility") or r.get("Facility Code") or "").strip()
+                return norm_facility(fc) or fc
+
+            # إضافة عمود HIT or MISS لكل صف (للجدول والفلتر)
+            for row in detail_rows:
+                sn = str(row.get("Shipment_nbr") or row.get("Shipment_ID") or "").strip()
+                fc_norm = _row_facility_norm(row)
+                row["HIT or MISS"] = hit_miss_map.get((sn, fc_norm), "") if sn and fc_norm else ""
+            if "HIT or MISS" not in raw_columns:
+                raw_columns = list(raw_columns) + ["HIT or MISS"]
+
+            # دمج عمود Remark من الأدمن (InboundShipmentRemark)
+            # نستخدم نفس تطبيع المنشأة (Central->Riyadh, Eastern->Dammam, Western->Jeddah) ليتطابق مع ما يُدخل في الأدمن
+            shipment_facility_pairs = []
+            for r in detail_rows:
+                sn = str(r.get("Shipment_nbr") or r.get("Shipment_ID") or "").strip()
+                fc = _row_facility_norm(r)
+                if sn and fc:
+                    shipment_facility_pairs.append((sn, fc))
+            if shipment_facility_pairs:
+                unique_pairs = list(dict.fromkeys(shipment_facility_pairs))
+                remarks_qs = InboundShipmentRemark.objects.filter(
+                    shipment_nbr__in=[p[0] for p in unique_pairs],
+                    facility__in=[p[1] for p in unique_pairs],
+                )
+                remarks_map = {(obj.shipment_nbr.strip(), obj.facility.strip()): (obj.remark or "") for obj in remarks_qs}
+            else:
+                remarks_map = {}
+            for row in detail_rows:
+                sn = str(row.get("Shipment_nbr") or row.get("Shipment_ID") or "").strip()
+                fc_norm = _row_facility_norm(row)
+                row["Remark"] = remarks_map.get((sn, fc_norm), "") if sn and fc_norm else ""
+            if "Remark" not in raw_columns:
+                raw_columns = list(raw_columns) + ["Remark"]
+
             facility_options = sorted(df["Facility"].dropna().unique().astype(str).tolist())
             month_options = sorted(raw_df["Month"].dropna().unique().tolist()) if "Month" in raw_df.columns else []
             detail_table = {
@@ -4918,6 +4962,8 @@ class UploadExcelViewRoche(View):
                 "filter_options": {
                     "facility_codes": facility_options,
                     "months": month_options,
+                    "statuses": ["Hit", "Miss"],
+                    "hit_miss": ["Hit", "Miss"],
                 },
             }
 

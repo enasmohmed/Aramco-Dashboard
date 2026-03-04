@@ -41,3 +41,19 @@ class MeetingPoint(models.Model):
 
     def __str__(self):
         return self.description[:50]
+
+
+class InboundShipmentRemark(models.Model):
+    """ملاحظات/أسباب تُضاف من الأدمن لشحنات Inbound وتظهر في جدول Inbound Shipments Detail"""
+    shipment_nbr = models.CharField(max_length=255, db_index=True)
+    facility = models.CharField(max_length=255, db_index=True)
+    remark = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Inbound Shipment Remark"
+        verbose_name_plural = "Inbound Shipment Remarks"
+        unique_together = [["shipment_nbr", "facility"]]
+
+    def __str__(self):
+        return f"{self.shipment_nbr} @ {self.facility}"

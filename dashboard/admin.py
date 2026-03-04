@@ -1,7 +1,19 @@
 from django.contrib import admin
-from .models import MeetingPoint
+from .models import MeetingPoint, InboundShipmentRemark
 
 
+@admin.register(InboundShipmentRemark)
+class InboundShipmentRemarkAdmin(admin.ModelAdmin):
+    list_display = ("shipment_nbr", "facility", "remark_short", "updated_at")
+    list_editable = ()
+    list_filter = ("facility",)
+    search_fields = ("shipment_nbr", "facility", "remark")
+    ordering = ("-updated_at",)
+
+    def remark_short(self, obj):
+        return (obj.remark[:50] + "…") if obj.remark and len(obj.remark) > 50 else (obj.remark or "")
+
+    remark_short.short_description = "Remark"
 
 
 @admin.register(MeetingPoint)

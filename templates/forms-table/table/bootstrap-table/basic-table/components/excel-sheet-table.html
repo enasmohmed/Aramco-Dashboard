@@ -118,7 +118,7 @@
 <div class="container-fluid px-0">
   <div class="row g-4 mx-0">
 
-    {# Total Shipments #}
+    {# Total Shipments — عدد كل الشحنات لكل الشهور #}
     {% for row in kpi_table %}
     {% if row.KPI == 'Total Shipments' %}
     <div class="col-12 col-md-6 col-lg-3">
@@ -133,7 +133,7 @@
     {% endif %}
     {% endfor %}
 
-    {# Hit % #}
+    {# Successful Shipments — النسبة ثم تحت عدد الشحنات الناجحة #}
     {% for row in kpi_table %}
     {% if row.KPI == 'Hit %' %}
     <div class="col-12 col-md-6 col-lg-3">
@@ -143,20 +143,21 @@
         </div>
         <div class="kpi-title">Successful Shipments</div>
         <div class="kpi-value">{{ row.2025|floatformat:0 }}%</div>
-        <small class="text-success">Target 99%</small>
+        <small class="text-muted d-block mt-1">{{ kpi_table|get_kpi_value:"Hit (≤2d)" }} shipments</small>
       </div>
     </div>
     {% endif %}
     {% endfor %}
 
-    {# Failed Shipments — دائمًا تظهر، وقيمتها من Miss أو Miss (>24h) أو 0 #}
+    {# Failed Shipments — النسبة المئوية كبيرة، وتحت العدد #}
     <div class="col-12 col-md-6 col-lg-3">
       <div class="kpi-card text-center danger">
         <div class="kpi-icon text-danger">
           <i class="bi bi-x-circle-fill"></i>
         </div>
         <div class="kpi-title">Failed Shipments</div>
-        <div class="kpi-value">{{ kpi_table|get_failed_shipments_count }}</div>
+        <div class="kpi-value">{{ kpi_table|get_failed_shipments_percentage }}%</div>
+        <small class="text-muted d-block mt-1">{{ kpi_table|get_failed_shipments_count }} shipments</small>
       </div>
     </div>
 
@@ -619,6 +620,17 @@
                   </select>
                 </div>
                 {% endif %}
+                {% if sub.filter_options.hit_miss %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Hit or Miss</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="hit-miss">
+                    <option value="">All</option>
+                    {% for opt in sub.filter_options.hit_miss %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                {% endif %}
                 <div class="col-12 col-sm-6 col-md-4 col-lg-3">
                   <label class="form-label small fw-semibold mb-1">Order Nbr</label>
                   <input
@@ -644,7 +656,7 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }}"{% endif %}>
+                  <tr role="row" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:'' }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {% if col|lower == "shipment_nbr" or col|lower == "shipment nbr" %}
@@ -1234,7 +1246,24 @@
             <h4 class="mb-2">{{ sub.title }}</h4>
           </div>
 
-
+          {# فلتر Hit or Miss فوق جدول Inbound Shipments Detail فقط #}
+          {% if sub.id == 'sub-table-inbound-detail' and sub.filter_options.hit_miss %}
+          <div class="card-body py-2 px-3 border-bottom">
+            <div class="row align-items-center g-2">
+              <div class="col-auto">
+                <label class="form-label small fw-semibold mb-0">Hit or Miss</label>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm inbound-detail-filter" data-filter="hit-miss" style="min-width: 120px;">
+                  <option value="">All</option>
+                  {% for opt in sub.filter_options.hit_miss %}
+                  <option value="{{ opt }}">{{ opt }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+          </div>
+          {% endif %}
 
           {% if sub.filter_options %}
             <div class="card border-0 shadow-sm mb-2">
@@ -1267,7 +1296,8 @@
                     </select>
                   </div>
 
-                  <!-- Status -->
+                  <!-- Status (Hit/Miss for Inbound, other statuses for Outbound) -->
+                  {% if sub.filter_options.statuses %}
                   <div class="col-12 col-sm-6 col-md-4 col-lg-3">
                     <label class="form-label small fw-semibold mb-1">Status</label>
                     <select class="form-select inbound-detail-filter w-100" data-filter="status">
@@ -1277,6 +1307,7 @@
                       {% endfor %}
                     </select>
                   </div>
+                  {% endif %}
 
                   <!-- Month -->
                   <div class="col-12 col-sm-6 col-md-4 col-lg-2">
@@ -1337,7 +1368,7 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{% if sub.id == 'sub-table-outbound-detail' %}{{ row|get_item:'Customer Name'|default:'' }}{% else %}{{ row|get_item:'Facility Code'|default:'' }}{% endif %}" {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}"{% endif %} data-status="{{ row|get_item:'Status'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{{ row|get_item:'HIT or MISS'|default:'' }}"{% endif %}{% endif %}>
+                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{% if sub.id == 'sub-table-outbound-detail' %}{{ row|get_item:'Customer Name'|default:'' }}{% else %}{{ row|get_item:'Facility Code'|default:'' }}{% endif %}" {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}"{% endif %} data-status="{% if sub.id == 'sub-table-inbound-detail' %}{{ row|get_item:'HIT or MISS'|default:'' }}{% else %}{{ row|get_item:'Status'|default:'' }}{% endif %}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{{ row|get_item:'HIT or MISS'|default:'' }}"{% endif %}{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {# ===== INBOUND: Shipment_nbr & Received QTY badges only ===== #}
@@ -1546,6 +1577,8 @@
           var facilityCode = (card.querySelector('[data-filter="facility-code"]') || {}).value || '';
           var status = (card.querySelector('[data-filter="status"]') || {}).value || '';
           var month = (card.querySelector('[data-filter="month"]') || {}).value || '';
+          var hitMissEl = card.querySelector('[data-filter="hit-miss"]');
+          var hitMiss = (hitMissEl && hitMissEl.value) ? hitMissEl.value : '';
           var cityEl = card.querySelector('[data-filter="city"]');
           var city = (cityEl && cityEl.value) ? cityEl.value : '';
           var orderNbrInput = card.querySelector('[data-filter="order-nbr"]');
@@ -1556,12 +1589,14 @@
             var fc = (tr.getAttribute('data-facility-code') || '').trim();
             var s = (tr.getAttribute('data-status') || '').trim();
             var m = (tr.getAttribute('data-month') || '').trim();
+            var hm = (tr.getAttribute('data-hit-miss') || '').trim();
             var c = (tr.getAttribute('data-city') || '').trim();
             var on = (tr.getAttribute('data-order-nbr') || '').trim();
             var show = (!facility || f === facility) &&
                        (!facilityCode || fc === facilityCode) &&
                        (!status || s === status) &&
                        (!month || m === month) &&
+                       (!hitMiss || hm === hitMiss) &&
                        (!city || c === city) &&
                        (!orderNbr || on.indexOf(orderNbr) !== -1);
             tr.style.display = show ? '' : 'none';
