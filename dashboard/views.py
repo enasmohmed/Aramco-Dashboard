@@ -27,8 +27,9 @@ import calendar as calendar_module
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.utils.text import slugify
+from django.utils import timezone
 
-from .models import MeetingPoint, InboundShipmentRemark
+from .models import MeetingPoint, InboundShipmentRemark, ExcelSheetCache
 
 
 def make_json_serializable(df):
@@ -48,6 +49,31 @@ def make_json_serializable(df):
             return x
 
     return df.applymap(convert_value)
+
+
+def _dataframe_to_cache_rows(df):
+    """Convert DataFrame to list of dicts suitable for JSONField (ExcelSheetCache)."""
+    if df is None or df.empty:
+        return []
+
+    def _safe_val(x):
+        if x is None or (isinstance(x, float) and (pd.isna(x) or x != x)):
+            return None
+        if isinstance(x, (pd.Timestamp, datetime.datetime, datetime.date)):
+            try:
+                return x.isoformat() if hasattr(x, "isoformat") else str(x)
+            except Exception:
+                return None
+        if isinstance(x, (np.integer, np.int64, np.int32)):
+            return int(x)
+        if isinstance(x, (np.floating, np.float64, np.float32)):
+            return None if pd.isna(x) else float(x)
+        return x
+
+    rows = []
+    for _, row in df.iterrows():
+        rows.append({str(k): _safe_val(v) for k, v in row.items()})
+    return rows
 
 
 def _sanitize_for_json(obj):
@@ -1271,6 +1297,35 @@ class UploadExcelViewRoche(View):
                 return path
         return os.path.join(folder, "latest.xlsx")
 
+    def get_sheet_dataframe(self, request, sheet_name):
+        """
+        يقرأ بيانات الشيت من الكاش (الداتابيز JSON) إن وُجدت للملف الحالي،
+        وإلا يقرأ من ملف الإكسل ويحدّث الكاش. يُرجع DataFrame أو None.
+        """
+        excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
+        if not excel_path or not os.path.exists(excel_path):
+            return None
+        try:
+            excel_path_norm = os.path.normpath(os.path.abspath(excel_path))
+            cached = ExcelSheetCache.objects.filter(sheet_name=sheet_name).first()
+            cached_path = (os.path.normpath(os.path.abspath(cached.source_file_path or "")) if cached and cached.source_file_path else "")
+            if cached and cached_path == excel_path_norm and cached.data is not None:
+                print("✅ الشيت قُرئ من الكاش (الداتابيز) — الموقع صار يفتح بسرعه", flush=True)
+                return pd.DataFrame(cached.data)
+            df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl")
+            cache_rows = _dataframe_to_cache_rows(df)
+            ExcelSheetCache.objects.update_or_create(
+                sheet_name=sheet_name,
+                defaults={"data": cache_rows, "source_file_path": excel_path_norm},
+            )
+            return df
+        except Exception as e:
+            print(f"⚠️ get_sheet_dataframe({sheet_name!r}): {e}")
+            try:
+                return pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl")
+            except Exception:
+                return None
+
     @staticmethod
     def safe_format_value(val):
         if pd.isna(val) or val is pd.NaT:
@@ -1683,12 +1738,12 @@ class UploadExcelViewRoche(View):
                     request, effective_month
                 ),
                 "meeting points": lambda: self.meeting_points_tab(request),
-                "inventory": lambda: self.filter_expiry(
+                "inventory": lambda: self.filter_inventory(
                     request,
                     effective_month,
                     selected_months=quarter_months or None,
                 ),
-                "Inventory": lambda: self.filter_expiry(
+                "Inventory": lambda: self.filter_inventory(
                     request,
                     effective_month,
                     selected_months=quarter_months or None,
@@ -2047,6 +2102,22 @@ class UploadExcelViewRoche(View):
             else:
                 request.session["uploaded_excel_path"] = file_path
                 print(f"💾 [DEBUG] تم حفظ مسار الملف الرئيسي في الجلسة: {file_path}")
+                # ✅ ملء كاش الشيتات في الداتابيز (JSON) لتسريع فتح التابات
+                try:
+                    xls = pd.ExcelFile(file_path, engine="openpyxl")
+                    for sheet_name in xls.sheet_names:
+                        try:
+                            df = pd.read_excel(xls, sheet_name=sheet_name, engine="openpyxl")
+                            cache_rows = _dataframe_to_cache_rows(df)
+                            ExcelSheetCache.objects.update_or_create(
+                                sheet_name=sheet_name,
+                                defaults={"data": cache_rows, "source_file_path": os.path.normpath(os.path.abspath(file_path))},
+                            )
+                        except Exception as sheet_err:
+                            print(f"⚠️ [DEBUG] تخطي شيت '{sheet_name}': {sheet_err}")
+                    print(f"✅ [DEBUG] تم تحديث ExcelSheetCache لـ {len(xls.sheet_names)} شيت")
+                except Exception as cache_fill_err:
+                    print(f"⚠️ [DEBUG] تعبئة الكاش: {cache_fill_err}")
             request.session.save()
 
             # ✅ مسح الكاش بعد رفع ملف جديد
@@ -4475,6 +4546,217 @@ class UploadExcelViewRoche(View):
                 "stats": {},
             }
 
+    def filter_inventory(self, request, selected_month=None, selected_months=None):
+        """
+        تاب Inventory: يقرأ شيت "Inventory" — كروت أربعة (Total/Successful/Failed/Target)، شارت Hit %،
+        وجدول تفاصيل مثل Inbound Shipments Detail مع بادج على Hit/Miss.
+        """
+        try:
+            import os
+
+            excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
+            if not excel_path or not os.path.exists(excel_path):
+                return {
+                    "detail_html": "<p class='text-danger'>⚠️ Excel file not found.</p>",
+                    "sub_tables": [],
+                    "chart_data": [],
+                    "stats": {},
+                    "tab_data": {"name": "Inventory"},
+                }
+
+            df = self.get_sheet_dataframe(request, "Inventory")
+            if df is None or df.empty:
+                xls = pd.ExcelFile(excel_path, engine="openpyxl")
+                sheet_name = next(
+                    (s for s in xls.sheet_names if (s or "").strip().lower() == "inventory"),
+                    None,
+                )
+                if not sheet_name:
+                    sheet_name = next(
+                        (s for s in xls.sheet_names if "inventory" in (s or "").lower()),
+                        None,
+                    )
+                if not sheet_name:
+                    return {
+                        "detail_html": "<p class='text-warning'>⚠️ Sheet 'Inventory' was not found.</p>",
+                        "sub_tables": [],
+                        "chart_data": [],
+                        "stats": {},
+                        "tab_data": {"name": "Inventory"},
+                    }
+                df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl")
+            df.columns = df.columns.astype(str).str.strip()
+            if df.empty:
+                return {
+                    "detail_html": "<p class='text-warning'>⚠️ Inventory sheet is empty.</p>",
+                    "sub_tables": [],
+                    "chart_data": [],
+                    "stats": {},
+                    "tab_data": {"name": "Inventory"},
+                }
+
+            def _norm(s):
+                return re.sub(r"[^a-z0-9]", "", str(s).strip().lower())
+
+            def _find_col(names):
+                col_map = {_norm(c): c for c in df.columns}
+                for n in names:
+                    if _norm(n) in col_map:
+                        return col_map[_norm(n)]
+                for c in df.columns:
+                    if any(_norm(x) in _norm(c) for x in names):
+                        return c
+                return None
+
+            region_col = _find_col([
+                "Region", "Area", "Facility", "Warehouse", "Location",
+                "Site", "City", "Branch", "KPI", "Location Name",
+                "منطقة", "الموقع", "المنطقة", "موقع", "فرع",
+            ])
+            if not region_col and len(df.columns) > 0:
+                first_col = df.columns[0]
+                first_vals = df[first_col].dropna().astype(str).str.strip().str.lower()
+                if not first_vals.empty:
+                    sample = " ".join(first_vals.head(5).tolist())
+                    if any(x in sample for x in ("riyadh", "dammam", "jeddah", "central", "eastern", "western")):
+                        region_col = first_col
+                else:
+                    region_col = first_col
+
+            hit_miss_col = _find_col(["HIT or MISS", "Hit or Miss", "Hit or MISS", "Hit/Miss", "Status", "Hit - Miss"])
+            if not hit_miss_col and region_col:
+                for c in df.columns:
+                    if c == region_col:
+                        continue
+                    cl = _norm(c)
+                    if "hit" in cl or "miss" in cl:
+                        hit_miss_col = c
+                        break
+
+            def _norm_region(val):
+                v = (str(val) or "").strip().lower()
+                if "riyadh" in v or v == "ruh":
+                    return "Riyadh"
+                if "dammam" in v or "damam" in v:
+                    return "Dammam"
+                if "jeddah" in v or "jedd" in v:
+                    return "Jeddah"
+                if "central" in v:
+                    return "Riyadh"
+                if "eastern" in v or "east" in v:
+                    return "Dammam"
+                if "western" in v or "west" in v:
+                    return "Jeddah"
+                return None
+
+            FACILITIES = ["Riyadh", "Dammam", "Jeddah"]
+            if hit_miss_col:
+                df["_hm"] = df[hit_miss_col].astype(str).str.strip().str.lower()
+                df["HIT or MISS"] = df["_hm"].map(lambda x: "Hit" if x == "hit" else ("Miss" if x == "miss" else (x.title() if x else "")))
+                df = df.drop(columns=["_hm"], errors="ignore")
+            else:
+                df["HIT or MISS"] = ""
+
+            if region_col:
+                df["_RegionNorm"] = df[region_col].apply(_norm_region)
+            else:
+                df["_RegionNorm"] = None
+
+            def _safe_val(val):
+                if val is None or (isinstance(val, float) and (pd.isna(val) or val != val)):
+                    return ""
+                if isinstance(val, (pd.Timestamp, datetime.datetime)):
+                    try:
+                        return val.strftime("%Y-%m-%d %H:%M") if hasattr(val, "strftime") else str(val)
+                    except Exception:
+                        return str(val)
+                return val
+
+            columns = [c for c in df.columns if not str(c).startswith("_")]
+            if "HIT or MISS" not in columns and "HIT or MISS" in df.columns:
+                columns.append("HIT or MISS")
+            if hit_miss_col and hit_miss_col != "HIT or MISS" and hit_miss_col in columns:
+                columns = [c for c in columns if c != hit_miss_col]
+
+            rows = []
+            rows_by_region = {"Riyadh": [], "Dammam": [], "Jeddah": []}
+            for _, r in df.iterrows():
+                row = {}
+                for c in columns:
+                    v = r.get(c, r.get(c) if c in r else "")
+                    row[c] = _safe_val(v)
+                rows.append(row)
+                rn = r.get("_RegionNorm")
+                if rn in rows_by_region:
+                    rows_by_region[rn].append(row)
+
+            total = len(rows)
+            hit_count = sum(1 for row in rows if str(row.get("HIT or MISS", "")).strip().lower() == "hit")
+            miss_count = sum(1 for row in rows if str(row.get("HIT or MISS", "")).strip().lower() == "miss")
+            hit_pct = round((hit_count / total) * 100, 2) if total else 0
+            target = 99
+            stats = {"total": total, "hit": hit_count, "miss": miss_count, "hit_pct": hit_pct, "target": target}
+
+            chart_data = []
+            if region_col and df["_RegionNorm"].notna().any():
+                facility_colors = {"Riyadh": "#9084ad", "Dammam": "#e8f1fb", "Jeddah": "#538fe7"}
+                for f in FACILITIES:
+                    chart_data.append({
+                        "type": "column",
+                        "name": f"{f} Hit %",
+                        "color": facility_colors.get(f, "#74c0fc"),
+                        "valueSuffix": "%",
+                        "dataPoints": [{"label": "Inventory", "y": 100}],
+                    })
+
+            facility_codes = sorted(df[region_col].dropna().astype(str).str.strip().unique().tolist()) if region_col else ["All"]
+            months = []
+            month_col = _find_col(["Month", "month", "الشهر"])
+            if month_col and month_col in df.columns:
+                months = sorted(df[month_col].dropna().astype(str).str.strip().unique().tolist())
+            sub_tables = [{
+                "id": "sub-table-inventory-detail",
+                "title": "Inventory",
+                "columns": columns,
+                "data": rows,
+                "chart_data": [],
+                "full_width": True,
+                "facility_name": None,
+                "filter_options": {
+                    "facility_codes": facility_codes,
+                    "months": months,
+                    "hit_miss": ["Hit", "Miss"],
+                    "facility_column": region_col or "",
+                },
+            }]
+            tab_data = {
+                "name": "Inventory",
+                "sub_tables": sub_tables,
+                "chart_data": chart_data,
+                "stats": stats,
+            }
+            html = render_to_string(
+                "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
+                {"tab": tab_data, "selected_month": None},
+            )
+            return {
+                "detail_html": html,
+                "sub_tables": sub_tables,
+                "chart_data": chart_data,
+                "stats": stats,
+                "tab_data": tab_data,
+            }
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            return {
+                "detail_html": f"<p class='text-danger'>⚠️ Error processing Inventory: {e}</p>",
+                "sub_tables": [],
+                "chart_data": [],
+                "stats": {},
+                "tab_data": {"name": "Inventory"},
+            }
+
     def filter_inbound(self, request, selected_month=None, selected_months=None, tab_name=None):
         """
         تاب Inbound أو Return & Refusal: يقرأ من شيت Inbound (أو Return).
@@ -4501,9 +4783,15 @@ class UploadExcelViewRoche(View):
             sheet_name = None
             is_return_tab = (tab_name or "").strip().lower() == "return & refusal"
             if is_return_tab:
-                sheet_name = next((s for s in xls.sheet_names if "return" in (s or "").lower() and "refusal" not in (s or "").lower()), None)
+                sheet_name = next((s for s in xls.sheet_names if (s or "").strip().lower() == "return & refusal"), None)
+                if not sheet_name:
+                    sheet_name = next((s for s in xls.sheet_names if "return" in (s or "").lower() and "refusal" in (s or "").lower()), None)
+                if not sheet_name:
+                    sheet_name = next((s for s in xls.sheet_names if "return" in (s or "").lower()), None)
                 if not sheet_name:
                     sheet_name = next((s for s in xls.sheet_names if (s or "").strip().lower() == "return"), None)
+                if not sheet_name:
+                    sheet_name = next((s for s in xls.sheet_names if "rma" in (s or "").lower()), None)
             if not sheet_name:
                 for s in xls.sheet_names:
                     if "ARAMCO Inbound Report" in (s or "").strip():
@@ -4520,21 +4808,24 @@ class UploadExcelViewRoche(View):
 
             df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl")
             if df.empty:
+                msg = "Return sheet is empty." if is_return_tab else "Inbound sheet is empty."
                 return {
-                    "detail_html": "<p class='text-warning'>⚠️ Inbound sheet is empty.</p>",
+                    "detail_html": f"<p class='text-warning'>⚠️ {msg}</p>",
                     "sub_tables": [],
                     "chart_data": [],
                 }
 
             df.columns = df.columns.astype(str).str.strip()
 
-            # إذا الصف الأول عنوان (مثل "ARAMCO Inbound Report") والرؤوس في صف تالي، نكتشف صف الرؤوس
+            # إذا الصف الأول عنوان (مثل "ARAMCO Inbound Report" أو "Return & Refusal") والرؤوس في صف تالي، نكتشف صف الرؤوس
             first_col = str(df.columns[0]).strip() if len(df.columns) else ""
-            if (
+            need_header_detect = (
                 first_col.startswith("Unnamed:")
                 or first_col == "ARAMCO Inbound Report"
                 or (first_col and "inbound report" in first_col.lower())
-            ):
+                or (is_return_tab and first_col and ("return" in first_col.lower() or "refusal" in first_col.lower()))
+            )
+            if need_header_detect:
                 raw = pd.read_excel(
                     excel_path, sheet_name=sheet_name, engine="openpyxl", header=None
                 )
@@ -4550,6 +4841,11 @@ class UploadExcelViewRoche(View):
                             and ("shipment" in cells or "shipment_nbr" in cells)
                             and ("create" in cells or "creation" in cells)
                             and ("received" in cells or "lpn" in cells)
+                        ):
+                            header_row_idx = idx
+                            break
+                        if is_return_tab and header_row_idx is None and (
+                            ("facility" in cells or "region" in cells) and ("shipment" in cells or "order" in cells or "return" in cells)
                         ):
                             header_row_idx = idx
                             break
@@ -4736,7 +5032,10 @@ class UploadExcelViewRoche(View):
                     if not ship_id:
                         continue
                     lpn_count = lpn_per_shipment.get(ship_id, 0)
-                    allowed_days = 2 if lpn_count >= 50 else 1
+                    if facility_name == "Jeddah":
+                        allowed_days = 2
+                    else:
+                        allowed_days = 2 if lpn_count >= 50 else 1
                     create_ts = create_min.get(ship_id)
                     received_ts = received_max.get(ship_id)
                     if pd.isna(create_ts) or pd.isna(received_ts):

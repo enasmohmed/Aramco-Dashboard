@@ -113,7 +113,7 @@
 </style>
 
 
-{% if not tab.outbound_html and not tab.inbound_html and tab.name|lower != 'return & refusal' and tab.name|lower != 'expiry' and tab.name|lower != 'pods update' and tab.name|lower != 'outbound shipments' %}
+{% if not tab.outbound_html and not tab.inbound_html and tab.name|lower != 'return & refusal' and tab.name|lower != 'expiry' and tab.name|lower != 'pods update' and tab.name|lower != 'outbound shipments' and tab.name|lower != 'inventory' %}
 {% with kpi_table=tab.sub_tables.0.data %}
 <div class="container-fluid px-0">
   <div class="row g-4 mx-0">
@@ -685,7 +685,7 @@
   {# ================= OUTBOUND SHIPMENTS: الشارت أولاً ثم 3 جداول (المدن) ثم جدول الإكسل بالتفاصيل ================= #}
   {% elif tab_name_lower == 'outbound shipments' %}
   <div class="col-12">
-    {# ===== 0) كروت KPI: Total / Successful / Failed Shipments + Target (تظهر فقط لو في داتا) ===== #}
+    {# ===== 0) كروت KPI: Total / Successful / Failed Shipments + Target (زي Inbound: العدد والنسبة) ===== #}
     {% if tab.stats.total %}
     <div class="row g-4 mx-0 mb-4">
       <div class="col-12 col-md-6 col-lg-3">
@@ -700,14 +700,15 @@
           <div class="kpi-icon text-success"><i class="bi bi-check-circle-fill"></i></div>
           <div class="kpi-title">Successful Shipments</div>
           <div class="kpi-value">{{ tab.stats.hit_pct|default:0|floatformat:0 }}%</div>
-          <small class="text-success">Hit (≤2 days)</small>
+          <small class="text-success d-block mt-1">{{ tab.stats.hit|default:0 }} shipments</small>
         </div>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
         <div class="kpi-card text-center danger">
           <div class="kpi-icon text-danger"><i class="bi bi-x-circle-fill"></i></div>
           <div class="kpi-title">Failed Shipments</div>
-          <div class="kpi-value">{{ tab.stats.miss|default:0 }}</div>
+          <div class="kpi-value">{% if tab.stats.total %}{% widthratio tab.stats.miss tab.stats.total 100 %}{% else %}0{% endif %}%</div>
+          <small class="text-muted d-block mt-1">{{ tab.stats.miss|default:0 }} shipments</small>
         </div>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
@@ -925,6 +926,203 @@
                       No data available
                     </td>
                   </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {# ================= INVENTORY: كروت KPI + شارت + جداول المناطق الثلاث ================= #}
+  {% elif tab_name_lower == 'inventory' %}
+  <div class="col-12">
+    {# ===== 0) كروت KPI: Total / Successful / Failed / Target ===== #}
+    {% if tab.stats.total %}
+    <div class="row g-4 mx-0 mb-4">
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center">
+          <div class="kpi-icon text-primary"><i class="bi bi-truck"></i></div>
+          <div class="kpi-title">Total Shipments</div>
+          <div class="kpi-value">{{ tab.stats.total|default:0 }}</div>
+        </div>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center success">
+          <div class="kpi-icon text-success"><i class="bi bi-check-circle-fill"></i></div>
+          <div class="kpi-title">Successful Shipments</div>
+          <div class="kpi-value">{{ tab.stats.hit_pct|default:0|floatformat:0 }}%</div>
+          <small class="text-success d-block mt-1">{{ tab.stats.hit|default:0 }} shipments</small>
+        </div>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center danger">
+          <div class="kpi-icon text-danger"><i class="bi bi-x-circle-fill"></i></div>
+          <div class="kpi-title">Failed Shipments</div>
+          <div class="kpi-value">{% if tab.stats.total %}{% widthratio tab.stats.miss tab.stats.total 100 %}{% else %}0{% endif %}%</div>
+          <small class="text-muted d-block mt-1">{{ tab.stats.miss|default:0 }} shipments</small>
+        </div>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center">
+          <div class="kpi-icon text-secondary"><i class="bi bi-bullseye"></i></div>
+          <div class="kpi-title">Target</div>
+          <div class="kpi-value">≥ {{ tab.stats.target|default:99 }}%</div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {# ===== 1) الشارت في أول ديف ===== #}
+    {% if tab.chart_data %}
+    <div class="row mb-4">
+      <div class="col-12">
+        <div class="table-card">
+          {% render_chart tab.name %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {# ===== 2) جداول المناطق الثلاث (Hit / Miss لكل شهر) ===== #}
+    {% for sub in tab.sub_tables %}
+      {% if sub.facility_name %}
+    <div class="row mb-4">
+      <div class="col-12">
+        <div class="table-card">
+          <h5 class="text-center mt-3 mb-3 fw-bold" style="color: #9084ad">{{ sub.title }}</h5>
+          <div class="table-responsive custom-scrollbar table-top" style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
+            <table class="table table-striped table-bordered text-center align-middle mb-0 inbound-facility-table">
+              <thead class="table-light">
+                {% if sub.id == 'sub-table-inventory-facilities-hit' %}
+                <tr>
+                  <th class="text-nowrap" style="min-width: 4rem;" rowspan="2">KPI</th>
+                  {% for col in sub.columns|slice:"1:" %}
+                  {% if forloop.counter0|divisibleby:2 %}
+                  {% with parts=col|split:" " %}
+                  <th class="text-center text-nowrap" colspan="2">{{ parts.0 }}</th>
+                  {% endwith %}
+                  {% endif %}
+                  {% endfor %}
+                </tr>
+                <tr>
+                  {% for col in sub.columns|slice:"1:" %}
+                  {% with parts=col|split:" " %}
+                  <th class="text-nowrap" style="min-width: 4rem;">{{ parts.1|default:parts.0 }}</th>
+                  {% endwith %}
+                  {% endfor %}
+                </tr>
+                {% else %}
+                <tr>
+                  {% for col in sub.columns %}
+                  <th class="text-nowrap" style="min-width: 4rem;">{{ col }}</th>
+                  {% endfor %}
+                </tr>
+                {% endif %}
+              </thead>
+              <tbody>
+                {% for row in sub.data %}
+                <tr>
+                  {% for col in sub.columns %}
+                  <td class="text-nowrap" style="min-width: 4rem;">{{ row|get_item:col }}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+      {% endif %}
+    {% endfor %}
+
+    {# ===== 3) جدول Inventory Shipments Detail (زي Inbound) مع فلاتر وبادج Hit/Miss ===== #}
+    {% for sub in tab.sub_tables %}
+      {% if sub.full_width %}
+    <div class="row mt-4">
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header pb-0 card-no-border text-center">
+            <h4 class="mb-2">{{ sub.title }}</h4>
+          </div>
+          {% if sub.filter_options and sub.filter_options.hit_miss %}
+          <div class="card border-0 shadow-sm mb-2 mx-3">
+            <div class="card-body py-2 px-3">
+              <div class="row g-3 align-items-end filter-row">
+                {% if sub.filter_options.facility_codes %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Facility</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="facility">
+                    <option value="">All</option>
+                    {% for opt in sub.filter_options.facility_codes %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                {% endif %}
+                {% if sub.filter_options.months %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Month</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="month">
+                    <option value="">All</option>
+                    {% for opt in sub.filter_options.months %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                {% endif %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Hit or Miss</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="hit-miss">
+                    <option value="">All</option>
+                    {% for opt in sub.filter_options.hit_miss %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+          <div class="card-body text-center">
+            <div class="table-responsive custom-scrollbar">
+              <table class="table table-bordered" id="inventory-shipments-detail-table">
+                <thead class="table-primary">
+                  <tr role="row">
+                    {% for col in sub.columns %}
+                    <th class="text-nowrap fw-semibold">{{ col }}</th>
+                    {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in sub.data %}
+                  <tr role="row" {% if sub.filter_options %}data-facility="{{ row|get_item:sub.filter_options.facility_column|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:'' }}"{% endif %}>
+                    {% for col in sub.columns %}
+                    {% with value=row|get_item:col %}
+                    {% if col == 'HIT or MISS' or col|lower == 'hit or miss' or col|lower == 'hit/miss' %}
+                    <td>
+                      {% if value|default_if_none:""|trim|lower == "hit" %}
+                      <span class="badge bg-success rounded-pill d-inline-flex align-items-center gap-1 text-uppercase"><i class="bi bi-check-circle-fill"></i> Hit</span>
+                      {% elif value|default_if_none:""|trim|lower == "miss" %}
+                      <span class="badge bg-danger rounded-pill d-inline-flex align-items-center gap-1 text-uppercase"><i class="bi bi-x-circle-fill"></i> Miss</span>
+                      {% elif value|default_if_none:""|trim|lower == "pending" %}
+                      <span class="badge bg-warning text-dark rounded-pill">Pending</span>
+                      {% else %}
+                      <span class="badge bg-light text-dark rounded-pill">{{ value|default:"—" }}</span>
+                      {% endif %}
+                    </td>
+                    {% else %}
+                    <td>{{ value }}</td>
+                    {% endif %}
+                    {% endwith %}
+                    {% endfor %}
+                  </tr>
+                  {% empty %}
+                  <tr><td colspan="{{ sub.columns|length }}" class="text-muted text-center">No data available</td></tr>
                   {% endfor %}
                 </tbody>
               </table>
@@ -1567,7 +1765,7 @@
 
 <script>
       (function() {
-        var table = document.getElementById('inbound-shipments-detail-table') || document.getElementById('outbound-shipments-detail-table');
+        var table = document.getElementById('inbound-shipments-detail-table') || document.getElementById('outbound-shipments-detail-table') || document.getElementById('inventory-shipments-detail-table');
         if (!table) return;
         var card = table.closest('.card');
         var tbody = table.querySelector('tbody');
