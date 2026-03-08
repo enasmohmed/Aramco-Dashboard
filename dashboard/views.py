@@ -288,16 +288,13 @@ def _is_dashboard_excel_filename(name):
 
 def _read_inbound_data_from_excel(excel_path):
     """
-    يقرأ بيانات Inbound (KPI + Pending Shipments) من ملف الإكسل.
-    الشيت: "Inbound" أو أول شيت اسمه يحتوي "inbound".
-    أعمدة الـ KPI (حسب الطلب):
-    - Vehicle_ID: كل يوم بيومه نشيل المتكرر (unique per day) ثم نجمع عدد المركبات لكل الأيام → Number of Vehicles
-    - Shipment_ID: نفس المنطق يوم بيوم unique ثم جمع → Number of Shipments
-    - Nbr_LPNs: مجموع كل القيم (27+18+13+...) → Number of Pallets (LPNs)
-    - Total_Qty: مجموع كل القيم → Total Quantity
-    عمود التاريخ: أي عمود اسمه يحتوي date/receipt/shipment date (للتجميع يوم بيوم).
-    إن لم يوجد عمود تاريخ، نعتبر كل البيانات يوم واحد.
-    Pending Shipments: إن وُجدت أعمدة Label/Status, Value, Pct, Color في نفس الشيت أو شيت آخر نستخدمها.
+    يقرأ بيانات Inbound (KPI + Pending Shipments) من ملف الإكسل (نفس ملف التابات all_sheet.xlsx).
+    الشيت: "ARAMCO Inbound Report" أو شيت يحتوي "inbound".
+    كروت الـ KPI (من شيت ARAMCO Inbound Report):
+    - Number of Shipments: عمود Shipment_nbr — عدد القيم المميزة (حذف المتكرر)
+    - Number of Pallets (LPNs): عمود LPN — عدد القيم المميزة (حذف المتكرر)
+    - Total Quantity: عمود Received QTY — مجموع كل القيم
+    Pending Shipments: من عمود Status في نفس الشيت إن وُجد.
     """
     try:
         xls = pd.ExcelFile(excel_path, engine="openpyxl")
@@ -305,96 +302,97 @@ def _read_inbound_data_from_excel(excel_path):
         return None
     sheet_name = None
     for name in xls.sheet_names:
-        if "inbound" in name.lower():
+        if "ARAMCO Inbound Report" in (name or "").strip():
             sheet_name = name
             break
+    if not sheet_name:
+        for name in xls.sheet_names:
+            if "inbound" in (name or "").lower():
+                sheet_name = name
+                break
     if not sheet_name:
         sheet_name = xls.sheet_names[0] if xls.sheet_names else None
     if not sheet_name:
         return None
     try:
-        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+        raw = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=None)
     except Exception:
         return None
+    if raw.empty or raw.shape[0] < 2:
+        return None
+
+    # كشف صف الرؤوس (مثل filter_inbound): لو الصف الأول عنوان مثل "ARAMCO Inbound Report" نبحث عن صف فيه facility + shipment + create + received
+    first_col = str(raw.iloc[0, 0]).strip() if raw.shape[1] else ""
+    need_header_detect = (
+        first_col.startswith("Unnamed:")
+        or "ARAMCO" in first_col
+        or "inbound report" in first_col.lower()
+        or (len(first_col) > 30 and "shipment" not in first_col.lower())
+    )
+    df = None
+    if need_header_detect and raw.shape[0] >= 2:
+        header_row_idx = None
+        for idx in range(min(10, raw.shape[0])):
+            row = raw.iloc[idx]
+            cells = " ".join(str(c).strip().lower() for c in row.dropna().astype(str))
+            if (
+                "facility" in cells or "region" in cells
+            ) and ("shipment" in cells or "shipment_nbr" in cells or "shipment nbr" in cells) and (
+                "create" in cells or "creation" in cells or "received" in cells or "lpn" in cells
+            ):
+                header_row_idx = idx
+                break
+        if header_row_idx is not None:
+            headers = [str(c).strip() if pd.notna(c) and str(c).strip() else f"Col_{i}" for i, c in enumerate(raw.iloc[header_row_idx].values)]
+            df = raw.iloc[header_row_idx + 1:].copy()
+            df.columns = headers
+            df = df.reset_index(drop=True)
+    if df is None:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
     if df.empty or len(df) < 1:
         return None
 
-    # تطبيع أسماء الأعمدة: strip + lower للبحث
     df.columns = [str(c).strip() for c in df.columns]
-    cols_lower = {c.lower(): c for c in df.columns if c}
 
-    def _col(*keys):
-        for k in keys:
-            if k.lower() in cols_lower:
-                return cols_lower[k.lower()]
+    def _norm(s):
+        return re.sub(r"[^a-z0-9]", "", str(s).strip().lower())
+
+    def _find_col(possible_names):
+        norm_map = {_norm(c): c for c in df.columns}
+        for name in possible_names:
+            n = _norm(name)
+            if n in norm_map:
+                return norm_map[n]
+        for col in df.columns:
+            cn = _norm(col)
+            if any(_norm(x) in cn for x in possible_names):
+                return col
         return None
 
-    # عمود التاريخ (للتجميع يوم بيوم)
-    date_col = None
-    for c in df.columns:
-        cl = c.lower()
-        if "date" in cl or "receipt" in cl or ("shipment" in cl and "date" in cl) or cl == "day":
-            date_col = c
-            break
-    if not date_col and df.columns.size > 0:
-        for c in df.columns:
-            try:
-                pd.to_datetime(df[c].dropna().head(20), errors="coerce")
-                date_col = c
-                break
-            except Exception:
-                continue
+    # Number of Shipments: عمود Shipment_nbr — عدد المميز (حذف المتكرر)
+    shipment_col = _find_col([
+        "Shipment_nbr", "Shipment nbr", "Shipment Nbr", "Shipment_ID", "Shipment ID",
+        "Shipment No", "Shipment Number", "ShipmentNbr",
+    ])
+    n_shipments = int(df[shipment_col].dropna().astype(str).str.strip().nunique()) if shipment_col else 0
 
-    vehicle_col = _col("Vehicle_ID", "Vehicle ID", "Vehicle_ID")
-    shipment_col = _col("Shipment_ID", "Shipment ID", "Shipment_ID")
-    lpn_col = _col("Nbr_LPNs", "Nbr LPNs", "LPNs")
-    qty_col = _col("Total_Qty", "Total_Qty", "Total Qty", "Total_Qty")
+    # Number of Pallets (LPNs): عمود LPN — عدد المميز (حذف المتكرر)
+    lpn_col = _find_col(["LPN", "LPNs", "Lpn", "LPN Nbr", "LPN_nbr", "Nbr_LPNs", "Nbr LPNs"])
+    n_pallets = int(df[lpn_col].dropna().astype(str).str.strip().nunique()) if lpn_col else 0
 
-    def _to_int(val):
+    # Total Quantity: عمود Received QTY — مجموع كل القيم
+    qty_col = _find_col([
+        "Received QTY", "Received_QTY", "Received Qty", "ReceivedQTY",
+        "Total_Qty", "Total Qty", "Total Quantity", "Received Quantity",
+    ])
+    def _to_num(val):
         if val is None or (isinstance(val, float) and pd.isna(val)):
-            return None
+            return 0
         try:
-            return int(float(val))
+            return float(str(val).replace(",", "").strip())
         except (ValueError, TypeError):
-            return None
-
-    n_vehicles = 0
-    n_shipments = 0
-    n_pallets = 0
-    n_qty = 0
-
-    if date_col and (vehicle_col or shipment_col):
-        # تجميع يوم بيوم
-        df_date = df.copy()
-        df_date["_date"] = pd.to_datetime(df_date[date_col], errors="coerce")
-        df_date = df_date.dropna(subset=["_date"])
-        df_date["_day"] = df_date["_date"].dt.normalize()
-
-        if vehicle_col:
-            # كل يوم: عدد الـ Vehicle_ID المميزة، ثم نجمع كل الأيام
-            per_day_vehicles = df_date.groupby("_day")[vehicle_col].nunique()
-            n_vehicles = int(per_day_vehicles.sum())
-        if shipment_col:
-            # كل يوم: عدد الـ Shipment_ID المميزة، ثم نجمع كل الأيام
-            per_day_shipments = df_date.groupby("_day")[shipment_col].nunique()
-            n_shipments = int(per_day_shipments.sum())
-    else:
-        # بدون تاريخ: نعتبر كل الصفوف يوم واحد (unique للمركبات والشحنات)
-        if vehicle_col:
-            n_vehicles = int(df[vehicle_col].nunique())
-        if shipment_col:
-            n_shipments = int(df[shipment_col].nunique())
-
-    if lpn_col:
-        n_pallets = _to_int(df[lpn_col].sum()) or 0
-    if qty_col:
-        n_qty = _to_int(df[qty_col].sum()) or 0
-
-    # لا نضع قيم يدوية — لو مفيش عمود القيمة تبقى 0 (الداتا من الشيت فقط)
-    # if not vehicle_col: n_vehicles = 0  (already 0)
-    # if not shipment_col: n_shipments = 0
-    # if not lpn_col: n_pallets = 0
-    # if not qty_col: n_qty = 0
+            return 0
+    n_qty = int(round(df[qty_col].fillna(0).apply(_to_num).sum())) if qty_col else 0
 
     if n_qty >= 1000:
         qty_display = f"{n_qty / 1000:.1f}k".rstrip("0").rstrip(".")
@@ -404,17 +402,22 @@ def _read_inbound_data_from_excel(excel_path):
         qty_display = str(n_qty)
 
     inbound_kpi = {
-        "number_of_vehicles": n_vehicles,
+        "number_of_vehicles": 0,
         "number_of_shipments": n_shipments,
         "number_of_pallets": n_pallets,
         "total_quantity": n_qty,
         "total_quantity_display": qty_display,
     }
 
-    # Pending Shipments: من عمود Status في نفس شيت Inbound — In Transit, Receiving Complete, Verified
-    # يوم بيوم نجمع عدد الشحنات لكل حالة ثم نجمع التوتال، ثم النسبة = (عدد الحالة / التوتال) * 100
+    # Pending Shipments: من عمود Status في نفس الشيت — In Transit, Receiving Complete, Verified
+    date_col = None
+    for c in df.columns:
+        cl = c.lower()
+        if "date" in cl or "timestamp" in cl or "receipt" in cl:
+            date_col = c
+            break
     pending = []
-    status_col = _col("Status", "status")
+    status_col = _find_col(["Status", "status", "Shipment Status"])
     STATUS_LABELS = (
         ("in transit", "In Transit", "#87CEEB"),
         ("receiving complete", "Receiving Complete", "#2E7D32"),
@@ -466,78 +469,149 @@ def _read_inbound_data_from_excel(excel_path):
 
 def _read_outbound_data_from_excel(excel_path):
     """
-    يقرأ بيانات Outbound من شيت Outbound_Data في ملف الداشبورد.
-    - عمود Status: نفلتر "Released" → released_orders، "Picked" → picked_orders
-    - عمود Order_ID: نحذف المتكرر (unique) ونحسب عدد الطلبات لكل حالة
+    يقرأ بيانات Outbound للداشبورد من نفس ملف التابات (all_sheet.xlsx).
+    - Released Orders: من شيت ARAMCO Outbound Report، عمود Order Nbr — عدد المميز (حذف المتكرر).
+    - Picked Orders: من شيت ARAMCO Outbound Report، عمود Order Nbr مع فلتر Order Status = Shipped — عدد المميز.
+    - Number of Pallets (LPNs): من شيت Outbound2، عمود LPN Nbr — عدد المميز (حذف المتكرر).
     """
     try:
         xls = pd.ExcelFile(excel_path, engine="openpyxl")
     except Exception:
         return None
-    sheet_name = None
-    for name in xls.sheet_names:
-        if "outbound_data" in name.lower().replace(" ", "").replace("_", ""):
-            sheet_name = name
-            break
-    if not sheet_name:
-        for name in xls.sheet_names:
-            if "outbound" in name.lower():
-                sheet_name = name
-                break
-    if not sheet_name:
-        return None
-    try:
-        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
-    except Exception:
-        return None
-    if df.empty or len(df) < 1:
-        return None
 
-    df.columns = [str(c).strip() for c in df.columns]
-    cols_lower = {c.lower(): c for c in df.columns if c}
+    def _norm(s):
+        return re.sub(r"[^a-z0-9]", "", str(s).strip().lower())
 
-    def _col(*keys):
-        for k in keys:
-            k_norm = k.lower().replace(" ", "").replace("_", "")
-            for col in cols_lower:
-                if col.replace(" ", "").replace("_", "") == k_norm:
-                    return cols_lower[col]
-            if k.lower() in cols_lower:
-                return cols_lower[k.lower()]
+    def _find_col(df, possible_names):
+        norm_map = {_norm(c): c for c in df.columns}
+        for name in possible_names:
+            n = _norm(name)
+            if n in norm_map:
+                return norm_map[n]
+        for col in df.columns:
+            cn = _norm(col)
+            if any(_norm(x) in cn for x in possible_names):
+                return col
         return None
-
-    status_col = _col("Status", "status")
-    order_col = _col("Order_ID", "Order ID", "Order_ID", "OrderID")
-    if not status_col or not order_col:
-        return None
-
-    # تطبيع Status للمقارنة
-    s = df[status_col].fillna("").astype(str).str.strip().str.lower()
-    df["_status_norm"] = s.str.replace(r"\s+", " ", regex=True)
-
-    released_mask = df["_status_norm"] == "released"
-    picked_mask = df["_status_norm"] == "picked"
 
     released_orders = 0
     picked_orders = 0
-    if released_mask.any():
-        released_orders = df.loc[released_mask, order_col].dropna().astype(str).str.strip().nunique()
-    if picked_mask.any():
-        picked_orders = df.loc[picked_mask, order_col].dropna().astype(str).str.strip().nunique()
-
-    # Number of Pallets (LPNs) من الشيت — عمود Pallets_number أو أي اسم معروف، نجمع القيم
-    lpn_col = _col("Pallets_number", "Pallets number", "LPNs", "LPN", "Nbr_LPNs", "Nbr LPNs", "Pallets", "Number of Pallets")
     number_of_pallets = 0
-    keys_from_sheet = ["released_orders", "picked_orders"]
-    if lpn_col:
-        number_of_pallets = int(pd.to_numeric(df[lpn_col], errors="coerce").fillna(0).sum())
-        keys_from_sheet.append("number_of_pallets")
+    keys_from_sheet = ["released_orders", "picked_orders", "number_of_pallets"]
+
+    # --- شيت ARAMCO Outbound Report: Released Orders + Picked Orders ---
+    outbound1_name = None
+    for name in xls.sheet_names:
+        if "ARAMCO Outbound Report" in (name or "").strip():
+            outbound1_name = name
+            break
+    if not outbound1_name:
+        for name in xls.sheet_names:
+            if "outbound" in (name or "").lower() and "report" in (name or "").lower():
+                outbound1_name = name
+                break
+    if not outbound1_name:
+        for name in xls.sheet_names:
+            if "outbound" in (name or "").lower():
+                outbound1_name = name
+                break
+
+    if outbound1_name:
+        try:
+            raw1 = pd.read_excel(excel_path, sheet_name=outbound1_name, engine="openpyxl", header=None)
+        except Exception:
+            raw1 = None
+        if raw1 is not None and not raw1.empty and raw1.shape[0] >= 2:
+            first_col = str(raw1.iloc[0, 0]).strip() if raw1.shape[1] else ""
+            need_header = (
+                first_col.startswith("Unnamed:")
+                or "ARAMCO" in first_col
+                or "outbound report" in first_col.lower()
+            )
+            df1 = None
+            if need_header:
+                for idx in range(min(10, raw1.shape[0])):
+                    row = raw1.iloc[idx]
+                    cells = " ".join(str(c).strip().lower() for c in row.dropna().astype(str))
+                    if ("order" in cells and "nbr" in cells) or ("order" in cells and "number" in cells):
+                        headers = [str(c).strip() if pd.notna(c) and str(c).strip() else f"Col_{i}" for i, c in enumerate(raw1.iloc[idx].values)]
+                        df1 = raw1.iloc[idx + 1:].copy()
+                        df1.columns = headers
+                        df1 = df1.reset_index(drop=True)
+                        break
+            if df1 is None:
+                df1 = pd.read_excel(excel_path, sheet_name=outbound1_name, engine="openpyxl", header=0)
+            df1.columns = [str(c).strip() for c in df1.columns]
+
+            order_nbr_col = _find_col(df1, ["Order Nbr", "Order Nbr.", "Order Number", "Order No", "Order #", "Order_ID", "Order ID"])
+            status_col = _find_col(df1, ["Order Status", "Order_Status", "Status", "OrderStatus"])
+
+            if order_nbr_col:
+                order_series = df1[order_nbr_col].dropna().astype(str).str.strip()
+                order_series = order_series[order_series != ""]
+                released_orders = int(order_series.nunique())
+
+                if status_col:
+                    status_norm = df1[status_col].fillna("").astype(str).str.strip().str.lower()
+                    shipped_mask = status_norm == "shipped"
+                    if shipped_mask.any():
+                        picked_orders = int(df1.loc[shipped_mask, order_nbr_col].dropna().astype(str).str.strip().nunique())
+                    else:
+                        picked_orders = 0
+                else:
+                    picked_orders = 0
+        else:
+            try:
+                df1 = pd.read_excel(excel_path, sheet_name=outbound1_name, engine="openpyxl", header=0)
+            except Exception:
+                df1 = None
+            if df1 is not None and not df1.empty:
+                df1.columns = [str(c).strip() for c in df1.columns]
+                order_nbr_col = _find_col(df1, ["Order Nbr", "Order Nbr.", "Order Number", "Order No", "Order #", "Order_ID", "Order ID"])
+                status_col = _find_col(df1, ["Order Status", "Order_Status", "Status"])
+                if order_nbr_col:
+                    order_series = df1[order_nbr_col].dropna().astype(str).str.strip()
+                    order_series = order_series[order_series != ""]
+                    released_orders = int(order_series.nunique())
+                    if status_col:
+                        status_norm = df1[status_col].fillna("").astype(str).str.strip().str.lower()
+                        shipped_mask = status_norm == "shipped"
+                        if shipped_mask.any():
+                            picked_orders = int(df1.loc[shipped_mask, order_nbr_col].dropna().astype(str).str.strip().nunique())
+
+    # --- شيت Outbound2: Number of Pallets (LPNs) من عمود LPN Nbr (شيت مختلف عن ARAMCO Outbound Report) ---
+    outbound2_name = None
+    ob1_lower = (outbound1_name or "").strip().lower()
+    for name in xls.sheet_names:
+        n = (name or "").strip().lower()
+        if n == "outbound2" and n != ob1_lower:
+            outbound2_name = name
+            break
+    if not outbound2_name:
+        for name in xls.sheet_names:
+            n = (name or "").strip().lower()
+            if "outbound" in n and "2" in n and n != ob1_lower:
+                outbound2_name = name
+                break
+
+    if outbound2_name:
+        try:
+            df2 = pd.read_excel(excel_path, sheet_name=outbound2_name, engine="openpyxl", header=0)
+        except Exception:
+            df2 = None
+        if df2 is not None and not df2.empty:
+            df2.columns = [str(c).strip() for c in df2.columns]
+            lpn_col = _find_col(df2, ["LPN Nbr", "LPN_Nbr", "LPN Nbr.", "LPN Number", "LPN No", "LPN"])
+            if lpn_col:
+                lpn_series = df2[lpn_col].dropna().astype(str).str.strip()
+                lpn_series = lpn_series[lpn_series != ""]
+                number_of_pallets = int(lpn_series.nunique())
 
     return {
         "outbound_kpi": {
             "released_orders": int(released_orders),
             "picked_orders": int(picked_orders),
-            "number_of_pallets": number_of_pallets,
+            "number_of_pallets": int(number_of_pallets),
         },
         "outbound_kpi_keys_from_sheet": keys_from_sheet,
     }
@@ -655,36 +729,76 @@ def _read_pods_data_from_excel(excel_path):
 
 def _read_returns_data_from_excel(excel_path):
     """
-    يقرأ من شيت Returns_Data: عمود Return_Status (فلترة مثل PODs: On Time, Pending, Late)،
-    Request_Date للشهور، Return_ID لعدد الشحنات (unique). يرجّع returns_kpi و returns_chart_data.
+    يقرأ من شيت Return (أو Returns):
+    - Total SKUs: من عمود Shipment_nbr — عدد الشحنات المميزة (تحذف المتكرر) = count distinct.
+    - Total LPNs: في الداشبورد يُأخذ من Inbound (number_of_pallets).
+    إن وُجدت أعمدة Return_Status و Request_Date يُبنى returns_chart_data (On Time / Pending / Late).
     """
+    if not excel_path or not os.path.exists(excel_path):
+        return None
     try:
         xls = pd.ExcelFile(excel_path, engine="openpyxl")
     except Exception:
         return None
     sheet_name = None
     for name in xls.sheet_names:
-        n = str(name).strip().lower().replace(" ", "").replace("_", "")
-        if "returnsdata" in n or "returns_data" in n:
+        n = (str(name) or "").strip().lower()
+        if n == "return" or n == "returns":
             sheet_name = name
             break
     if not sheet_name:
         for name in xls.sheet_names:
-            if "returns" in str(name).lower() and "data" in str(name).lower():
+            n = (str(name) or "").strip().lower().replace(" ", "").replace("_", "")
+            if n == "returnsdata" or "returns_data" in n:
                 sheet_name = name
                 break
     if not sheet_name:
         for name in xls.sheet_names:
-            if "return" in str(name).lower():
+            if "return" in (str(name) or "").lower():
                 sheet_name = name
                 break
     if not sheet_name:
         return None
+
+    # قراءة خام ثم كشف صف الرؤوس (قد يكون الشيت يبدأ بعنوان أو صفوف فارغة)
     try:
-        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+        raw = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=None)
     except Exception:
         return None
-    if df.empty or len(df) < 1:
+    if raw.empty or raw.shape[0] < 1:
+        return None
+
+    # شكل الشيت: صف 1 عنوان (مثل ARAMCO Inbound Report)، صف 2 الرؤوس (Facility, Company, Shipment_nbr, LPN, ...)، من صف 3 البيانات
+    df = None
+    header_row_idx = None
+    for idx in range(min(20, raw.shape[0])):
+        row = raw.iloc[idx]
+        cells = " ".join(str(c).strip().lower() for c in row.dropna().astype(str))
+        cells_norm = cells.replace(" ", "").replace("_", "")
+        # عمود Shipment_nbr قد يظهر كـ Shipment_nbr أو Shipment Nbr
+        if "shipmentnbr" in cells_norm:
+            header_row_idx = idx
+            break
+        if "shipment" in cells and "nbr" in cells_norm:
+            header_row_idx = idx
+            break
+        if "facility" in cells_norm and ("shipment" in cells_norm or "lpn" in cells_norm):
+            header_row_idx = idx
+            break
+        if "shipment" in cells and "lpn" in cells:
+            header_row_idx = idx
+            break
+    if header_row_idx is not None:
+        headers = [str(c).strip() if pd.notna(c) and str(c).strip() else f"Col_{i}" for i, c in enumerate(raw.iloc[header_row_idx].values)]
+        df = raw.iloc[header_row_idx + 1:].copy()
+        df.columns = headers
+        df = df.reset_index(drop=True)
+    if df is None:
+        try:
+            df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+        except Exception:
+            return None
+    if df is None or df.empty or len(df) < 1:
         return None
 
     df.columns = [str(c).strip() for c in df.columns]
@@ -700,57 +814,88 @@ def _read_returns_data_from_excel(excel_path):
                 return cols_lower[k.lower()]
         return None
 
+    def _col_contains(*parts):
+        for col in df.columns:
+            c_lower = str(col).lower().replace(" ", "").replace("_", "")
+            if all(p.lower().replace(" ", "").replace("_", "") in c_lower for p in parts):
+                return col
+        return None
+
+    def _col_contains_substring(sub):
+        sub = sub.lower().replace(" ", "").replace("_", "")
+        for col in df.columns:
+            if sub in str(col).lower().replace(" ", "").replace("_", ""):
+                return col
+        return None
+
+    # Total SKUs = عدد الشحنات المميزة من عمود Shipment_nbr (تحذف المتكرر)
+    shipment_nbr_col = _col("Shipment_nbr", "Shipment Nbr", "ShipmentNbr")
+    if not shipment_nbr_col:
+        shipment_nbr_col = _col_contains("Shipment", "nbr")
+    if not shipment_nbr_col:
+        shipment_nbr_col = _col_contains_substring("shipment_nbr")
+    lpn_col = _col("LPN", "LPN Nbr", "LPNNbr")
+
+    def _distinct_count(series):
+        s = series.astype(str).str.strip()
+        s = s.replace("", np.nan).replace("nan", np.nan).dropna()
+        return int(s.nunique())
+
+    total_skus_kpi = 0
+    total_lpns_kpi = 0
+    if shipment_nbr_col:
+        total_skus_kpi = _distinct_count(df[shipment_nbr_col])
+
     status_col = _col("Return_Status", "Return Status", "ReturnStatus")
     date_col = _col("Request_Date", "Request Date", "RequestDate", "Date")
     return_id_col = _col("Return_ID", "Return ID", "ReturnID")
     nbr_skus_col = _col("Nbr_SKUs", "Nbr SKUs", "NbrSKUs")
     nbr_items_col = _col("Nbr_Items", "Nbr Items", "NbrItems")
-    if not status_col or not date_col:
-        return None
-    if not return_id_col:
-        return_id_col = df.columns[0]
 
-    s = df[status_col].fillna("").astype(str).str.strip().str.lower()
-    df["_status_norm"] = s.str.replace(r"\s+", " ", regex=True)
-    valid_statuses = {"on time", "pending", "late"}
-    df = df[df["_status_norm"].isin(valid_statuses)].copy()
-    if df.empty:
-        return None
+    # الشارت (On Time / Pending / Late) يحتاج status و date
+    df_chart = df.copy()
+    months_sorted = []
+    if status_col and date_col:
+        s = df_chart[status_col].fillna("").astype(str).str.strip().str.lower()
+        df_chart["_status_norm"] = s.str.replace(r"\s+", " ", regex=True)
+        valid_statuses = {"on time", "pending", "late"}
+        df_chart = df_chart[df_chart["_status_norm"].isin(valid_statuses)].copy()
+        if not df_chart.empty:
+            df_chart["_date"] = pd.to_datetime(df_chart[date_col], errors="coerce")
+            df_chart = df_chart.dropna(subset=["_date"])
+            df_chart["_month"] = df_chart["_date"].dt.strftime("%b")
+            month_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            months_in_data = df_chart["_month"].unique().tolist()
+            months_sorted = sorted(months_in_data, key=lambda m: month_order.index(m) if m in month_order else 99)
+    else:
+        df_chart = pd.DataFrame()
 
-    df["_date"] = pd.to_datetime(df[date_col], errors="coerce")
-    df = df.dropna(subset=["_date"])
-    df["_month"] = df["_date"].dt.strftime("%b")
-    month_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    months_in_data = df["_month"].unique().tolist()
-    months_sorted = sorted(months_in_data, key=lambda m: month_order.index(m) if m in month_order else 99)
-
-    total_unique_returns = df[return_id_col].dropna().astype(str).str.strip().nunique()
-    total_rows = len(df)
-
-    total_skus_kpi = total_unique_returns
-    total_lpns_kpi = total_rows
-    if nbr_skus_col:
+    # إذا لم يُوجد عمود Shipment_nbr نستخدم المنطق القديم لـ Total SKUs فقط (للتوافق مع شيتات قديمة)
+    if not shipment_nbr_col and return_id_col:
+        total_skus_kpi = _distinct_count(df[return_id_col])
+    elif not shipment_nbr_col and nbr_skus_col:
         total_skus_kpi = int(pd.to_numeric(df[nbr_skus_col], errors="coerce").fillna(0).sum())
-    if nbr_items_col:
-        total_lpns_kpi = int(pd.to_numeric(df[nbr_items_col], errors="coerce").fillna(0).sum())
+
+    # Total LPNs في الداشبورد يُعيّن من Inbound (number_of_pallets) في _get_dashboard_include_context
 
     series_on_time = []
     series_pending = []
     series_late = []
-    for m in months_sorted:
-        grp = df[df["_month"] == m]
-        on_time = (grp["_status_norm"] == "on time").sum()
-        pending = (grp["_status_norm"] == "pending").sum()
-        late = (grp["_status_norm"] == "late").sum()
-        total = on_time + pending + late
-        if total == 0:
-            series_on_time.append(0)
-            series_pending.append(0)
-            series_late.append(0)
-        else:
-            series_on_time.append(round(100.0 * on_time / total, 1))
-            series_pending.append(round(100.0 * pending / total, 1))
-            series_late.append(round(100.0 * late / total, 1))
+    if not df_chart.empty and months_sorted:
+        for m in months_sorted:
+            grp = df_chart[df_chart["_month"] == m]
+            on_time = (grp["_status_norm"] == "on time").sum()
+            pending = (grp["_status_norm"] == "pending").sum()
+            late = (grp["_status_norm"] == "late").sum()
+            total = on_time + pending + late
+            if total == 0:
+                series_on_time.append(0)
+                series_pending.append(0)
+                series_late.append(0)
+            else:
+                series_on_time.append(round(100.0 * on_time / total, 1))
+                series_pending.append(round(100.0 * pending / total, 1))
+                series_late.append(round(100.0 * late / total, 1))
 
     return {
         "returns_kpi": {
@@ -770,72 +915,283 @@ def _read_returns_data_from_excel(excel_path):
 
 def _read_inventory_data_from_excel(excel_path):
     """
-    يقرأ من شيت Inventory_Lots:
-    - عمود LPNs: تجميع كل القيم (مجموع) = Total LPNs.
-    - عمود Snapshot_Date: كل يوم بيومه (للاستخدام لاحقاً في شارت/تحليل).
-    - عمود SKU: حذف المتكرر وعدّ القيم الفريدة فقط = Total SKUs.
+    يقرأ من شيت Inventory (للداشبورد) ويملأ كاردات:
+    - No of Location: Riyadh + Dammam + Jeddah (إما من عمود واحد + Region، أو من أعمدة منفصلة لكل منطقة).
+    - Total Qty: نفس المنطق.
+    الدالة اللي تحط الأرقام في الكارد: هذه + _get_dashboard_include_context يمرّر النتيجة للتمبلت.
     """
+    if not excel_path or not os.path.exists(excel_path):
+        return None
     try:
         xls = pd.ExcelFile(excel_path, engine="openpyxl")
     except Exception:
         return None
     sheet_name = None
     for name in xls.sheet_names:
-        n = str(name).strip().lower().replace(" ", "").replace("_", "")
-        if "inventorylots" in n or "inventory_lots" in n:
+        n = (name or "").strip().lower()
+        if n == "inventory":
             sheet_name = name
             break
     if not sheet_name:
         for name in xls.sheet_names:
-            if "inventory" in str(name).lower() and "lot" in str(name).lower():
-                sheet_name = name
-                break
-    if not sheet_name:
-        for name in xls.sheet_names:
-            if "inventory" in str(name).lower():
+            if "inventory" in (name or "").lower():
                 sheet_name = name
                 break
     if not sheet_name:
         return None
     try:
-        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+        raw = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=None)
     except Exception:
         return None
-    if df.empty or len(df) < 1:
+    if raw.empty or raw.shape[0] < 1:
+        return None
+
+    # شكل الشيت: بلوكات — العمود A فيه اسم المنطقة (DAMMAM / Riyadh / Jeddah) ثم "No of location" ثم "Total Qty"، والقيم في العمود B
+    # مثال: A1=DAMMAM, A2=No of location, B2=769, A3=Total Qty, B3=6958 | A5=Riyadh, A6=No of location, B6=535, ...
+    def _parse_block_value(val):
+        if pd.isna(val):
+            return 0
+        s = str(val).strip().replace(",", "")
+        try:
+            return int(float(s))
+        except (ValueError, TypeError):
+            return 0
+
+    no_of_location_riyadh = 0
+    no_of_location_dammam = 0
+    no_of_location_jeddah = 0
+    total_qty_riyadh = 0
+    total_qty_dammam = 0
+    total_qty_jeddah = 0
+    total_hit = 0
+    total_for_hit_pct = 0
+    current_region = None
+    nrows = raw.shape[0]
+    col_a_idx = 0
+    col_b_idx = 1 if raw.shape[1] > 1 else 0
+    col_c_idx = 2 if raw.shape[1] > 2 else col_b_idx
+
+    for i in range(nrows):
+        a_val = raw.iloc[i, col_a_idx] if col_a_idx < raw.shape[1] else None
+        b_val = raw.iloc[i, col_b_idx] if col_b_idx < raw.shape[1] else None
+        c_val = raw.iloc[i, col_c_idx] if col_c_idx < raw.shape[1] else None
+        a_str = (str(a_val).strip() if pd.notna(a_val) else "").lower()
+        if not a_str:
+            continue
+        # عنوان منطقة
+        if a_str == "dammam" or a_str == "damam":
+            current_region = "Dammam"
+            continue
+        if a_str == "riyadh":
+            current_region = "Riyadh"
+            continue
+        if a_str == "jeddah" or a_str == "jedd":
+            current_region = "Jeddah"
+            continue
+        if current_region is None:
+            continue
+        # صف "No of location" — القيمة في B، وعمود Hit في C إن وُجد
+        if "no of location" in a_str or "noof location" in a_str or (a_str.startswith("no ") and "location" in a_str):
+            v = _parse_block_value(b_val)
+            if current_region == "Riyadh":
+                no_of_location_riyadh = v
+            elif current_region == "Dammam":
+                no_of_location_dammam = v
+            else:
+                no_of_location_jeddah = v
+            total_for_hit_pct += v
+            total_hit += _parse_block_value(c_val)
+            continue
+        # صف "Total Qty" — القيمة في B
+        if "total qty" in a_str or "totalqty" in a_str or (a_str.startswith("total") and "qty" in a_str):
+            v = _parse_block_value(b_val)
+            if current_region == "Riyadh":
+                total_qty_riyadh = v
+            elif current_region == "Dammam":
+                total_qty_dammam = v
+            else:
+                total_qty_jeddah = v
+            continue
+
+    total_no_loc = no_of_location_riyadh + no_of_location_dammam + no_of_location_jeddah
+    total_qty = total_qty_riyadh + total_qty_dammam + total_qty_jeddah
+    hit_pct = round(100.0 * total_hit / total_for_hit_pct, 2) if total_for_hit_pct > 0 else 0
+    # لو لقينا على الأقل قيمة واحدة من البلوكات نرجع النتيجة مباشرة
+    if total_no_loc > 0 or total_qty > 0:
+        return {
+            "inventory_kpi": {
+                "no_of_location": total_no_loc,
+                "no_of_location_riyadh": no_of_location_riyadh,
+                "no_of_location_dammam": no_of_location_dammam,
+                "no_of_location_jeddah": no_of_location_jeddah,
+                "total_qty": total_qty,
+                "total_qty_riyadh": total_qty_riyadh,
+                "total_qty_dammam": total_qty_dammam,
+                "total_qty_jeddah": total_qty_jeddah,
+                "hit_pct": hit_pct,
+                "total_skus": 0,
+                "total_lpns": 0,
+                "utilization_pct": "",
+            },
+        }
+
+    # شكل جدول عادي: كشف صف الرؤوس
+    df = None
+    for idx in range(min(15, raw.shape[0])):
+        row = raw.iloc[idx]
+        cells = " ".join(str(c).strip().lower() for c in row.dropna().astype(str))
+        has_no_loc = ("no of location" in cells or "noof location" in cells or
+                      ("no" in cells and "location" in cells and "number" in cells))
+        has_total_qty = ("total qty" in cells or "totalqty" in cells or
+                         ("total" in cells and "qty" in cells))
+        has_region = "region" in cells or "facility" in cells or "location" in cells or "area" in cells
+        if has_no_loc or has_total_qty or has_region:
+            headers = [str(c).strip() if pd.notna(c) and str(c).strip() else f"Col_{i}" for i, c in enumerate(raw.iloc[idx].values)]
+            df = raw.iloc[idx + 1:].copy()
+            df.columns = headers
+            df = df.reset_index(drop=True)
+            break
+    if df is None:
+        try:
+            df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+        except Exception:
+            return None
+    if df is None or df.empty or len(df) < 1:
         return None
 
     df.columns = [str(c).strip() for c in df.columns]
-    cols_lower = {c.lower(): c for c in df.columns if c}
 
-    def _col(*keys):
-        for k in keys:
-            k_norm = k.lower().replace(" ", "").replace("_", "")
-            for col in cols_lower:
-                if col.replace(" ", "").replace("_", "") == k_norm:
-                    return cols_lower[col]
-            if k.lower() in cols_lower:
-                return cols_lower[k.lower()]
+    def _norm(s):
+        return re.sub(r"[^a-z0-9]", "", str(s).strip().lower())
+
+    def _find_col(possible_names):
+        norm_map = {_norm(c): c for c in df.columns}
+        for name in possible_names:
+            n = _norm(name)
+            if n in norm_map:
+                return norm_map[n]
+        for col in df.columns:
+            cn = _norm(col)
+            if any(_norm(x) in cn for x in possible_names):
+                return col
         return None
 
-    lpns_col = _col("LPNs", "LPN")
-    snapshot_date_col = _col("Snapshot_Date", "Snapshot Date", "SnapshotDate", "Date")
-    sku_col = _col("SKU", "Sku")
+    def _find_col_containing(*parts):
+        """يبحث عن عمود اسمه يحتوي كل الأجزاء (بعد التطبيع)."""
+        for col in df.columns:
+            cn = _norm(col)
+            if all(_norm(p) in cn for p in parts):
+                return col
+        return None
 
-    total_lpns = 0
-    total_skus = 0
+    location_col = _find_col([
+        "Region", "Facility", "Location", "Warehouse", "Site", "Area",
+        "منطقة", "الموقع", "Facility Code", "Location Name", "KPI",
+    ])
+    no_of_location_col = _find_col([
+        "No of location", "No of Location", "No Of Location",
+        "Noof location", "No. of location", "Number of Location", "Number of Locations",
+        "No of locations",
+    ])
+    total_qty_col = _find_col([
+        "Total Qty", "Total_Qty", "Total Qty.", "Total Quantity", "TotalQuantity",
+        "Total QTY",
+    ])
 
-    if lpns_col:
-        total_lpns = int(pd.to_numeric(df[lpns_col], errors="coerce").fillna(0).sum())
+    # أعمدة منفصلة لكل منطقة: No of Location Riyadh, No of Location Dammam, ...
+    no_loc_riyadh_col = _find_col_containing("no", "location", "riyadh") or _find_col_containing("no", "location", "central")
+    no_loc_dammam_col = _find_col_containing("no", "location", "dammam") or _find_col_containing("no", "location", "eastern")
+    no_loc_jeddah_col = _find_col_containing("no", "location", "jeddah") or _find_col_containing("no", "location", "western")
+    total_qty_riyadh_col = _find_col_containing("total", "qty", "riyadh") or _find_col_containing("total", "qty", "central")
+    total_qty_dammam_col = _find_col_containing("total", "qty", "dammam") or _find_col_containing("total", "qty", "eastern")
+    total_qty_jeddah_col = _find_col_containing("total", "qty", "jeddah") or _find_col_containing("total", "qty", "western")
 
-    if sku_col:
-        sku_series = df[sku_col].dropna().astype(str).str.strip()
-        sku_series = sku_series[sku_series != ""]
-        total_skus = int(sku_series.nunique())
+    no_of_location_riyadh = 0
+    no_of_location_dammam = 0
+    no_of_location_jeddah = 0
+    total_qty_riyadh = 0
+    total_qty_dammam = 0
+    total_qty_jeddah = 0
+
+    def _norm_region(val):
+        v = (str(val) or "").strip().lower()
+        if not v:
+            return None
+        if "riyadh" in v or "central" in v or "ruh" in v or "الرياض" in v:
+            return "Riyadh"
+        if "dammam" in v or "eastern" in v or "damam" in v or "الدمام" in v:
+            return "Dammam"
+        if "jeddah" in v or "western" in v or "jedd" in v or "جدة" in v:
+            return "Jeddah"
+        return None
+
+    # الطريقة 1: أعمدة منفصلة لكل منطقة (No of Location Riyadh, Total Qty Dammam, ...)
+    if no_loc_riyadh_col or no_loc_dammam_col or no_loc_jeddah_col or total_qty_riyadh_col or total_qty_dammam_col or total_qty_jeddah_col:
+        def _sum_col(col):
+            if col is None:
+                return 0
+            return int(pd.to_numeric(df[col], errors="coerce").fillna(0).sum())
+        if no_loc_riyadh_col:
+            no_of_location_riyadh = _sum_col(no_loc_riyadh_col)
+        if no_loc_dammam_col:
+            no_of_location_dammam = _sum_col(no_loc_dammam_col)
+        if no_loc_jeddah_col:
+            no_of_location_jeddah = _sum_col(no_loc_jeddah_col)
+        if total_qty_riyadh_col:
+            total_qty_riyadh = _sum_col(total_qty_riyadh_col)
+        if total_qty_dammam_col:
+            total_qty_dammam = _sum_col(total_qty_dammam_col)
+        if total_qty_jeddah_col:
+            total_qty_jeddah = _sum_col(total_qty_jeddah_col)
+    # الطريقة 2: عمود Region + عمود No of location + عمود Total Qty
+    elif location_col and (no_of_location_col or total_qty_col):
+        df["_region_norm"] = df[location_col].apply(_norm_region)
+        df_three = df[df["_region_norm"].notna()].copy()
+        if not df_three.empty:
+            for region in ("Riyadh", "Dammam", "Jeddah"):
+                sub = df_three[df_three["_region_norm"] == region]
+                if not sub.empty:
+                    if no_of_location_col:
+                        val = int(pd.to_numeric(sub[no_of_location_col], errors="coerce").fillna(0).sum())
+                        if region == "Riyadh":
+                            no_of_location_riyadh = val
+                        elif region == "Dammam":
+                            no_of_location_dammam = val
+                        else:
+                            no_of_location_jeddah = val
+                    if total_qty_col:
+                        val = int(pd.to_numeric(sub[total_qty_col], errors="coerce").fillna(0).sum())
+                        if region == "Riyadh":
+                            total_qty_riyadh = val
+                        elif region == "Dammam":
+                            total_qty_dammam = val
+                        else:
+                            total_qty_jeddah = val
+    else:
+        # الطريقة 3: مفيش عمود منطقة — نجمع العمودين ككل (المجموع الإجمالي فقط)
+        if no_of_location_col:
+            tot = int(pd.to_numeric(df[no_of_location_col], errors="coerce").fillna(0).sum())
+            no_of_location_riyadh = tot  # نعرض الإجمالي تحت "Riyadh" كبديل
+        if total_qty_col:
+            tot = int(pd.to_numeric(df[total_qty_col], errors="coerce").fillna(0).sum())
+            total_qty_riyadh = tot
+
+    no_of_location = no_of_location_riyadh + no_of_location_dammam + no_of_location_jeddah
+    total_qty = total_qty_riyadh + total_qty_dammam + total_qty_jeddah
 
     return {
         "inventory_kpi": {
-            "total_skus": total_skus,
-            "total_lpns": total_lpns,
+            "no_of_location": no_of_location,
+            "no_of_location_riyadh": no_of_location_riyadh,
+            "no_of_location_dammam": no_of_location_dammam,
+            "no_of_location_jeddah": no_of_location_jeddah,
+            "total_qty": total_qty,
+            "total_qty_riyadh": total_qty_riyadh,
+            "total_qty_dammam": total_qty_dammam,
+            "total_qty_jeddah": total_qty_jeddah,
+            "hit_pct": 0,
+            "total_skus": 0,
+            "total_lpns": 0,
             "utilization_pct": "",
         },
     }
@@ -996,6 +1352,177 @@ def _read_inventory_warehouse_table_from_excel(excel_path):
     if not rows:
         return None
     return {"inventory_warehouse_table": rows}
+
+
+# سعات ثابتة للمناطق (Capacity الأساسي)
+WAREHOUSE_CAPACITY = {"Jeddah": 1800, "Dammam": 1575, "Riyadh": 1125}
+
+
+def _default_warehouse_and_capacity():
+    """جدول Warehouse افتراضي + رسمة Capacity (0% Used، 100% Available) عند غياب أعمدة Facility/Location في شيت Dashboard."""
+    warehouse_table = []
+    total_capacity = 0
+    for fac in ("Jeddah", "Dammam", "Riyadh"):
+        capacity = WAREHOUSE_CAPACITY.get(fac, 0)
+        total_capacity += capacity
+        warehouse_table.append({
+            "facility": fac,
+            "capacity": capacity,
+            "utilized": 0,
+            "pending": 0,
+            "empty": capacity,
+            "percentage": 0,
+        })
+    used_pct = 0.0
+    available_pct = 100.0 if total_capacity > 0 else 0.0
+    return {
+        "inventory_warehouse_table": warehouse_table,
+        "inventory_capacity_data": {"used": used_pct, "available": available_pct},
+    }
+
+
+def _read_dashboard_warehouse_from_excel(excel_path):
+    """
+    يقرأ من شيت اسمه Dashboard:
+    - يفلتر بـ Facility (المنطقة): Jeddah, Dammam, Riyadh
+    - يفلتر بـ Create Date (حسب الأيام إن لزم)
+    - عمود Location: يحذف المتكرر ويحسب العدد = Utilized لكل منطقة
+    - Capacity رقم ثابت لكل منطقة، Empty = Capacity - Utilized، Percentage = Utilized/Capacity
+    - يرجع: inventory_warehouse_table (الجدول) + inventory_capacity_data (Used/Available للنسبة في الرسمة)
+    """
+    if not excel_path or not os.path.exists(excel_path):
+        return None
+    try:
+        xls = pd.ExcelFile(excel_path, engine="openpyxl")
+    except Exception:
+        return None
+    sheet_name = None
+    for name in xls.sheet_names:
+        n = (str(name) or "").strip().lower()
+        if n == "dashboard":
+            sheet_name = name
+            break
+    if not sheet_name:
+        for name in xls.sheet_names:
+            if "dashboard" in (str(name) or "").lower():
+                sheet_name = name
+                break
+    if not sheet_name:
+        return None
+
+    # قراءة خام: الشيت قد يبدأ بعنوان (مثل ARAMCO Stock On Report) ثم صف الرؤوس
+    try:
+        raw = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=None)
+    except Exception:
+        return None
+    if raw.empty or raw.shape[0] < 2:
+        return _default_warehouse_and_capacity()
+
+    # كشف صف الرؤوس: أي صف فيه Facility أو Location أو Batch number أو Production date
+    header_row_idx = None
+    for idx in range(min(15, raw.shape[0])):
+        row = raw.iloc[idx]
+        cells = " ".join(str(c).strip().lower() for c in row.dropna().astype(str))
+        cells_norm = cells.replace(" ", "").replace("_", "")
+        if "facility" in cells_norm or "location" in cells_norm:
+            header_row_idx = idx
+            break
+        if "batch" in cells_norm or "productiondate" in cells_norm or "createdate" in cells_norm:
+            header_row_idx = idx
+            break
+    if header_row_idx is None:
+        header_row_idx = 0
+    headers = [str(c).strip() if pd.notna(c) and str(c).strip() else f"Col_{i}" for i, c in enumerate(raw.iloc[header_row_idx].values)]
+    df = raw.iloc[header_row_idx + 1:].copy()
+    df.columns = headers
+    df = df.reset_index(drop=True)
+    if df.empty or len(df) < 1:
+        return _default_warehouse_and_capacity()
+
+    df.columns = [str(c).strip() for c in df.columns]
+    cols_lower = {c.lower(): c for c in df.columns if c}
+
+    def _col(*keys):
+        for k in keys:
+            k_norm = k.lower().replace(" ", "").replace("_", "")
+            for col in cols_lower:
+                if col.replace(" ", "").replace("_", "") == k_norm:
+                    return cols_lower[col]
+            if k.lower() in cols_lower:
+                return cols_lower[k.lower()]
+        return None
+
+    def _col_contains(sub):
+        sub = sub.lower().replace(" ", "").replace("_", "")
+        for col in df.columns:
+            if sub in str(col).lower().replace(" ", "").replace("_", ""):
+                return col
+        return None
+
+    facility_col = _col("Facility", "Region", "Warehouse", "Site", "Area") or _col_contains("Facility") or _col_contains("Region")
+    create_date_col = _col("Create Date", "CreateDate", "Create_Date", "Date") or _col_contains("Production date")
+    location_col = _col("Location", "Location Name", "LocationName", "Location_Nbr") or _col_contains("Location") or _col("Batch number", "Batch number", "BatchNumber")
+    if not facility_col or not location_col:
+        return _default_warehouse_and_capacity()
+
+    def _norm_facility(val):
+        v = (str(val) or "").strip().lower()
+        if not v:
+            return None
+        if "jeddah" in v or "western" in v or "jedd" in v:
+            return "Jeddah"
+        if "dammam" in v or "eastern" in v or "damam" in v:
+            return "Dammam"
+        if "riyadh" in v or "central" in v or "ruh" in v:
+            return "Riyadh"
+        return None
+
+    df["_facility_norm"] = df[facility_col].apply(_norm_facility)
+    df = df[df["_facility_norm"].notna()].copy()
+    if df.empty:
+        return _default_warehouse_and_capacity()
+
+    # فلترة بـ Create Date: نأخذ كل التواريخ (أو آخر 30 يومًا إذا أردت — هنا نأخذ الكل)
+    if create_date_col:
+        df["_create_dt"] = pd.to_datetime(df[create_date_col], errors="coerce")
+        df = df.dropna(subset=["_create_dt"])
+
+    def _distinct_count(series):
+        s = series.astype(str).str.strip().replace("", np.nan).dropna()
+        return int(s.nunique())
+
+    warehouse_table = []
+    total_utilized = 0
+    total_capacity = 0
+    for fac in ("Jeddah", "Dammam", "Riyadh"):
+        capacity = WAREHOUSE_CAPACITY.get(fac, 0)
+        sub = df[df["_facility_norm"] == fac]
+        utilized = _distinct_count(sub[location_col]) if not sub.empty else 0
+        empty = max(0, capacity - utilized)
+        pending = 0
+        percentage = round(100.0 * utilized / capacity, 2) if capacity > 0 else 0
+        warehouse_table.append({
+            "facility": fac,
+            "capacity": capacity,
+            "utilized": utilized,
+            "pending": pending,
+            "empty": empty,
+            "percentage": percentage,
+        })
+        total_utilized += utilized
+        total_capacity += capacity
+
+    total_empty = total_capacity - total_utilized
+    used_pct = round(100.0 * total_utilized / total_capacity, 1) if total_capacity > 0 else 0
+    available_pct = round(100.0 * total_empty / total_capacity, 1) if total_capacity > 0 else 0
+
+    return {
+        "inventory_warehouse_table": warehouse_table,
+        "inventory_capacity_data": {
+            "used": used_pct,
+            "available": available_pct,
+        },
+    }
 
 
 def _read_returns_region_table_from_excel(excel_path):
@@ -1309,7 +1836,12 @@ class UploadExcelViewRoche(View):
             excel_path_norm = os.path.normpath(os.path.abspath(excel_path))
             cached = ExcelSheetCache.objects.filter(sheet_name=sheet_name).first()
             cached_path = (os.path.normpath(os.path.abspath(cached.source_file_path or "")) if cached and cached.source_file_path else "")
-            if cached and cached_path == excel_path_norm and cached.data is not None:
+            try:
+                path_match = (cached_path == excel_path_norm or
+                              (cached_path and os.path.exists(cached_path) and os.path.realpath(excel_path_norm) == os.path.realpath(cached_path)))
+            except OSError:
+                path_match = (cached_path == excel_path_norm)
+            if cached and path_match and cached.data is not None:
                 print("✅ الشيت قُرئ من الكاش (الداتابيز) — الموقع صار يفتح بسرعه", flush=True)
                 return pd.DataFrame(cached.data)
             df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl")
@@ -2664,9 +3196,8 @@ class UploadExcelViewRoche(View):
                 )
                 return {"detail_html": html}
 
-            # ✅ قائمة التابات المحذوفة
+            # ✅ قائمة التابات المحذوفة (فقط المطلوب إخفاؤها من All-in-One)
             excluded_tabs = [
-                "return & refusal",
                 "airport clearance",
                 "seaport clearance",
                 "data logger measurement",
@@ -2677,24 +3208,20 @@ class UploadExcelViewRoche(View):
                 name = tab.get("name", "غير معروف")
                 name_lower = name.strip().lower()
 
-                # ✅ حذف التابات المطلوبة
                 if name_lower in excluded_tabs:
                     continue
 
-                # ✅ النسبة الفعلية
                 try:
                     hit = float(tab.get("hit_pct", 0))
                 except Exception:
                     hit = 0
                 hit = int(round(max(0, min(hit, 100))))
 
-                # ✅ التارجت
                 try:
                     target = float(tab.get("target_pct", 100))
                 except Exception:
                     target = 100
 
-                # ✅ نستخدم أي chart_data و chart_type راجعين من الـ overview كما هي
                 chart_data = tab.get("chart_data", []) or []
                 chart_type = tab.get("chart_type", "bar")
 
@@ -2709,39 +3236,13 @@ class UploadExcelViewRoche(View):
                     }
                 )
 
-            # ✅ PODs Update - إضافة مع الشارتات
-            pods_data = self.filter_pods_update(request, month_for_filters)
-            if pods_data and pods_data.get("hit_pct") is not None:
-                try:
-                    hit_pods = float(pods_data.get("hit_pct", 0))
-                except:
-                    hit_pods = 0
-                hit_pods = int(round(max(0, min(hit_pods, 100))))
-
-                existing_names = [t["name"].strip().lower() for t in clean_tabs]
-                if "pods update" not in existing_names:
-                    # ✅ جلب الشارتات من pods_data
-                    pods_chart_data = pods_data.get("chart_data", [])
-                    pods_chart_type = "column"
-                    if pods_chart_data and len(pods_chart_data) > 0:
-                        pods_chart_type = pods_chart_data[0].get("type", "column")
-
-                    clean_tabs.append(
-                        {
-                            "name": "PODs update",
-                            "hit_pct": hit_pods,
-                            "target_pct": 100,
-                            "count": pods_data.get("count", 0),
-                            "chart_type": pods_chart_type,
-                            "chart_data": pods_chart_data,
-                        }
-                    )
-
-            # ✅ ترتيب التابات حسب الأولوية (بدون التابات المحذوفة)
+            # ✅ ترتيب التابات حسب الأولوية
             desired_order = [
                 "Inbound",
                 "Outbound",
+                "Return & Refusal",
                 "PODs update",
+                "Inventory",
             ]
             clean_tabs.sort(
                 key=lambda x: (
@@ -3657,7 +4158,8 @@ class UploadExcelViewRoche(View):
         🔹 يقرأ من شيت Outbound1: Order Nbr, Customer Name, Create Timestamp, Customer City,
            Order Type, Status, Ship Date.
         🔹 يقرأ من شيت Outbound2: Packed Timestamp (الربط على Order Nbr).
-        🔹 Hit/Miss: من Packed Timestamp إلى Ship Date — لو ≤24 ساعة = Hit وإلا Miss.
+        🔹 Hit/Miss: المقارنة بين Create Order (Create Timestamp) و Shipped date (Ship Date).
+           خلال يومين أو أقل = Hit، أكتر من يومين = Miss، وتاريخ ناقص = Pending.
         🔹 يعيد نفس هيكل Inbound (stats, sub_tables, chart_data) لعرضه بنفس التمبلت.
         """
         try:
@@ -4005,13 +4507,11 @@ class UploadExcelViewRoche(View):
                         df1[packed_in_ob1], errors="coerce"
                     )
 
-            # ========== حساب Hit/Miss بناءً على Create Order → Shipped date ==========
-            # الفرق = عدد الأيام من Create Timestamp (Create Order) لحد Ship Date.
-            #   • لو الفرق ≤ 2 أيام (يوم أو يومين) → Hit
-            #   • لو الفرق > 2 أيام → Miss
-            #   • لو أي تاريخ ناقص → Pending
-            # ==========
-            # الفرق بالأيام: Ship Date - Create Timestamp
+            # ========== حساب Hit/Miss لـ Outbound ==========
+            # المقارنة بين Create Order (Create Timestamp) و Shipped date (Ship Date).
+            #   • خلال يومين أو أقل (≤ 2 يوم) → Hit
+            #   • أكتر من يومين (> 2 يوم) → Miss
+            #   • لو Create Timestamp أو Ship Date ناقص → Pending
             lead_time_days = (
                 (df1["Ship Date"] - df1["Create Timestamp"])
                 .dt.total_seconds()
@@ -4033,10 +4533,11 @@ class UploadExcelViewRoche(View):
 
             df1["Days_Used"] = df1["Cycle Days"].apply(_ceil_days)
 
-            # Threshold ثابت: يوم أو يومين كحد أقصى
+            # Threshold: ≤ 2 يوم من Create Order إلى Shipped date = Hit
             df1["is_hit"] = df1["Days_Used"].le(2) & df1["Days_Used"].notna()
             df1["HIT or MISS"] = np.where(df1["is_hit"], "Hit", "Miss")
-            df1.loc[df1["Days_Used"].isna(), "HIT or MISS"] = "Pending"
+            # تاريخ ناقص = نعرضها كـ Miss (فاشلة)
+            df1.loc[df1["Create Timestamp"].isna() | df1["Ship Date"].isna(), "HIT or MISS"] = "Miss"
 
             # الشهر من Ship Date أو Create Timestamp
             month_source = df1["Ship Date"].copy()
@@ -4160,8 +4661,8 @@ class UploadExcelViewRoche(View):
                     {
                         "Month": m,
                         "Total Shipments": int(row["Total_Shipments"]),
-                        "Hit (≤24h)": int(row["Hits"]),
-                        "Miss (>24h)": int(row["Misses"]),
+                        "Hit (≤2d)": int(row["Hits"]),
+                        "Miss (>2d)": int(row["Misses"]),
                         "Hit %": float(row["Hit %"]),
                         "Facility Count": int(row["Facility_Count"]),
                     }
@@ -4173,14 +4674,14 @@ class UploadExcelViewRoche(View):
 
             hit_pct_row = {"KPI": "Hit %"}
             total_row = {"KPI": "Total Shipments"}
-            hit_row = {"KPI": "Hit (≤24h)"}
-            miss_row = {"KPI": "Miss (>24h)"}
+            hit_row = {"KPI": "Hit (≤2d)"}
+            miss_row = {"KPI": "Miss (>2d)"}
             for m in ordered_months:
                 r = next((x for x in kpi_rows if x["Month"] == m), None)
                 if r:
                     total_val = int(r["Total Shipments"])
-                    hit_val = int(r["Hit (≤24h)"])
-                    miss_val = int(r["Miss (>24h)"])
+                    hit_val = int(r["Hit (≤2d)"])
+                    miss_val = int(r["Miss (>2d)"])
                     total_row[m] = total_val
                     hit_row[m] = hit_val
                     miss_row[m] = miss_val
@@ -4189,26 +4690,33 @@ class UploadExcelViewRoche(View):
                     )
             if "2025" in pivot_cols:
                 total_2025 = sum(r["Total Shipments"] for r in kpi_rows)
-                hit_2025 = sum(r["Hit (≤24h)"] for r in kpi_rows)
+                hit_2025 = sum(r["Hit (≤2d)"] for r in kpi_rows)
                 hit_pct_row["2025"] = (
                     int(round(hit_2025 / total_2025 * 100)) if total_2025 > 0 else 0
                 )
                 total_row["2025"] = int(sum(r["Total Shipments"] for r in kpi_rows))
-                hit_row["2025"] = int(sum(r["Hit (≤24h)"] for r in kpi_rows))
-                miss_row["2025"] = int(sum(r["Miss (>24h)"] for r in kpi_rows))
+                hit_row["2025"] = int(sum(r["Hit (≤2d)"] for r in kpi_rows))
+                miss_row["2025"] = int(sum(r["Miss (>2d)"] for r in kpi_rows))
 
             # Total Shipments آخر صف في الجدول
             summary_data_pivot = [hit_pct_row, hit_row, miss_row, total_row]
             summary_columns = pivot_cols
             summary_data = summary_data_pivot
 
-            # إحصائيات على مستوى الشحنة (Order Nbr) وليس الصف
+            # إحصائيات على مستوى الشحنة (Order Nbr): Hit / Miss (Pending معروضة كـ Miss)
             orders_df = df1.drop_duplicates(subset=["Order Nbr"], keep="first")
             overall_total = int(orders_df.shape[0])
-            overall_hits = int(orders_df["is_hit"].sum())
-            overall_miss = overall_total - overall_hits
+            overall_hits = int((orders_df["HIT or MISS"] == "Hit").sum())
+            overall_miss = int((orders_df["HIT or MISS"] == "Miss").sum())
+            overall_failed = overall_miss
             overall_hit_pct = (
                 round((overall_hits / overall_total) * 100, 2) if overall_total else 0
+            )
+            overall_miss_pct = (
+                round((overall_miss / overall_total) * 100, 2) if overall_total else 0
+            )
+            overall_failed_pct = (
+                round((overall_failed / overall_total) * 100, 2) if overall_total else 0
             )
 
             # سيتم بناء بيانات الشارت لاحقًا من جداول المناطق (Riyadh / Dammam / Jeddah)
@@ -4414,11 +4922,17 @@ class UploadExcelViewRoche(View):
             # ✅ جدول التفاصيل يعرض شيت ARAMCO Outbound Report "كما هو" + الأعمدة المحسوبة (Month, Days, HIT or MISS)
             # بدون أعمدة المساعدة (_FacilityNorm, Cycle Hours, Cycle Days, Days_Used, is_hit, _sort_ts)
             sorted_df = (
-                detail_df.sort_values("_sort_ts", ascending=False)
+                detail_df.sort_values("_sort_ts", ascending=False, na_position="last")
                 .drop(columns=drop_cols)
             )
             detail_columns = list(sorted_df.columns)
-            detail_rows_raw = sorted_df.head(500).to_dict(orient="records")
+            top_500 = sorted_df.head(500)
+            miss_extra = sorted_df[
+                (sorted_df["HIT or MISS"] == "Miss")
+                & ~sorted_df.index.isin(top_500.index)
+            ]
+            combined_df = pd.concat([top_500, miss_extra]).drop_duplicates(keep="first")
+            detail_rows_raw = combined_df.to_dict(orient="records")
 
             def _to_blank(val):
                 if val is None:
@@ -4433,6 +4947,16 @@ class UploadExcelViewRoche(View):
             detail_rows = [
                 {k: _to_blank(v) for k, v in row.items()} for row in detail_rows_raw
             ]
+            # تطبيع HIT or MISS: Hit / Miss فقط (Pending → Miss)
+            for row in detail_rows:
+                if "HIT or MISS" in row:
+                    v = str(row["HIT or MISS"]).strip().lower()
+                    if v == "hit":
+                        row["HIT or MISS"] = "Hit"
+                    elif v in ("miss", "pending"):
+                        row["HIT or MISS"] = "Miss"
+                    else:
+                        row["HIT or MISS"] = str(row["HIT or MISS"]).strip() or "Miss"
 
             # طباعة بيانات جدول Outbound Shipments Detail في الترمينال (مع Packed Timestamp)
             print("\n" + "=" * 90)
@@ -4496,7 +5020,7 @@ class UploadExcelViewRoche(View):
                 .unique()
                 .tolist()
             )
-            hit_miss_options = ["Hit", "Miss", "Pending"]
+            hit_miss_options = ["Hit", "Miss"]
             facility_code_options = sorted(
                 detail_df_for_options["Facility Code"]
                 .fillna("")
@@ -4508,7 +5032,7 @@ class UploadExcelViewRoche(View):
                 .tolist()
             )
 
-            # فلتر جدول التفاصيل: Facility، Month، Order Nbr فقط
+            # فلتر جدول التفاصيل: Facility، Month، Hit/Miss (Status)
             detail_table = {
                 "id": "sub-table-outbound-detail",
                 "title": "Outbound Shipments Detail",
@@ -4519,6 +5043,7 @@ class UploadExcelViewRoche(View):
                 "filter_options": {
                     "facility_codes": facility_code_options,
                     "months": month_options,
+                    "hit_miss": hit_miss_options,
                 },
             }
 
@@ -4530,7 +5055,10 @@ class UploadExcelViewRoche(View):
                     "total": overall_total,
                     "hit": overall_hits,
                     "miss": overall_miss,
+                    "failed": overall_failed,
                     "hit_pct": overall_hit_pct,
+                    "miss_pct": overall_miss_pct,
+                    "failed_pct": overall_failed_pct,
                     "target": 99,
                 },
             }
@@ -4673,26 +5201,71 @@ class UploadExcelViewRoche(View):
                 return val
 
             columns = [c for c in df.columns if not str(c).startswith("_")]
-            if "HIT or MISS" not in columns and "HIT or MISS" in df.columns:
+            if "Status" not in columns and "HIT or MISS" in df.columns:
                 columns.append("HIT or MISS")
             if hit_miss_col and hit_miss_col != "HIT or MISS" and hit_miss_col in columns:
                 columns = [c for c in columns if c != hit_miss_col]
+            columns = [c for c in columns if str(c).strip().lower() != "results"]
+            col_rename = {}
+            for c in columns:
+                if "(Shortages or Excess)" in str(c):
+                    col_rename[c] = str(c).replace("(Shortages or Excess)", "").strip()
+            col_rename["HIT or MISS"] = "Status"
+            if col_rename:
+                columns = [col_rename.get(c, c) for c in columns]
+            order_end = ["Total", "Hit", "Miss", "Status"]
+            tail = [c for c in order_end if c in columns]
+            if "Hit" not in tail:
+                tail.insert(1, "Hit")
+            others = [c for c in columns if c not in order_end]
+            columns = others + tail
+
+            def _strip_shortages(val):
+                if val is None or not isinstance(val, str):
+                    return val
+                return val.replace("(Shortages or Excess)", "").strip() or val
+
+            def _to_num(val):
+                if val is None or val == "":
+                    return None
+                try:
+                    return float(str(val).replace(",", "").strip())
+                except (ValueError, TypeError):
+                    return None
 
             rows = []
             rows_by_region = {"Riyadh": [], "Dammam": [], "Jeddah": []}
             for _, r in df.iterrows():
                 row = {}
-                for c in columns:
+                for c in df.columns:
+                    if str(c).startswith("_") or str(c).strip().lower() == "results":
+                        continue
+                    if hit_miss_col and c == hit_miss_col:
+                        continue
+                    out_key = col_rename.get(c, c)
+                    if out_key not in columns:
+                        continue
                     v = r.get(c, r.get(c) if c in r else "")
-                    row[c] = _safe_val(v)
+                    v = _safe_val(v)
+                    if out_key == "Status" or "miss" in str(c).lower():
+                        v = _strip_shortages(str(v))
+                    row[out_key] = v
+                if "Total" in row and "Status" in row:
+                    total_num = _to_num(row["Total"])
+                    hm_val = row["Status"]
+                    hm_num = _to_num(hm_val)
+                    if total_num is not None and hm_num is not None and total_num == hm_num:
+                        row["Status"] = "Hit"
+                if "Hit" not in row and "Status" in row:
+                    row["Hit"] = row["Total"] if str(row.get("Status", "")).strip().lower() == "hit" else ""
                 rows.append(row)
                 rn = r.get("_RegionNorm")
                 if rn in rows_by_region:
                     rows_by_region[rn].append(row)
 
             total = len(rows)
-            hit_count = sum(1 for row in rows if str(row.get("HIT or MISS", "")).strip().lower() == "hit")
-            miss_count = sum(1 for row in rows if str(row.get("HIT or MISS", "")).strip().lower() == "miss")
+            hit_count = sum(1 for row in rows if str(row.get("Status", "")).strip().lower() == "hit")
+            miss_count = sum(1 for row in rows if str(row.get("Status", "")).strip().lower() == "miss")
             hit_pct = round((hit_count / total) * 100, 2) if total else 0
             target = 99
             stats = {"total": total, "hit": hit_count, "miss": miss_count, "hit_pct": hit_pct, "target": target}
@@ -4701,12 +5274,16 @@ class UploadExcelViewRoche(View):
             if region_col and df["_RegionNorm"].notna().any():
                 facility_colors = {"Riyadh": "#9084ad", "Dammam": "#e8f1fb", "Jeddah": "#538fe7"}
                 for f in FACILITIES:
+                    region_rows = rows_by_region.get(f, [])
+                    tot_f = len(region_rows)
+                    hit_f = sum(1 for row in region_rows if str(row.get("Status", "")).strip().lower() == "hit")
+                    pct_f = round((hit_f / tot_f) * 100, 2) if tot_f else 0
                     chart_data.append({
                         "type": "column",
                         "name": f"{f} Hit %",
                         "color": facility_colors.get(f, "#74c0fc"),
                         "valueSuffix": "%",
-                        "dataPoints": [{"label": "Inventory", "y": 100}],
+                        "dataPoints": [{"label": "Hit %", "y": pct_f}],
                     })
 
             facility_codes = sorted(df[region_col].dropna().astype(str).str.strip().unique().tolist()) if region_col else ["All"]
@@ -5203,8 +5780,6 @@ class UploadExcelViewRoche(View):
                 if pd.api.types.is_datetime64_any_dtype(raw_df[col]):
                     raw_df[col] = raw_df[col].apply(lambda x: x.strftime("%Y-%m-%d %H:%M") if pd.notna(x) else "")
 
-            detail_rows = [{k: _to_blank(v) for k, v in row.items()} for row in raw_df.head(500).to_dict(orient="records")]
-
             # خريطة (Shipment_nbr, Facility_norm) -> "Hit" أو "Miss" من facility_stats
             hit_miss_map = {}
             for fac in FACILITIES:
@@ -5217,11 +5792,23 @@ class UploadExcelViewRoche(View):
                 fc = str(r.get("Facility") or r.get("Facility Code") or "").strip()
                 return norm_facility(fc) or fc
 
-            # إضافة عمود HIT or MISS لكل صف (للجدول والفلتر)
-            for row in detail_rows:
-                sn = str(row.get("Shipment_nbr") or row.get("Shipment_ID") or "").strip()
-                fc_norm = _row_facility_norm(row)
-                row["HIT or MISS"] = hit_miss_map.get((sn, fc_norm), "") if sn and fc_norm else ""
+            # بناء كل الصفوف مع HIT or MISS (فارغ أو Pending → Miss)
+            detail_rows_full = []
+            for row in raw_df.to_dict(orient="records"):
+                r = {k: _to_blank(v) for k, v in row.items()}
+                sn = str(r.get("Shipment_nbr") or r.get("Shipment_ID") or "").strip()
+                fc_norm = _row_facility_norm(r)
+                hm = hit_miss_map.get((sn, fc_norm), "") if sn and fc_norm else ""
+                if str(hm).strip().lower() in ("", "pending"):
+                    hm = "Miss"
+                r["HIT or MISS"] = hm if hm else "Miss"
+                detail_rows_full.append(r)
+
+            # عرض الجدول كامل: أول 500 صف + كل صفوف Miss الإضافية
+            top_500 = detail_rows_full[:500]
+            miss_extra = [r for r in detail_rows_full[500:] if r.get("HIT or MISS") == "Miss"]
+            detail_rows = top_500 + miss_extra
+
             if "HIT or MISS" not in raw_columns:
                 raw_columns = list(raw_columns) + ["HIT or MISS"]
 
@@ -5743,6 +6330,7 @@ class UploadExcelViewRoche(View):
             sheet_names = [s.strip() for s in xls.sheet_names]
             sub_tables = []
             chart_data = []
+            return_chart_data = []
 
             selected_months_norm = []
             if selected_months:
@@ -5849,6 +6437,68 @@ class UploadExcelViewRoche(View):
                             if c not in df_in.columns:
                                 df_in[c] = ""
 
+                        ts_create = pd.to_datetime(
+                            df_in["Create Timestamp"], errors="coerce"
+                        )
+                        ts_last = pd.to_datetime(
+                            df_in["Last LPN Rcv TS"], errors="coerce"
+                        )
+                        hours = (ts_last - ts_create).dt.total_seconds() / 3600.0
+                        df_in["_is_hit"] = (hours <= 24) & (hours.notna())
+                        df_in["_month"] = ts_create.dt.strftime("%b")
+
+                        col_fac = _find_col(
+                            df_in, ["facility", "facility code", "منشأة"]
+                        )
+                        if col_fac and col_fac in df_in.columns:
+                            def _norm_fac(v):
+                                v = str(v).strip().lower()
+                                if "central" in v or "riyadh" in v or "الرياض" in v:
+                                    return "Riyadh"
+                                if "eastern" in v or "dammam" in v or "الدمام" in v:
+                                    return "Dammam"
+                                if "western" in v or "jeddah" in v or "جدة" in v:
+                                    return "Jeddah"
+                                return v.title() if v else ""
+                            df_in["_FacilityNorm"] = df_in[col_fac].fillna("").apply(_norm_fac)
+                        else:
+                            df_in["_FacilityNorm"] = "Riyadh"
+
+                        return_chart_data = []
+                        FACILITIES_R = ["Riyadh", "Dammam", "Jeddah"]
+                        month_abbr = {1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+                                      7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"}
+                        ordered_months_ret = sorted(
+                            df_in["_month"].dropna().unique().tolist(),
+                            key=lambda m: next((k for k, v in month_abbr.items() if v == m), 99),
+                        )[:3]
+                        if ordered_months_ret:
+                            facility_colors_r = {
+                                "Riyadh": "#9084ad",
+                                "Dammam": "#e8f1fb",
+                                "Jeddah": "#538fe7",
+                            }
+                            for f in FACILITIES_R:
+                                by_m = {}
+                                sub = df_in[df_in["_FacilityNorm"] == f]
+                                for m in ordered_months_ret:
+                                    sm = sub[sub["_month"] == m]
+                                    tot = len(sm)
+                                    hit = int(sm["_is_hit"].sum())
+                                    by_m[m] = (
+                                        round(100.0 * hit / tot, 2) if tot else 0
+                                    )
+                                return_chart_data.append({
+                                    "type": "column",
+                                    "name": f"{f} Hit %",
+                                    "color": facility_colors_r.get(f, "#74c0fc"),
+                                    "valueSuffix": "%",
+                                    "dataPoints": [{"label": m, "y": by_m.get(m, 0)} for m in ordered_months_ret],
+                                })
+                        df_in = df_in.drop(
+                            columns=["_is_hit", "_month", "_FacilityNorm"],
+                            errors="ignore",
+                        )
                         df_in = df_in[return_columns_display]
                         if selected_month or selected_months_norm:
                             month_col = _find_col(df_in, ["month", "create timestamp"])
@@ -5994,20 +6644,34 @@ class UploadExcelViewRoche(View):
                 {"tab": tab_data, "selected_month": month_norm_tab},
             )
 
-            # 🧮 حساب hit% من متوسط القيم في % of Rejection (بالنسبة المئوية)
-            hit_values = []
-            for st in sub_tables:
-                if "rejection" in st["title"].lower():
-                    for row in st["data"]:
-                        val = row.get("% of Rejection", "")
-                        try:
-                            num = to_percentage_number(val)
-                            if num is not None:
-                                hit_values.append(num)
-                        except:
-                            pass
+            # 🧮 Hit %: نفضل نسبة الـ Return KPI (≤24h) إن وُجدت، وإلا من % of Rejection
+            hit_pct = 0
+            if return_kpi_for_tab and return_kpi_for_tab.get("hit_pct") is not None:
+                hit_pct = round(float(return_kpi_for_tab["hit_pct"]), 2)
+            else:
+                hit_values = []
+                for st in sub_tables:
+                    if "rejection" in st["title"].lower():
+                        for row in st["data"]:
+                            val = row.get("% of Rejection", "")
+                            try:
+                                num = to_percentage_number(val)
+                                if num is not None:
+                                    hit_values.append(num)
+                            except Exception:
+                                pass
+                hit_pct = round(sum(hit_values) / len(hit_values), 2) if hit_values else 0
 
-            hit_pct = round(sum(hit_values) / len(hit_values), 2) if hit_values else 0
+            if not chart_data and total_count > 0:
+                chart_data = [
+                    {
+                        "type": "bar",
+                        "name": "Hit %",
+                        "dataPoints": [{"label": "Return & Refusal", "y": hit_pct}],
+                    }
+                ]
+            if return_chart_data:
+                chart_data = return_chart_data
 
             result = {
                 "detail_html": html,
@@ -7355,10 +8019,14 @@ class UploadExcelViewRoche(View):
             "total lead time performance": 98,
             "pods update": 98,
             "return & refusal": 100,
+            "rejections": 100,
+            "inventory": 99,
         }
 
         def process_tab(tab_name):
-            detail_html, count, hit_pct = "", 0, 0
+            detail_html, count, hit_pct_val = "", 0, 0
+            chart_data = []
+            chart_type = "bar"
             try:
                 res = {}
                 tab_lower = tab_name.lower()
@@ -7384,37 +8052,46 @@ class UploadExcelViewRoche(View):
                         month_for_filters,
                         selected_months=selected_months,
                     )
+                elif tab_lower == "inventory":
+                    res = self.filter_inventory(
+                        request,
+                        month_for_filters,
+                        selected_months=selected_months,
+                    )
 
-                # النسبة الحقيقية زي ما راجعة من الدالة
-                hit_pct = res.get("hit_pct", 0)
+                # النسبة الفعلية من التاب (من res أو من stats)
+                hit_pct = res.get("hit_pct")
+                if hit_pct is None and isinstance(res.get("stats"), dict):
+                    hit_pct = res["stats"].get("hit_pct")
+                if hit_pct is None:
+                    hit_pct = 0
                 if isinstance(hit_pct, dict):
                     if selected_month and selected_month.capitalize() in hit_pct:
                         hit_pct_val = hit_pct[selected_month.capitalize()]
                     else:
-                        # نحسب المتوسط
-                        hit_pct_val = int(round(sum(hit_pct.values()) / len(hit_pct)))
+                        hit_pct_val = int(round(sum(hit_pct.values()) / len(hit_pct))) if hit_pct else 0
                 else:
                     try:
                         hit_pct_val = int(round(float(hit_pct)))
-                    except:
+                    except (TypeError, ValueError):
                         hit_pct_val = 0
 
                 hit_pct_val = max(0, min(hit_pct_val, 100))
 
                 target_pct = target_manual.get(tab_lower, 100)
-                color_class = "bg-success" if hit_pct >= target_pct else "bg-danger"
+                color_class = "bg-success" if hit_pct_val >= target_pct else "bg-danger"
 
                 progress_html = f"""
                     <div class='mb-3'>
                         <div class='d-flex justify-content-between align-items-center mb-1'>
                             <strong class='text-capitalize'>{tab_name}</strong>
-                            <small>{hit_pct}% / Target: {target_pct}%</small>
+                            <small>{hit_pct_val}% / Target: {target_pct}%</small>
                         </div>
                         <div class='progress' style='height: 20px;'>
                             <div class='progress-bar {color_class}' role='progressbar'
-                                 style='width: {hit_pct}%;' aria-valuenow='{hit_pct}'
+                                 style='width: {hit_pct_val}%;' aria-valuenow='{hit_pct_val}'
                                  aria-valuemin='0' aria-valuemax='100'>
-                                 {hit_pct}%
+                                 {hit_pct_val}%
                             </div>
                         </div>
                     </div>
@@ -7422,10 +8099,13 @@ class UploadExcelViewRoche(View):
 
                 detail_html = progress_html + (res.get("detail_html", "") or "")
                 count = res.get("count", 0)
+                chart_data = res.get("chart_data", []) or []
+                if chart_data and isinstance(chart_data, list) and len(chart_data) > 0:
+                    chart_type = (chart_data[0].get("type") or "bar").lower()
 
             except Exception:
                 detail_html = "<p class='text-muted'>No data available.</p>"
-                hit_pct = 0
+                hit_pct_val = 0
                 target_pct = target_manual.get(tab_name.lower(), 100)
 
             return {
@@ -7434,6 +8114,8 @@ class UploadExcelViewRoche(View):
                 "target_pct": target_pct,
                 "detail_html": detail_html,
                 "count": count,
+                "chart_data": chart_data,
+                "chart_type": chart_type,
             }
 
         tabs_order = [
@@ -7441,6 +8123,7 @@ class UploadExcelViewRoche(View):
             "Outbound",
             "Return & Refusal",
             "PODs update",
+            "Inventory",
         ]
 
         with ThreadPoolExecutor(max_workers=5) as executor:
@@ -7492,7 +8175,8 @@ class UploadExcelViewRoche(View):
         """
         context = get_dashboard_tab_context(request)
         context["title"] = self.DASHBOARD_TAB_NAME
-        excel_path = _get_dashboard_excel_path(request) or _get_excel_path_for_request(request)
+        # نفس ملف التابات بالضبط (الملف المرفوع أو latest/all_sheet من المجلد) لقراءة كروت الداشبورد
+        excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
 
         # كل الداتا من الشيت فقط — لا قيم يدوية. لو مفيش ملف أو الشيت فاضي نستخدم قيم فارغة/صفر.
         if excel_path:
@@ -7511,14 +8195,39 @@ class UploadExcelViewRoche(View):
                 context["outbound_kpi"] = outbound_data["outbound_kpi"]
                 context["outbound_kpi_keys_from_sheet"] = outbound_data.get("outbound_kpi_keys_from_sheet", [])
 
-            pods_data = _read_pods_data_from_excel(excel_path)
-            if pods_data:
-                context["pod_compliance_chart_data"] = {
-                    "categories": pods_data.get("categories", []),
-                    "series": pods_data.get("series", []),
-                }
-                if "pod_status_breakdown" in pods_data:
-                    context["pod_status_breakdown"] = pods_data["pod_status_breakdown"]
+            # PODs Compliance في الداشبورد = نفس داتا تاب PODs (PODs KPI — Hit & Miss) من شيت PODs
+            try:
+                pods_result = self.filter_pods_update(request, selected_month=None, selected_months=None)
+                if pods_result and "error" not in pods_result and pods_result.get("sub_tables"):
+                    st = pods_result["sub_tables"][0]
+                    pod_chart = st.get("chart_data") or []
+                    if pod_chart and isinstance(pod_chart, list):
+                        categories_pod = []
+                        series_pod = []
+                        for s in pod_chart:
+                            pts = s.get("dataPoints") or []
+                            if pts and not categories_pod:
+                                categories_pod = [p.get("label", "") for p in pts]
+                            data_vals = [float(p.get("y", 0)) for p in pts]
+                            series_pod.append({
+                                "name": s.get("name") or "Hit %",
+                                "data": data_vals,
+                            })
+                        context["pod_compliance_chart_data"] = {
+                            "categories": categories_pod,
+                            "series": series_pod,
+                        }
+            except Exception:
+                pass
+            if "pod_compliance_chart_data" not in context:
+                pods_data = _read_pods_data_from_excel(excel_path)
+                if pods_data:
+                    context["pod_compliance_chart_data"] = {
+                        "categories": pods_data.get("categories", []),
+                        "series": pods_data.get("series", []),
+                    }
+                    if "pod_status_breakdown" in pods_data:
+                        context["pod_status_breakdown"] = pods_data["pod_status_breakdown"]
 
             returns_data = _read_returns_data_from_excel(excel_path)
             if returns_data:
@@ -7526,17 +8235,79 @@ class UploadExcelViewRoche(View):
                 if "returns_chart_data" in returns_data:
                     context["returns_chart_data"] = returns_data["returns_chart_data"]
 
+            # Order Process Time في الداشبورد = نفس شارت Hit/Miss تبع تاب Outbound + نسب Hit / Miss
+            try:
+                outbound_result = self.filter_outbound_shipments(request)
+                ob_stats = outbound_result.get("stats") or {}
+                context["order_process_kpi"] = {
+                    "hit_pct": ob_stats.get("hit_pct", 0),
+                    "miss_pct": ob_stats.get("miss_pct", 0),
+                    "hit": ob_stats.get("hit", 0),
+                    "miss": ob_stats.get("miss", 0),
+                    "total": ob_stats.get("total", 0),
+                }
+                ob_chart_data = outbound_result.get("chart_data") or []
+                if ob_chart_data and isinstance(ob_chart_data, list):
+                    categories_ob = []
+                    series_ob = []
+                    for s in ob_chart_data:
+                        pts = s.get("dataPoints") or []
+                        if pts and not categories_ob:
+                            categories_ob = [p.get("label", "") for p in pts]
+                        data_vals = [float(p.get("y", 0)) for p in pts]
+                        series_ob.append({
+                            "name": s.get("name") or "",
+                            "data": data_vals,
+                        })
+                    context["order_process_chart_data"] = {
+                        "categories": categories_ob,
+                        "series": series_ob,
+                    }
+            except Exception:
+                pass
+            if "order_process_chart_data" not in context:
+                context["order_process_chart_data"] = {"categories": [], "series": []}
+            if "order_process_kpi" not in context:
+                context["order_process_kpi"] = {"hit_pct": 0, "miss_pct": 0, "hit": 0, "miss": 0, "total": 0}
+
             inventory_data = _read_inventory_data_from_excel(excel_path)
-            if inventory_data:
-                context["inventory_kpi"] = inventory_data.get("inventory_kpi", {})
+            _empty_inv_kpi = {
+                "no_of_location": 0, "total_qty": 0,
+                "no_of_location_riyadh": 0, "no_of_location_dammam": 0, "no_of_location_jeddah": 0,
+                "total_qty_riyadh": 0, "total_qty_dammam": 0, "total_qty_jeddah": 0,
+                "hit_pct": 0, "total_skus": 0, "total_lpns": 0, "utilization_pct": "",
+            }
+            if inventory_data and inventory_data.get("inventory_kpi"):
+                inv = inventory_data["inventory_kpi"]
+                context["inventory_kpi"] = {
+                    "no_of_location": inv.get("no_of_location", 0),
+                    "no_of_location_riyadh": inv.get("no_of_location_riyadh", 0),
+                    "no_of_location_dammam": inv.get("no_of_location_dammam", 0),
+                    "no_of_location_jeddah": inv.get("no_of_location_jeddah", 0),
+                    "total_qty": inv.get("total_qty", 0),
+                    "total_qty_riyadh": inv.get("total_qty_riyadh", 0),
+                    "total_qty_dammam": inv.get("total_qty_dammam", 0),
+                    "total_qty_jeddah": inv.get("total_qty_jeddah", 0),
+                    "hit_pct": inv.get("hit_pct", 0),
+                    "total_skus": inv.get("total_skus", 0),
+                    "total_lpns": inv.get("total_lpns", 0),
+                    "utilization_pct": inv.get("utilization_pct", ""),
+                }
+            else:
+                context["inventory_kpi"] = _empty_inv_kpi
 
-            capacity_data = _read_inventory_snapshot_capacity_from_excel(excel_path)
-            if capacity_data:
-                context["inventory_capacity_data"] = capacity_data.get("inventory_capacity_data", {})
-
-            warehouse_table = _read_inventory_warehouse_table_from_excel(excel_path)
-            if warehouse_table:
-                context["inventory_warehouse_table"] = warehouse_table.get("inventory_warehouse_table", [])
+            # جدول Warehouse + رسمة Capacity: من شيت Dashboard (Facility → Location مميز → Utilized، Capacity ثابت، Empty، Percentage)
+            dashboard_wh = _read_dashboard_warehouse_from_excel(excel_path)
+            if dashboard_wh:
+                context["inventory_warehouse_table"] = dashboard_wh.get("inventory_warehouse_table", [])
+                context["inventory_capacity_data"] = dashboard_wh.get("inventory_capacity_data", {})
+            else:
+                capacity_data = _read_inventory_snapshot_capacity_from_excel(excel_path)
+                if capacity_data:
+                    context["inventory_capacity_data"] = capacity_data.get("inventory_capacity_data", {})
+                warehouse_table = _read_inventory_warehouse_table_from_excel(excel_path)
+                if warehouse_table:
+                    context["inventory_warehouse_table"] = warehouse_table.get("inventory_warehouse_table", [])
 
             returns_region = _read_returns_region_table_from_excel(excel_path)
             if returns_region:
@@ -7578,8 +8349,7 @@ class UploadExcelViewRoche(View):
                 if key not in keys_from_sheet:
                     missing_by_section.setdefault("Dashboard – Outbound", []).append(card_name)
         context.setdefault("outbound_kpi", _empty_outbound_kpi)
-        if "pod_compliance_chart_data" not in context:
-            missing_by_section.setdefault("Dashboard – Outbound", []).append("PODs Compliance (chart)")
+        # لا نضيف PODs Compliance (chart) لقائمة الناقص — الشارت يملأ من filter_pods_update وقد يظهر لاحقاً
         context.setdefault("outbound_chart_data", _empty_pod_chart)
         context.setdefault("pod_compliance_chart_data", _empty_pod_chart)
         context.setdefault("pod_status_breakdown", _empty_pod_breakdown)
@@ -7587,12 +8357,22 @@ class UploadExcelViewRoche(View):
         if "returns_kpi" not in context:
             missing_by_section["Dashboard – Returns"] = ["Total SKUs", "Total LPNs", "Returns chart"]
         context.setdefault("returns_kpi", {"total_skus": 0, "total_lpns": 0})
+        # Total LPNs في قسم Returns = نفس رقم Inbound (Number of Pallets) ليتطابق مع الجزء الأعلى
+        context["returns_kpi"] = dict(context["returns_kpi"])
+        context["returns_kpi"]["total_lpns"] = context.get("inbound_kpi", {}).get("number_of_pallets", 0)
         context.setdefault("returns_chart_data", _empty_pod_chart)
+        context.setdefault("order_process_chart_data", _empty_pod_chart)
+        context.setdefault("order_process_kpi", {"hit_pct": 0, "miss_pct": 0, "hit": 0, "miss": 0, "total": 0})
         context.setdefault("returns_region_table", [])
 
         if "inventory_kpi" not in context:
-            missing_by_section["Dashboard – Inventory"] = ["Total SKUs", "Total LPNs", "Utilization %", "Capacity chart", "Warehouse table"]
-        context.setdefault("inventory_kpi", {"total_skus": 0, "total_lpns": 0, "utilization_pct": ""})
+            missing_by_section["Dashboard – Inventory"] = ["No of Location", "Total Qty", "Capacity chart", "Warehouse table"]
+        context.setdefault("inventory_kpi", {
+            "no_of_location": 0, "total_qty": 0,
+            "no_of_location_riyadh": 0, "no_of_location_dammam": 0, "no_of_location_jeddah": 0,
+            "total_qty_riyadh": 0, "total_qty_dammam": 0, "total_qty_jeddah": 0,
+            "hit_pct": 0, "total_skus": 0, "total_lpns": 0, "utilization_pct": "",
+        })
         context.setdefault("inventory_capacity_data", {"used": 0, "available": 0})
         context.setdefault("inventory_warehouse_table", [])
 

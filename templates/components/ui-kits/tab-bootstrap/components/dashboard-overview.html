@@ -348,14 +348,68 @@
 
             const chart_info = res.chart_data[0];
             const chartType = (chart_info.type || "bar").toLowerCase();
-            const labels = chart_info.dataPoints.map((dp) => dp.label);
-            const values = chart_info.dataPoints.map((dp) => Number(dp.y));
+            const tabLower = tabName.toLowerCase();
+            const isOutbound = tabLower.includes("outbound");
+            const isInbound = tabLower.includes("inbound");
+            const isReturn = tabLower.includes("return") || tabLower.includes("refusal");
+            const isInventory = tabLower.includes("inventory");
+
+            let labels = chart_info.dataPoints.map((dp) => dp.label);
+            let values = chart_info.dataPoints.map((dp) => Number(dp.y));
+            let useGroupedBar = false;
+            let datasets = [];
+
+            if ((chartType === "bar" || chartType === "column") && res.chart_data.length >= 2) {
+              useGroupedBar = true;
+              if (isOutbound) {
+                var janLabel = "Jan";
+                var idxJan = labels.indexOf(janLabel);
+                if (idxJan === -1) idxJan = 0;
+                labels = [labels[idxJan] || "Jan"];
+                res.chart_data.slice(0, 3).forEach(function (s, i) {
+                  var pts = s.dataPoints || [];
+                  var y = 0;
+                  if (pts.length) {
+                    var janPoint = pts.find(function (dp) { return (dp.label || "").toLowerCase() === "jan"; });
+                    y = janPoint ? Number(janPoint.y) : Number(pts[idxJan] && pts[idxJan].y);
+                  }
+                  datasets.push({
+                    label: s.name || ("Col " + (i + 1)),
+                    data: [y],
+                    backgroundColor: s.color || chartColors[i % chartColors.length],
+                    borderRadius: 10,
+                    barThickness: 30,
+                  });
+                });
+              } else {
+                var maxPoints = 3;
+                if (isInbound || isReturn) {
+                  maxPoints = 3;
+                }
+                res.chart_data.forEach(function (s, i) {
+                  var data = (s.dataPoints || []).map(function (dp) { return Number(dp.y); });
+                  if (maxPoints && data.length > maxPoints) {
+                    data = data.slice(0, maxPoints);
+                  }
+                  datasets.push({
+                    label: s.name || ("Series " + (i + 1)),
+                    data: data,
+                    backgroundColor: s.color || chartColors[i % chartColors.length],
+                    borderRadius: 10,
+                    barThickness: 24,
+                  });
+                });
+                if (isInbound || isReturn) {
+                  labels = labels.slice(0, maxPoints);
+                }
+              }
+            }
 
             const targetDataset = res.chart_data.find((ds) =>
-              ds.name?.toLowerCase().includes("target")
+              ds.name && ds.name.toLowerCase().indexOf("target") !== -1
             );
             let targetValue = null;
-            if (targetDataset && targetDataset.dataPoints.length) {
+            if (targetDataset && targetDataset.dataPoints && targetDataset.dataPoints.length) {
               const validValues = targetDataset.dataPoints
                 .map((dp) => Number(dp.y))
                 .filter((v) => !isNaN(v));
@@ -365,7 +419,6 @@
               }
             }
             if (isNaN(targetValue) || targetValue === null) targetValue = 0;
-
             const showTarget = false;
             let chartConfig = {};
 
@@ -405,6 +458,51 @@
                 },
                 plugins: getChartPlugins(),
               };
+            } else if (useGroupedBar && datasets.length) {
+              chartConfig = {
+                type: "bar",
+                data: {
+                  labels: labels,
+                  datasets: datasets,
+                },
+                options: {
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  layout: { padding: { top: 40 } },
+                  plugins: {
+                    legend: { position: "top" },
+                    tooltip: {
+                      callbacks: {
+                        label: (ctx) =>
+                          (ctx.dataset.label || "") + ": " + (ctx.parsed.y != null ? ctx.parsed.y.toFixed(1) : "") + "%",
+                      },
+                    },
+                    datalabels: {
+                      color: "#003366",
+                      anchor: "end",
+                      align: "center",
+                      offset: 4,
+                      backgroundColor: "rgba(255,255,255,0.9)",
+                      borderColor: "rgba(100, 149, 237, 0.9)",
+                      borderWidth: 1,
+                      borderRadius: 4,
+                      font: { weight: "bold", size: 10 },
+                      padding: 2,
+                      formatter: (v) => (v != null && !isNaN(v) ? v.toFixed(1) + "%" : ""),
+                    },
+                  },
+                  scales: {
+                    x: { grid: { display: false }, ticks: { color: "#000" } },
+                    y: {
+                      beginAtZero: true,
+                      max: 100,
+                      grid: { color: "rgba(0,0,0,0.05)" },
+                      ticks: { color: "#000", callback: function(v) { return v + "%"; } },
+                    },
+                  },
+                },
+                plugins: getChartPlugins(),
+              };
             } else {
               chartConfig = {
                 type: "bar",
@@ -414,9 +512,7 @@
                     {
                       label: "Performance %",
                       data: values,
-                      backgroundColor: tabName
-                        .toLowerCase()
-                        .includes("rejections")
+                      backgroundColor: tabLower.indexOf("rejections") !== -1
                         ? chartColors
                         : "#bfbfbf",
                       borderRadius: 10,
@@ -461,9 +557,7 @@
                               borderDash: [6, 6],
                               label: {
                                 display: true,
-                                content: `🎯 Target ${(
-                                  targetValue ?? 0
-                                ).toFixed(1)}%`,
+                                content: "🎯 Target " + (targetValue != null ? targetValue.toFixed(1) : 0) + "%",
                                 enabled: true,
                                 position: "end",
                                 backgroundColor: "rgba(255,255,255,0.9)",

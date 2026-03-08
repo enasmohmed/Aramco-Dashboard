@@ -656,7 +656,7 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:'' }}"{% endif %}>
+                  <tr role="row" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {% if col|lower == "shipment_nbr" or col|lower == "shipment nbr" %}
@@ -707,8 +707,8 @@
         <div class="kpi-card text-center danger">
           <div class="kpi-icon text-danger"><i class="bi bi-x-circle-fill"></i></div>
           <div class="kpi-title">Failed Shipments</div>
-          <div class="kpi-value">{% if tab.stats.total %}{% widthratio tab.stats.miss tab.stats.total 100 %}{% else %}0{% endif %}%</div>
-          <small class="text-muted d-block mt-1">{{ tab.stats.miss|default:0 }} shipments</small>
+          <div class="kpi-value">{{ tab.stats.failed_pct|default:0|floatformat:0 }}%</div>
+          <small class="text-muted d-block mt-1">{{ tab.stats.failed|default:0 }} shipments</small>
         </div>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
@@ -792,7 +792,7 @@
       {% if sub.full_width %}
     <div class="row mt-4">
       <div class="col-12">
-        <div class="card">
+        <div class="card" {% if sub.id == 'sub-table-outbound-detail' %}id="outbound-detail-card"{% endif %}>
           <div class="card-header pb-0 card-no-border text-center">
             <h4 class="mb-2">{{ sub.title }}</h4>
           </div>
@@ -819,6 +819,17 @@
                     {% endfor %}
                   </select>
                 </div>
+                {% if sub.filter_options.hit_miss %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Status (Hit / Miss)</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="hit-miss">
+                    <option value="">All</option>
+                    {% for opt in sub.filter_options.hit_miss %}
+                    <option value="{{ opt|lower }}">{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                {% endif %}
                 <div class="col-12 col-sm-6 col-md-4 col-lg-3">
                   <label class="form-label small fw-semibold mb-1">Order Nbr</label>
                   <input type="text" class="form-control inbound-detail-filter" data-filter="order-nbr" placeholder="Search Order Nbr" />
@@ -840,7 +851,7 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }}"{% endif %}>
+                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {% if col|lower == "status" %}
@@ -937,45 +948,9 @@
       {% endif %}
     {% endfor %}
   </div>
-  {# ================= INVENTORY: كروت KPI + شارت + جداول المناطق الثلاث ================= #}
+  {# ================= INVENTORY: شارت فقط ثم الجدول (بدون كروت KPI) ================= #}
   {% elif tab_name_lower == 'inventory' %}
   <div class="col-12">
-    {# ===== 0) كروت KPI: Total / Successful / Failed / Target ===== #}
-    {% if tab.stats.total %}
-    <div class="row g-4 mx-0 mb-4">
-      <div class="col-12 col-md-6 col-lg-3">
-        <div class="kpi-card text-center">
-          <div class="kpi-icon text-primary"><i class="bi bi-truck"></i></div>
-          <div class="kpi-title">Total Shipments</div>
-          <div class="kpi-value">{{ tab.stats.total|default:0 }}</div>
-        </div>
-      </div>
-      <div class="col-12 col-md-6 col-lg-3">
-        <div class="kpi-card text-center success">
-          <div class="kpi-icon text-success"><i class="bi bi-check-circle-fill"></i></div>
-          <div class="kpi-title">Successful Shipments</div>
-          <div class="kpi-value">{{ tab.stats.hit_pct|default:0|floatformat:0 }}%</div>
-          <small class="text-success d-block mt-1">{{ tab.stats.hit|default:0 }} shipments</small>
-        </div>
-      </div>
-      <div class="col-12 col-md-6 col-lg-3">
-        <div class="kpi-card text-center danger">
-          <div class="kpi-icon text-danger"><i class="bi bi-x-circle-fill"></i></div>
-          <div class="kpi-title">Failed Shipments</div>
-          <div class="kpi-value">{% if tab.stats.total %}{% widthratio tab.stats.miss tab.stats.total 100 %}{% else %}0{% endif %}%</div>
-          <small class="text-muted d-block mt-1">{{ tab.stats.miss|default:0 }} shipments</small>
-        </div>
-      </div>
-      <div class="col-12 col-md-6 col-lg-3">
-        <div class="kpi-card text-center">
-          <div class="kpi-icon text-secondary"><i class="bi bi-bullseye"></i></div>
-          <div class="kpi-title">Target</div>
-          <div class="kpi-value">≥ {{ tab.stats.target|default:99 }}%</div>
-        </div>
-      </div>
-    </div>
-    {% endif %}
-
     {# ===== 1) الشارت في أول ديف ===== #}
     {% if tab.chart_data %}
     <div class="row mb-4">
@@ -1100,10 +1075,10 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" {% if sub.filter_options %}data-facility="{{ row|get_item:sub.filter_options.facility_column|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:'' }}"{% endif %}>
+                  <tr role="row" {% if sub.filter_options %}data-facility="{{ row|get_item:sub.filter_options.facility_column|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-hit-miss="{{ row|get_item:'Status'|default:'' }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
-                    {% if col == 'HIT or MISS' or col|lower == 'hit or miss' or col|lower == 'hit/miss' %}
+                    {% if col == 'Status' or col|lower == 'hit or miss' or col|lower == 'hit/miss' %}
                     <td>
                       {% if value|default_if_none:""|trim|lower == "hit" %}
                       <span class="badge bg-success rounded-pill d-inline-flex align-items-center gap-1 text-uppercase"><i class="bi bi-check-circle-fill"></i> Hit</span>
@@ -1566,7 +1541,7 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{% if sub.id == 'sub-table-outbound-detail' %}{{ row|get_item:'Customer Name'|default:'' }}{% else %}{{ row|get_item:'Facility Code'|default:'' }}{% endif %}" {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}"{% endif %} data-status="{% if sub.id == 'sub-table-inbound-detail' %}{{ row|get_item:'HIT or MISS'|default:'' }}{% else %}{{ row|get_item:'Status'|default:'' }}{% endif %}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{{ row|get_item:'HIT or MISS'|default:'' }}"{% endif %}{% endif %}>
+                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{% if sub.id == 'sub-table-outbound-detail' %}{{ row|get_item:'Customer Name'|default:'' }}{% else %}{{ row|get_item:'Facility Code'|default:'' }}{% endif %}" {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}"{% endif %} data-status="{% if sub.id == 'sub-table-inbound-detail' %}{{ row|get_item:'HIT or MISS'|default:'' }}{% else %}{{ row|get_item:'Status'|default:'' }}{% endif %}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{% if sub.id == 'sub-table-inventory-detail' %}{{ row|get_item:'Status'|default:'' }}{% else %}{{ row|get_item:'HIT or MISS'|default:'' }}{% endif %}"{% endif %}{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {# ===== INBOUND: Shipment_nbr & Received QTY badges only ===== #}
@@ -1578,6 +1553,31 @@
                     {% else %}
                     <td>{{ value }}</td>
                     {% endif %}
+                    {# ===== INVENTORY: Status column = Hit/Miss ===== #}
+                    {% elif sub.id == 'sub-table-inventory-detail' and col|lower == 'status' %}
+                    <td>
+                      {% if value|default_if_none:""|trim|lower == "hit" %}
+                      <span
+                        class="badge bg-success rounded-pill d-inline-flex align-items-center gap-1 text-uppercase"
+                      >
+                        <i class="bi bi-check-circle-fill"></i> Hit
+                      </span>
+                      {% elif value|default_if_none:""|trim|lower == "miss" %}
+                      <span
+                        class="badge bg-danger rounded-pill d-inline-flex align-items-center gap-1 text-uppercase"
+                      >
+                        <i class="bi bi-x-circle-fill"></i> Miss
+                      </span>
+                      {% elif value|default_if_none:""|trim|lower == "pending" %}
+                      <span class="badge bg-warning text-dark rounded-pill"
+                        >Pending</span
+                      >
+                      {% else %}
+                      <span class="badge bg-light text-dark rounded-pill"
+                        >{{ value|default:"—" }}</span
+                      >
+                      {% endif %}
+                    </td>
                     {# ===== OUTBOUND etc.: Status, Hit/Miss, Date, City ===== #}
                     {% elif col|lower == "status" %}
                     <td class="text-center">
@@ -1765,46 +1765,100 @@
 
 <script>
       (function() {
-        var table = document.getElementById('inbound-shipments-detail-table') || document.getElementById('outbound-shipments-detail-table') || document.getElementById('inventory-shipments-detail-table');
-        if (!table) return;
-        var card = table.closest('.card');
-        var tbody = table.querySelector('tbody');
-        var selects = card ? card.querySelectorAll('.inbound-detail-filter') : [];
-        function applyFilters() {
-          var facility = (card.querySelector('[data-filter="facility"]') || {}).value || '';
-          var facilityCode = (card.querySelector('[data-filter="facility-code"]') || {}).value || '';
-          var status = (card.querySelector('[data-filter="status"]') || {}).value || '';
-          var month = (card.querySelector('[data-filter="month"]') || {}).value || '';
-          var hitMissEl = card.querySelector('[data-filter="hit-miss"]');
-          var hitMiss = (hitMissEl && hitMissEl.value) ? hitMissEl.value : '';
-          var cityEl = card.querySelector('[data-filter="city"]');
-          var city = (cityEl && cityEl.value) ? cityEl.value : '';
-          var orderNbrInput = card.querySelector('[data-filter="order-nbr"]');
-          var orderNbr = (orderNbrInput && orderNbrInput.value) ? orderNbrInput.value.trim() : '';
-          var rows = tbody ? tbody.querySelectorAll('tr[data-facility]') : [];
-          rows.forEach(function(tr) {
-            var f = (tr.getAttribute('data-facility') || '').trim();
-            var fc = (tr.getAttribute('data-facility-code') || '').trim();
-            var s = (tr.getAttribute('data-status') || '').trim();
-            var m = (tr.getAttribute('data-month') || '').trim();
-            var hm = (tr.getAttribute('data-hit-miss') || '').trim();
-            var c = (tr.getAttribute('data-city') || '').trim();
-            var on = (tr.getAttribute('data-order-nbr') || '').trim();
-            var show = (!facility || f === facility) &&
-                       (!facilityCode || fc === facilityCode) &&
-                       (!status || s === status) &&
-                       (!month || m === month) &&
-                       (!hitMiss || hm === hitMiss) &&
-                       (!city || c === city) &&
-                       (!orderNbr || on.indexOf(orderNbr) !== -1);
-            tr.style.display = show ? '' : 'none';
+        var tableIds = ['inbound-shipments-detail-table', 'inventory-shipments-detail-table'];
+        tableIds.forEach(function(tableId) {
+          var table = document.getElementById(tableId);
+          if (!table) return;
+          var card = table.closest('.card');
+          if (!card) return;
+          var tbody = table.querySelector('tbody');
+          var selects = card.querySelectorAll('.inbound-detail-filter');
+          if (!selects.length) return;
+          function applyFilters() {
+            var facility = (card.querySelector('[data-filter="facility"]') || {}).value || '';
+            var facilityCode = (card.querySelector('[data-filter="facility-code"]') || {}).value || '';
+            var status = (card.querySelector('[data-filter="status"]') || {}).value || '';
+            var month = (card.querySelector('[data-filter="month"]') || {}).value || '';
+            var hitMissEl = card.querySelector('[data-filter="hit-miss"]');
+            var hitMiss = (hitMissEl && hitMissEl.value) ? hitMissEl.value.trim() : '';
+            var cityEl = card.querySelector('[data-filter="city"]');
+            var city = (cityEl && cityEl.value) ? cityEl.value : '';
+            var orderNbrInput = card.querySelector('[data-filter="order-nbr"]');
+            var orderNbr = (orderNbrInput && orderNbrInput.value) ? orderNbrInput.value.trim() : '';
+            var rows = tbody ? tbody.querySelectorAll('tr') : [];
+            rows.forEach(function(tr) {
+              var f = (tr.getAttribute('data-facility') || '').trim();
+              var fc = (tr.getAttribute('data-facility-code') || '').trim();
+              var s = (tr.getAttribute('data-status') || '').trim();
+              var m = (tr.getAttribute('data-month') || '').trim();
+              var hm = (tr.getAttribute('data-hit-miss') || '').trim();
+              var c = (tr.getAttribute('data-city') || '').trim();
+              var on = (tr.getAttribute('data-order-nbr') || '').trim();
+              var show = (!facility || f === facility) &&
+                         (!facilityCode || fc === facilityCode) &&
+                         (!status || s === status) &&
+                         (!month || m === month) &&
+                         (!hitMiss || hm.toLowerCase() === hitMiss.toLowerCase()) &&
+                         (!city || c === city) &&
+                         (!orderNbr || on.indexOf(orderNbr) !== -1);
+              tr.style.display = show ? '' : 'none';
+            });
+          }
+          for (var i = 0; i < selects.length; i++) {
+            var el = selects[i];
+            var isInput = el.tagName && el.tagName.toLowerCase() === 'input';
+            el.addEventListener(isInput ? 'input' : 'change', applyFilters);
+          }
+        });
+
+        (function outboundDetailFilter() {
+          function applyOutboundFilters(card) {
+            if (!card) return;
+            var table = card.querySelector('#outbound-shipments-detail-table') || card.querySelector('table.table-bordered');
+            if (!table) return;
+            var tbody = table.querySelector('tbody');
+            if (!tbody) return;
+            var facility = (card.querySelector('[data-filter="facility"]') || {}).value || '';
+            var month = (card.querySelector('[data-filter="month"]') || {}).value || '';
+            var hitMissEl = card.querySelector('[data-filter="hit-miss"]');
+            var hitMiss = (hitMissEl && hitMissEl.value) ? String(hitMissEl.value).trim().toLowerCase() : '';
+            var orderNbrInput = card.querySelector('[data-filter="order-nbr"]');
+            var orderNbr = (orderNbrInput && orderNbrInput.value) ? orderNbrInput.value.trim() : '';
+            var rows = tbody.querySelectorAll('tr');
+            for (var i = 0; i < rows.length; i++) {
+              var tr = rows[i];
+              var f = (tr.getAttribute('data-facility') || '').trim();
+              var m = (tr.getAttribute('data-month') || '').trim();
+              var hmRaw = tr.getAttribute('data-hit-miss');
+              var hm = (hmRaw != null ? String(hmRaw) : '').trim().toLowerCase();
+              var on = (tr.getAttribute('data-order-nbr') || '').trim();
+              var hitMissMatch = !hitMiss || hm === hitMiss || (hitMiss === 'miss' && hm === 'pending');
+              var show = (!facility || f === facility) &&
+                         (!month || m === month) &&
+                         hitMissMatch &&
+                         (!orderNbr || on.indexOf(orderNbr) !== -1);
+              tr.style.display = show ? '' : 'none';
+            }
+          }
+          document.addEventListener('change', function(e) {
+            var card = e.target && e.target.closest && e.target.closest('#outbound-detail-card');
+            if (card && e.target.classList && e.target.classList.contains('inbound-detail-filter')) {
+              applyOutboundFilters(card);
+            }
           });
-        }
-        for (var i = 0; i < selects.length; i++) {
-          var el = selects[i];
-          var isInput = el.tagName && el.tagName.toLowerCase() === 'input';
-          el.addEventListener(isInput ? 'input' : 'change', applyFilters);
-        }
+          document.addEventListener('input', function(e) {
+            var card = e.target && e.target.closest && e.target.closest('#outbound-detail-card');
+            if (card && e.target.classList && e.target.classList.contains('inbound-detail-filter')) {
+              applyOutboundFilters(card);
+            }
+          });
+          document.addEventListener('DOMContentLoaded', function() {
+            var card = document.getElementById('outbound-detail-card');
+            if (card) applyOutboundFilters(card);
+          });
+          var card = document.getElementById('outbound-detail-card');
+          if (card) applyOutboundFilters(card);
+        })();
       })();
 
       (function() {

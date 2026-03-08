@@ -848,10 +848,10 @@
             </div>
             <div class="col-12 col-md-6">
               <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Number of Pallets (LPNs)</div>
+                <div class="inbound-kpi-label mb-2">Total Quantity</div>
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
-                    {{ inbound_kpi.number_of_pallets|default:0 }}
+                    {{ inbound_kpi.total_quantity_display|default:inbound_kpi.total_quantity|default:"0" }}
                   </div>
                   <div class="inbound-kpi-icon bg-info-soft text-info">
                     <i class="bi bi-truck"></i>
@@ -861,40 +861,12 @@
             </div>
           </div>
           <div class="row g-3 mb-4">
-            {% if inbound_kpi.card4_label %}
-            <div class="col-12 col-md-6">
-              <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Total Quantity</div>
-                <div class="d-flex align-items-center justify-content-between">
-                  <div class="inbound-kpi-value">
-                    {{ inbound_kpi.total_quantity_display|default:inbound_kpi.total_quantity|default:"0" }}
-                  </div>
-                  <div class="inbound-kpi-icon bg-warning-soft text-warning">
-                    <i class="bi bi-truck"></i>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="col-12 col-md-6">
-              <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">{{ inbound_kpi.card4_label }}</div>
-                <div class="d-flex align-items-center justify-content-between">
-                  <div class="inbound-kpi-value">
-                    {{ inbound_kpi.card4_value|default:"" }}
-                  </div>
-                  <div class="inbound-kpi-icon bg-secondary bg-opacity-25 text-secondary">
-                    <i class="bi bi-truck"></i>
-                  </div>
-                </div>
-              </div>
-            </div>
-            {% else %}
             <div class="col-12">
               <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Total Quantity</div>
+                <div class="inbound-kpi-label mb-2">Number of Pallets (LPNs)</div>
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
-                    {{ inbound_kpi.total_quantity_display|default:inbound_kpi.total_quantity|default:"0" }}
+                    {{ inbound_kpi.number_of_pallets|default:0 }}
                   </div>
                   <div class="inbound-kpi-icon bg-warning-soft text-warning">
                     <i class="bi bi-truck"></i>
@@ -902,7 +874,6 @@
                 </div>
               </div>
             </div>
-            {% endif %}
           </div>
 
           <div class="row g-3">
@@ -982,6 +953,9 @@
         </div>
       </div>
     </div>
+    {{ pod_compliance_chart_data|json_script:"pod-compliance-chart-data" }}
+    {{ returns_chart_data|json_script:"returns-chart-data" }}
+    {{ order_process_chart_data|json_script:"order-process-chart-data" }}
     <!-- Outbound card (right) - مثل الصورة بدون POD by Region -->
     <div class="col-12 col-lg-6 outbound-section">
       <div class="card border-0 shadow-sm h-100 dashboard-card-elevated">
@@ -1092,18 +1066,7 @@
               style="height: 280px; min-height: 280px"
             ></div>
             <div class="d-flex flex-wrap justify-content-center gap-3 gap-md-4 mt-2 pt-2 border-top border-light">
-              <div class="d-flex align-items-center gap-2">
-                <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #7FB7A6;"></span>
-                <span class="small text-dark">On Time</span>
-              </div>
-              <div class="d-flex align-items-center gap-2">
-                <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #A8C8EB;"></span>
-                <span class="small text-dark">Pending</span>
-              </div>
-              <div class="d-flex align-items-center gap-2">
-                <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #E8A8A2;"></span>
-                <span class="small text-dark">Late</span>
-              </div>
+              <span class="small text-muted">Hit % by month (same as PODs tab — PODs KPI Hit & Miss)</span>
             </div>
           </div>
         </div>
@@ -1161,12 +1124,26 @@
           </div>
 
           <div class="pod-compliance-block returns-order-process-block">
-            <div class="returns-order-process-title">
-              <span class="dashboard-section-title fw-bold text-dark"
-                >Order Process Time</span
-              >
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+              <span class="dashboard-section-title fw-bold text-dark">Order Process Time</span>
+              <div class="d-flex flex-wrap align-items-center gap-3 gap-md-4">
+                <div class="d-flex align-items-center gap-2">
+                  <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #3F8F7A;"></span>
+                  <span class="small text-dark">Hit: <strong>{{ order_process_kpi.hit_pct|default:0 }}%</strong> ({{ order_process_kpi.hit|default:0 }})</span>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                  <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #E8A8A2;"></span>
+                  <span class="small text-dark">Miss: <strong>{{ order_process_kpi.miss_pct|default:0 }}%</strong> ({{ order_process_kpi.miss|default:0 }})</span>
+                </div>
+                {% if order_process_kpi.total %}
+                <span class="small text-muted">Total: {{ order_process_kpi.total }}</span>
+                {% endif %}
+              </div>
             </div>
-            <div id="chart-returns-sla" class="returns-chart-container"></div>
+            <div id="chart-returns-sla" class="returns-chart-container" style="height: 280px; min-height: 280px;"></div>
+            <div class="d-flex flex-wrap justify-content-center gap-3 gap-md-4 mt-2 pt-2 border-top border-light">
+              <span class="small text-muted">Hit % by facility (same as Outbound tab)</span>
+            </div>
           </div>
         </div>
       </div>
@@ -1195,12 +1172,12 @@
               <div class="inbound-kpi-card p-3">
                 <div class="inbound-kpi-label mb-2">No of Location</div>
                 <div class="d-flex align-items-center justify-content-between">
-                  <div class="inbound-kpi-value">796</div>
+                  <div class="inbound-kpi-value fw-bold" id="inventory-no-of-location">{{ inventory_kpi.no_of_location|default:0 }}</div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
                     <i class="bi bi-truck"></i>
                   </div>
                 </div>
-                <div class="small text-success fw-semibold mt-1">Hit 100%</div>
+                <div class="small text-muted mt-1">Hit: {{ inventory_kpi.hit_pct|default:0 }}%</div>
               </div>
             </div>
 
@@ -1208,12 +1185,12 @@
               <div class="inbound-kpi-card p-3">
                 <div class="inbound-kpi-label mb-2">Total Qty</div>
                 <div class="d-flex align-items-center justify-content-between">
-                  <div class="inbound-kpi-value">6,958</div>
+                  <div class="inbound-kpi-value fw-bold" id="inventory-total-qty">{{ inventory_kpi.total_qty|default:0 }}</div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
                     <i class="bi bi-truck"></i>
                   </div>
                 </div>
-                <div class="small text-success fw-semibold mt-1">Hit 100%</div>
+                <div class="small text-muted mt-1">Hit: {{ inventory_kpi.hit_pct|default:0 }}%</div>
               </div>
             </div>
           </div>
@@ -1233,50 +1210,55 @@
               style="height: 280px; min-height: 280px"
             ></div>
           </div>
+          {{ inventory_capacity_data|json_script:"inventory-capacity-data" }}
           <div class="dashboard-card-elevated rounded-3 p-3 mt-3">
             <h6 class="dashboard-section-title text-dark mb-2">Warehouse</h6>
             <div class="table-responsive">
               <table class="table table-sm table-bordered dashboard-data-table">
                 <thead>
                   <tr>
-                    <th>Warehouse</th>
-                    <th>SKUs</th>
-                    <th>Available Space</th>
-                    <th>Utilization %</th>
+                    <th>Facility</th>
+                    <th>Capacity</th>
+                    <th>Utilized</th>
+                    <th>Pending</th>
+                    <th>Empty</th>
+                    <th>Percentage</th>
                   </tr>
                 </thead>
                 <tbody>
                   {% for row in inventory_warehouse_table %}
                   <tr>
-                    <td>{{ row.warehouse|default:"" }}</td>
-                    <td>{{ row.skus|default:"" }}</td>
-                    <td>{{ row.available_space|default:"" }}</td>
-                    <td>{{ row.utilization_pct|default:"" }}</td>
+                    <td>{% if row.facility != None %}{{ row.facility }}{% else %}{{ row.warehouse|default:"" }}{% endif %}</td>
+                    <td>{% if row.capacity != None %}{{ row.capacity }}{% else %}{{ row.skus|default:"" }}{% endif %}</td>
+                    <td>{{ row.utilized|default:"" }}</td>
+                    <td>{{ row.pending|default:0 }}</td>
+                    <td>{% if row.empty != None %}{{ row.empty }}{% else %}{{ row.available_space|default:"" }}{% endif %}</td>
+                    <td>{% if row.percentage != None %}{{ row.percentage }}%{% else %}{{ row.utilization_pct|default:"" }}{% endif %}</td>
                   </tr>
                   {% empty %}
                   <tr>
-                    <td>Main Warehouse</td>
-                    <td>117</td>
-                    <td>9,536,995</td>
-                    <td>223</td>
+                    <td>Jeddah</td>
+                    <td>1,800</td>
+                    <td>0</td>
+                    <td>0</td>
+                    <td>1,800</td>
+                    <td>0%</td>
                   </tr>
                   <tr>
-                    <td>Dammam DC</td>
-                    <td>108</td>
-                    <td>9,260,995</td>
-                    <td>553</td>
+                    <td>Dammam</td>
+                    <td>1,575</td>
+                    <td>0</td>
+                    <td>0</td>
+                    <td>1,575</td>
+                    <td>0%</td>
                   </tr>
                   <tr>
-                    <td>Riyadh DC</td>
-                    <td>145</td>
-                    <td>9,827,955</td>
-                    <td>535</td>
-                  </tr>
-                  <tr>
-                    <td>Jeddah DC</td>
-                    <td>159</td>
-                    <td>5,324,353</td>
-                    <td>279</td>
+                    <td>Riyadh</td>
+                    <td>1,125</td>
+                    <td>0</td>
+                    <td>0</td>
+                    <td>1,125</td>
+                    <td>0%</td>
                   </tr>
                   {% endfor %}
                 </tbody>
@@ -1420,9 +1402,9 @@
     // ─── تحكم من الكونسول: غيّر PODS_CHART_CONFIG ثم نفّذ initPodsComplianceChart() ───
     window.PODS_CHART_CONFIG = {
       height: 350,
-      columnWidth: "100%",
+      columnWidth: "65%",
       borderRadius: 4,
-      colors: ["#7FB7A6", "#A8C8EB", "#E8A8A2"],
+      colors: ["#007fa3", "#7FB7A6", "#A8C8EB"],
     };
 
     function renderPodsComplianceChart() {
@@ -1526,11 +1508,12 @@
 
 <script>
   (function () {
+    // Order Process Time = نفس شارت Outbound Hit/Miss (Hit % بالمناطق)
     window.RETURNS_CHART_CONFIG = {
       height: 280,
-      columnWidth: "100%",
+      columnWidth: "65%",
       borderRadius: 4,
-      colors: ["#7FB7A6", "#A8C8EB", "#E8A8A2"],
+      colors: ["#9084ad", "#e8f1fb", "#538fe7"],
     };
 
     function renderReturnsComplianceChart() {
@@ -1542,14 +1525,14 @@
       var columnWidth =
         cfg.columnWidth != null && cfg.columnWidth !== ""
           ? cfg.columnWidth
-          : "100%";
+          : "65%";
       var borderRadius = cfg.borderRadius != null ? cfg.borderRadius : 4;
       var colors =
         Array.isArray(cfg.colors) && cfg.colors.length
           ? cfg.colors
-          : ["#7FB7A6", "#A8C8EB", "#E8A8A2"];
+          : ["#9084ad", "#e8f1fb", "#538fe7"];
 
-      var dataEl = document.getElementById("returns-chart-data");
+      var dataEl = document.getElementById("order-process-chart-data");
       var categories = [];
       var series = [];
       if (dataEl && dataEl.textContent && dataEl.textContent.trim()) {
@@ -1558,15 +1541,15 @@
           categories = data.categories || [];
           series = data.series || [];
         } catch (e) {
-          console.warn("Returns chart data error", e);
+          console.warn("Order Process Time (Outbound Hit/Miss) chart data error", e);
         }
       }
       if (!categories.length || !series.length) {
-        categories = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
+        categories = ["Jan", "Feb", "Mar"];
         series = [
-          { name: "On Time", data: [70, 72, 68, 75, 74, 78] },
-          { name: "Pending", data: [15, 14, 18, 12, 13, 10] },
-          { name: "Late", data: [15, 14, 14, 13, 13, 12] },
+          { name: "Riyadh Hit %", data: [0, 0, 0] },
+          { name: "Dammam Hit %", data: [0, 0, 0] },
+          { name: "Jeddah Hit %", data: [0, 0, 0] },
         ];
       }
       if (window._returnsComplianceChart) {
@@ -1606,7 +1589,12 @@
           },
           title: { text: "" },
         },
-        legend: { show: false },
+        legend: {
+          show: true,
+          position: "bottom",
+          horizontalAlign: "center",
+          fontSize: "12px",
+        },
         colors: colors,
         dataLabels: { enabled: false },
         grid: { borderColor: "#E1E5EA", strokeDashArray: 4 },
