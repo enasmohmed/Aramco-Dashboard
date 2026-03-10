@@ -542,7 +542,7 @@
     let selectedQuarter = "";
     const TAB_CACHE_PREFIX = "dashboard_tab_cache";
     const TAB_CACHE_VERSION = "v7_table_style"; // زيدي الرقم عند تحديث شكل الجداول
-    const TAB_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+    const TAB_CACHE_TTL_MS = 60 * 60 * 1000; // 60 دقيقة — عشان لما ترجع تفتح الموقع التابات تبقى محمّلة
 
     function buildTabCacheKey(tab, month, quarter) {
       const safeTab = (tab || "all").toLowerCase();
@@ -863,6 +863,7 @@
         success: function (data) {
           writeTabCache(cacheKey, data);
           handleTabResponse(data);
+          preloadOtherTabs(month, quarter);
         },
         error: function (err) {
           $("#quarter-loader").hide();
@@ -876,6 +877,25 @@
             "<div class='alert alert-danger text-center'>" + msg + "</div>",
           );
         },
+      });
+    }
+
+    function preloadOtherTabs(month, quarter) {
+      const tabsToPreload = ["dashboard", "inbound", "pods update", "inventory", "return & refusal", "outbound"];
+      const currentTab = (selectedTab || "").toLowerCase();
+      tabsToPreload.forEach(function (tabName) {
+        if (tabName === currentTab) return;
+        const key = buildTabCacheKey(tabName, month || "", quarter || "");
+        if (readTabCache(key)) return;
+        $.ajax({
+          url: "{% url 'dashboard:upload_excel' %}",
+          method: "GET",
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+          data: { tab: tabName, month: month || "", quarter: quarter || "" },
+          success: function (data) {
+            if (data && !data.error) writeTabCache(key, data);
+          },
+        });
       });
     }
 

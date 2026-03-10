@@ -43,6 +43,21 @@
     background-color: #fff;
   }
 
+  /* جدول Inbound و Outbound و Return Shipments Detail: الهيدر يبقى ثابت عند السكرول */
+  #inbound-shipments-detail-table thead th,
+  #outbound-shipments-detail-table thead th,
+  #return-shipments-detail-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #cfe2ff !important;
+    box-shadow: 0 1px 0 0 #dee2e6;
+  }
+  .inbound-detail-table-scroll {
+    max-height: 70vh;
+    overflow: auto;
+  }
+
   .badge:empty {
     display: block !important;
   }
@@ -197,10 +212,47 @@
     {{ tab.inbound_html|safe }}
   </div>
   {% endif %} {% if tab.sub_tables %}
-  {# ================= RETURN & REFUSAL: استخدم نفس تصميم تاب Inbound بالظبط ================= #}
+  {# ================= RETURN & REFUSAL: كروت وفلاتر وجدول مثل Inbound ================= #}
   {% if tab_name_lower == 'return & refusal' %}
   <div class="col-12">
-    {# 1) الشارت في أول ديف (نفس Inbound) #}
+    {# 1) الكروت الأربعة: Total / Successful Shipments (Hit % + count) / Failed Shipments (Miss % + count) / Target #}
+    {% if tab.stats %}
+    <div class="row g-4 mx-0 mb-4">
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center">
+          <div class="kpi-icon text-primary"><i class="bi bi-truck"></i></div>
+          <div class="kpi-title">Total Shipments</div>
+          <div class="kpi-value">{{ tab.stats.total|default:0 }}</div>
+        </div>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center success">
+          <div class="kpi-icon text-success"><i class="bi bi-check-circle-fill"></i></div>
+          <div class="kpi-title">Successful Shipments</div>
+          <div class="kpi-value">{{ tab.stats.hit_pct|floatformat:0|default:0 }}%</div>
+          <small class="text-muted d-block mt-1">{{ tab.stats.hit|default:0 }} shipments</small>
+        </div>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center danger">
+          <div class="kpi-icon text-danger"><i class="bi bi-x-circle-fill"></i></div>
+          <div class="kpi-title">Failed Shipments</div>
+          <div class="kpi-value">{{ tab.stats.miss_pct|floatformat:0|default:0 }}%</div>
+          <small class="text-muted d-block mt-1">{{ tab.stats.miss|default:0 }} shipments</small>
+        </div>
+      </div>
+      <div class="col-12 col-md-6 col-lg-3">
+        <div class="kpi-card text-center">
+          <div class="kpi-icon text-secondary"><i class="bi bi-bullseye"></i></div>
+          <div class="kpi-title">Target</div>
+          <div class="kpi-value">≥ {{ tab.stats.target|default:99 }}%</div>
+          <small class="text-muted d-block mt-1">Current: {{ tab.stats.hit_pct|floatformat:1|default:0 }}%</small>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {# 2) الشارت #}
     {% if tab.chart_data %}
     <div class="row mb-4">
       <div class="col-12">
@@ -211,7 +263,7 @@
     </div>
     {% endif %}
 
-    {# 2) جداول المناطق بنفس شكل Inbound FS #}
+    {# 3) جداول المناطق بنفس شكل Inbound FS #}
     {% for sub in tab.sub_tables %}
       {% if sub.facility_name %}
     <div class="row mb-4">
@@ -266,18 +318,61 @@
       {% endif %}
     {% endfor %}
 
-    {# 3) جدول التفاصيل الكامل تحت (لو موجود) #}
+    {# 4) جدول التفاصيل مع الفلاتر وتثبيت الهيدر وبادجات Hit/Miss #}
     {% for sub in tab.sub_tables %}
       {% if sub.full_width %}
     <div class="row mt-4">
       <div class="col-12">
-        <div class="card">
+        <div class="card" {% if sub.id == 'sub-table-return-detail' %}id="return-detail-card"{% endif %}>
           <div class="card-header pb-0 card-no-border text-center">
             <h4 class="mb-2">{{ sub.title }}</h4>
           </div>
-          <div class="card-body text-center ">
-            <div class="table-responsive custom-scrollbar">
-              <table class="table table-bordered">
+          {% if sub.filter_options %}
+          <div class="card border-0 shadow-sm mb-2 mx-3">
+            <div class="card-body py-2 px-3">
+              <div class="row g-3 align-items-end filter-row">
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Facility</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="facility">
+                    <option value="">All</option>
+                    {% for opt in sub.filter_options.facility_codes %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                {% if sub.filter_options.months %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Month</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="month">
+                    <option value="">All</option>
+                    {% for opt in sub.filter_options.months %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                {% endif %}
+                {% if sub.filter_options.hit_miss %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Hit or Miss</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="hit-miss">
+                    <option value="">All</option>
+                    {% for opt in sub.filter_options.hit_miss %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                {% endif %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Shipment Nbr</label>
+                  <input type="text" class="form-control inbound-detail-filter" data-filter="shipment-nbr" placeholder="Search (250...)" />
+                </div>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+          <div class="card-body text-center">
+            <div class="table-responsive custom-scrollbar inbound-detail-table-scroll">
+              <table class="table table-bordered" id="return-shipments-detail-table">
                 <thead class="table-primary">
                   <tr role="row">
                     {% for col in sub.columns %}
@@ -287,11 +382,31 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" class="even">
+                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}" data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %}>
                     {% for col in sub.columns %}
-                    <td>{{ row|get_item:col }}</td>
+                    {% with value=row|get_item:col %}
+                    {% if col|lower == "shipment_nbr" or col|lower == "shipment nbr" %}
+                    <td><span class="badge bg-primary rounded-pill">{{ value|default:"—" }}</span></td>
+                    {% elif col|lower == "hit or miss" or col|lower == "hit/miss" %}
+                    <td>
+                      {% if value|default_if_none:""|trim|lower == "hit" %}
+                      <span class="badge bg-success rounded-pill d-inline-flex align-items-center gap-1 text-uppercase"><i class="bi bi-check-circle-fill"></i> Hit</span>
+                      {% elif value|default_if_none:""|trim|lower == "miss" %}
+                      <span class="badge bg-danger rounded-pill d-inline-flex align-items-center gap-1 text-uppercase"><i class="bi bi-x-circle-fill"></i> Miss</span>
+                      {% elif value|default_if_none:""|trim|lower == "pending" %}
+                      <span class="badge bg-warning text-dark rounded-pill">Pending</span>
+                      {% else %}
+                      <span class="badge bg-light text-dark rounded-pill">{{ value|default:"—" }}</span>
+                      {% endif %}
+                    </td>
+                    {% else %}
+                    <td>{{ value }}</td>
+                    {% endif %}
+                    {% endwith %}
                     {% endfor %}
                   </tr>
+                  {% empty %}
+                  <tr><td colspan="{{ sub.columns|length }}" class="text-muted text-center">No data available</td></tr>
                   {% endfor %}
                 </tbody>
               </table>
@@ -645,7 +760,7 @@
           </div>
           {% endif %}
           <div class="card-body text-center">
-            <div class="table-responsive custom-scrollbar">
+            <div class="table-responsive custom-scrollbar inbound-detail-table-scroll">
               <table class="table table-bordered" id="inbound-shipments-detail-table">
                 <thead class="table-primary">
                   <tr role="row">
@@ -1178,33 +1293,10 @@
       {% endfor %}
     </div>
   </div>
-  {# ================= PODs: كروت KPI + جدول واحد وشارت واحد ================= #}
+  {# ================= PODs: جدول KPI + شارت + تفاصيل فقط (بدون كروت KPI فوق) ================= #}
   {% elif tab_name_lower == 'pods update' %}
   <div class="col-12">
-    {% if tab.stats %}
-    <div class="row g-4 mb-3">
-      <div class="col-12 col-md-6 col-lg-6">
-        <div class="kpi-card text-center success">
-          <div class="kpi-icon text-success">
-            <i class="bi bi-check-circle-fill"></i>
-          </div>
-          <div class="kpi-title">Hit %</div>
-          <div class="kpi-value">{{ tab.stats.hit_pct|default:0|floatformat:0 }}%</div>
-        </div>
-      </div>
-      <div class="col-12 col-md-6 col-lg-6">
-        <div class="kpi-card text-center danger">
-          <div class="kpi-icon text-danger">
-            <i class="bi bi-x-circle-fill"></i>
-          </div>
-          <div class="kpi-title">Miss %</div>
-          <div class="kpi-value">{{ tab.stats.miss_pct|default:0|floatformat:0 }}%</div>
-        </div>
-      </div>
-    </div>
-    {% endif %}
-
-    {# جدول واحد وشارت واحد #}
+    {# جدول KPI + شارت Hit % للشهور فقط #}
     {% if tab.sub_tables %}
     {% with sub=tab.sub_tables.0 %}
     <div class="row mb-4">
@@ -1256,30 +1348,19 @@
       {% if sub.filter_options %}
       <div class="card-body py-2 px-3 border-0">
         <div class="row g-3 align-items-end filter-row">
-          {% if sub.filter_options.obd_numbers %}
-          <div class="col-12 col-sm-6 col-md-3">
-            <label class="form-label small fw-semibold mb-1">OBD Number</label>
-            <select class="form-select pods-detail-filter w-100" data-filter="obd">
+          {% if sub.filter_options.deliveries %}
+          <div class="col-12 col-sm-6 col-md-4">
+            <label class="form-label small fw-semibold mb-1">Delivery</label>
+            <select class="form-select pods-detail-filter w-100" data-filter="delivery">
               <option value="">All</option>
-              {% for opt in sub.filter_options.obd_numbers %}
-              <option value="{{ opt }}">{{ opt }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          {% endif %}
-          {% if sub.filter_options.whnames %}
-          <div class="col-12 col-sm-6 col-md-3">
-            <label class="form-label small fw-semibold mb-1">W.HNAME</label>
-            <select class="form-select pods-detail-filter w-100" data-filter="whname">
-              <option value="">All</option>
-              {% for opt in sub.filter_options.whnames %}
+              {% for opt in sub.filter_options.deliveries %}
               <option value="{{ opt }}">{{ opt }}</option>
               {% endfor %}
             </select>
           </div>
           {% endif %}
           {% if sub.filter_options.statuses %}
-          <div class="col-12 col-sm-6 col-md-3">
+          <div class="col-12 col-sm-6 col-md-4">
             <label class="form-label small fw-semibold mb-1">Hit or Miss</label>
             <select class="form-select pods-detail-filter w-100" data-filter="status">
               <option value="">All</option>
@@ -1290,7 +1371,7 @@
           </div>
           {% endif %}
           {% if sub.filter_options.months %}
-          <div class="col-12 col-sm-6 col-md-3">
+          <div class="col-12 col-sm-6 col-md-4">
             <label class="form-label small fw-semibold mb-1">Month</label>
             <select class="form-select pods-detail-filter w-100" data-filter="month">
               <option value="">All</option>
@@ -1315,8 +1396,7 @@
             </thead>
             <tbody>
               {% for row in sub.data %}
-              <tr data-whname="{{ row|get_item:'W.HNAME'|default:'' }}"
-                  data-obd="{{ row|get_item:sub.filter_options.obd_column|default:'OBD Number'|default:'' }}"
+              <tr data-delivery="{{ row|get_item:sub.filter_options.delivery_column|default:'Delivery'|default:'' }}"
                   data-status="{{ row|get_item:'Hit or Miss'|default:'' }}"
                   data-month="{{ row|get_item:'Month'|default:'' }}">
                 {% for col in sub.columns %}
@@ -1414,7 +1494,7 @@
     {% for sub in tab.sub_tables %} {% if sub.full_width %}
     <div class="row mt-4">
       <div class="col-12">
-        <div class="card">
+        <div class="card" {% if sub.id == 'sub-table-return-detail' %}id="return-detail-card"{% endif %}>
           <div class="card-header pb-0 card-no-border text-center">
             <h4 class="mb-2">{{ sub.title }}</h4>
           </div>
@@ -1459,7 +1539,7 @@
                   <!-- Facility / Customer -->
                   <div class="col-12 col-sm-6 col-md-4 col-lg-3">
                     <label class="form-label small fw-semibold mb-1">
-                      {% if sub.id == 'sub-table-outbound-detail' %}Customer Name{% else %}Facility{% endif %}
+                      {% if sub.id == 'sub-table-outbound-detail' %}Facility{% else %}Facility{% endif %}
                     </label>
                     <select class="form-select inbound-detail-filter w-100" data-filter="facility">
                       <option value="">All</option>
@@ -1519,6 +1599,14 @@
                   </div>
                   {% endif %}
 
+                  <!-- Shipment Nbr (Return tab: 250 only) -->
+                  {% if sub.id == 'sub-table-return-detail' and sub.filter_options %}
+                  <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                    <label class="form-label small fw-semibold mb-1">Shipment Nbr</label>
+                    <input type="text" class="form-control inbound-detail-filter" data-filter="shipment-nbr" placeholder="Search Shipment Nbr (250...)" />
+                  </div>
+                  {% endif %}
+
                 </div>
 
               </div>
@@ -1530,8 +1618,8 @@
 
 
           <div class="card-body text-center ">
-            <div class="table-responsive custom-scrollbar">
-              <table class="table table-bordered" {% if sub.id == 'sub-table-inbound-detail' %}id="inbound-shipments-detail-table"{% elif sub.id == 'sub-table-outbound-detail' %}id="outbound-shipments-detail-table"{% endif %}>
+            <div class="table-responsive custom-scrollbar{% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' %} inbound-detail-table-scroll{% endif %}">
+              <table class="table table-bordered" {% if sub.id == 'sub-table-inbound-detail' %}id="inbound-shipments-detail-table"{% elif sub.id == 'sub-table-outbound-detail' %}id="outbound-shipments-detail-table"{% elif sub.id == 'sub-table-return-detail' %}id="return-shipments-detail-table"{% endif %}>
                 <thead class="table-primary">
                   <tr role="row">
                     {% for col in sub.columns %}
@@ -1541,11 +1629,11 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{% if sub.id == 'sub-table-outbound-detail' %}{{ row|get_item:'Customer Name'|default:'' }}{% else %}{{ row|get_item:'Facility Code'|default:'' }}{% endif %}" {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}"{% endif %} data-status="{% if sub.id == 'sub-table-inbound-detail' %}{{ row|get_item:'HIT or MISS'|default:'' }}{% else %}{{ row|get_item:'Status'|default:'' }}{% endif %}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{% if sub.id == 'sub-table-inventory-detail' %}{{ row|get_item:'Status'|default:'' }}{% else %}{{ row|get_item:'HIT or MISS'|default:'' }}{% endif %}"{% endif %}{% endif %}>
+                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}"{% endif %} data-status="{% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' %}{{ row|get_item:'HIT or MISS'|default:'' }}{% else %}{{ row|get_item:'Status'|default:'' }}{% endif %}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.id == 'sub-table-return-detail' %}data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %} {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{% if sub.id == 'sub-table-inventory-detail' %}{{ row|get_item:'Status'|default:'' }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}"{% endif %}{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
-                    {# ===== INBOUND: Shipment_nbr & Received QTY badges only ===== #}
-                    {% if sub.id == 'sub-table-inbound-detail' %}
+                    {# ===== INBOUND / RETURN: Shipment_nbr & Received QTY badges ===== #}
+                    {% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-return-detail' %}
                     {% if col|lower == "shipment_nbr" or col|lower == "shipment nbr" %}
                     <td><span class="badge bg-primary rounded-pill">{{ value|default:"—" }}</span></td>
                     {% elif "received" in col|lower and "qty" in col|lower %}
@@ -1765,7 +1853,7 @@
 
 <script>
       (function() {
-        var tableIds = ['inbound-shipments-detail-table', 'inventory-shipments-detail-table'];
+        var tableIds = ['inbound-shipments-detail-table', 'inventory-shipments-detail-table', 'return-shipments-detail-table'];
         tableIds.forEach(function(tableId) {
           var table = document.getElementById(tableId);
           if (!table) return;
@@ -1785,6 +1873,8 @@
             var city = (cityEl && cityEl.value) ? cityEl.value : '';
             var orderNbrInput = card.querySelector('[data-filter="order-nbr"]');
             var orderNbr = (orderNbrInput && orderNbrInput.value) ? orderNbrInput.value.trim() : '';
+            var shipmentNbrInput = card.querySelector('[data-filter="shipment-nbr"]');
+            var shipmentNbr = (shipmentNbrInput && shipmentNbrInput.value) ? shipmentNbrInput.value.trim() : '';
             var rows = tbody ? tbody.querySelectorAll('tr') : [];
             rows.forEach(function(tr) {
               var f = (tr.getAttribute('data-facility') || '').trim();
@@ -1794,13 +1884,15 @@
               var hm = (tr.getAttribute('data-hit-miss') || '').trim();
               var c = (tr.getAttribute('data-city') || '').trim();
               var on = (tr.getAttribute('data-order-nbr') || '').trim();
+              var sn = (tr.getAttribute('data-shipment-nbr') || '').trim();
               var show = (!facility || f === facility) &&
                          (!facilityCode || fc === facilityCode) &&
                          (!status || s === status) &&
                          (!month || m === month) &&
                          (!hitMiss || hm.toLowerCase() === hitMiss.toLowerCase()) &&
                          (!city || c === city) &&
-                         (!orderNbr || on.indexOf(orderNbr) !== -1);
+                         (!orderNbr || on.indexOf(orderNbr) !== -1) &&
+                         (!shipmentNbr || sn.indexOf(shipmentNbr) !== -1);
               tr.style.display = show ? '' : 'none';
             });
           }
@@ -1809,6 +1901,7 @@
             var isInput = el.tagName && el.tagName.toLowerCase() === 'input';
             el.addEventListener(isInput ? 'input' : 'change', applyFilters);
           }
+          applyFilters();
         });
 
         (function outboundDetailFilter() {
@@ -1859,6 +1952,7 @@
           var card = document.getElementById('outbound-detail-card');
           if (card) applyOutboundFilters(card);
         })();
+
       })();
 
       (function() {
@@ -1893,17 +1987,15 @@
         var card = table.closest('.card');
         var tbody = table.querySelector('tbody');
         function applyPodsFilters() {
-          var whname = (card.querySelector('[data-filter="whname"]') || {}).value || '';
-          var obd = (card.querySelector('[data-filter="obd"]') || {}).value || '';
+          var delivery = (card.querySelector('[data-filter="delivery"]') || {}).value || '';
           var status = (card.querySelector('[data-filter="status"]') || {}).value || '';
           var month = (card.querySelector('[data-filter="month"]') || {}).value || '';
           var rows = tbody ? tbody.querySelectorAll('tr[data-status]') : [];
           rows.forEach(function(tr) {
-            var w = (tr.getAttribute('data-whname') || '').trim();
-            var o = (tr.getAttribute('data-obd') || '').trim();
+            var d = (tr.getAttribute('data-delivery') || '').trim();
             var s = (tr.getAttribute('data-status') || '').trim();
             var m = (tr.getAttribute('data-month') || '').trim();
-            var show = (!whname || w === whname) && (!obd || o === obd) && (!status || s === status) && (!month || m === month);
+            var show = (!delivery || d === delivery) && (!status || s === status) && (!month || m === month);
             tr.style.display = show ? '' : 'none';
           });
         }

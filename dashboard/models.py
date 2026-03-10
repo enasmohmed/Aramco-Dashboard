@@ -59,6 +59,22 @@ class InboundShipmentRemark(models.Model):
         return f"{self.shipment_nbr} @ {self.facility}"
 
 
+class OutboundOrderRemark(models.Model):
+    """ملاحظات/أسباب تُضاف من الأدمن لأوامر Outbound وتظهر في جدول Outbound Shipments Detail"""
+    order_nbr = models.CharField(max_length=255, db_index=True)
+    facility = models.CharField(max_length=255, db_index=True)
+    remark = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Outbound Order Remark"
+        verbose_name_plural = "Outbound Order Remarks"
+        unique_together = [["order_nbr", "facility"]]
+
+    def __str__(self):
+        return f"{self.order_nbr} @ {self.facility}"
+
+
 class ExcelSheetCache(models.Model):
     """كاش بيانات شيت إكسل: يُملأ عند الرفع ويُستخدم لتسريع فتح التابات."""
     sheet_name = models.CharField(max_length=255, unique=True, db_index=True)
@@ -72,3 +88,17 @@ class ExcelSheetCache(models.Model):
 
     def __str__(self):
         return f"{self.sheet_name} ({len(self.data)} rows)"
+
+
+class DashboardDataCache(models.Model):
+    """كاش بيانات الداشبورد المُستخرجة من الإكسل: يُملأ عند رفع الملف ويُقرأ من الداتابيز لفتح الداشبورد بسرعة."""
+    source_file_path = models.CharField(max_length=512, unique=True, db_index=True)
+    data = models.JSONField(default=dict)  # inbound_kpi, pending_shipments, charts, outbound, pods, returns, inventory, warehouse, returns_region
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Dashboard Data Cache"
+        verbose_name_plural = "Dashboard Data Caches"
+
+    def __str__(self):
+        return f"Dashboard cache ({self.source_file_path})"
