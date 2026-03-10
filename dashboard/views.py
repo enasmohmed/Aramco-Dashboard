@@ -6492,10 +6492,12 @@ class UploadExcelViewRoche(View):
                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
             ]
             months_raw = df["Month"].dropna().unique().tolist()
-            months = sorted(
-                months_raw,
-                key=lambda m: month_order.index(m) if m in month_order else 999,
-            )
+            # استبعاد القيم الفارغة أو غير المعرّفة (حتى لا يظهر عمود بدون اسم وقيم أصفار)
+            months = [
+                str(m).strip() for m in months_raw
+                if m is not None and str(m).strip() and str(m).strip() in month_order
+            ]
+            months = sorted(months, key=lambda m: month_order.index(m))
             if not months:
                 return {
                     "detail_html": "<p class='text-warning text-center p-4'>⚠️ No months found in data.</p>",
