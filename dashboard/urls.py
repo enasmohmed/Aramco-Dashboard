@@ -1,8 +1,14 @@
 from django.urls import path
 from . import views
-from .views import UploadExcelViewRoche, MeetingPointListCreateView, ToggleMeetingPointView, DoneMeetingPointView
+from .views import (
+    UploadExcelViewRoche,
+    MeetingPointListCreateView,
+    ToggleMeetingPointView,
+    DoneMeetingPointView,
+    save_remark_status,
+)
 
-app_name= 'dashboard'
+app_name = "dashboard"
 
 urlpatterns = [
     path('', UploadExcelViewRoche.as_view(), name='upload_excel'),
@@ -14,7 +20,6 @@ urlpatterns = [
     path('meeting-points/', MeetingPointListCreateView.as_view(), name='meeting_points'),
     path('toggle-meeting-point/<int:pk>/', ToggleMeetingPointView.as_view(), name='toggle_meeting_point'),
 
-    path('done-meeting-point/<int:pk>/', DoneMeetingPointView.as_view(), name='done_meeting_point'),
-
-
+    path("done-meeting-point/<int:pk>/", DoneMeetingPointView.as_view(), name="done_meeting_point"),
+    path("api/save-remark-status/", save_remark_status, name="save_remark_status"),
 ]

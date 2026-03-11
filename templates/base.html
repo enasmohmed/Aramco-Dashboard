@@ -95,11 +95,11 @@
       type="text/css"
       href="{% static 'assets/css/vendors/bootstrap.css' %}"
     />
-    <!-- App css-->
+    <!-- App css (استخدام CSS الجاهز تجنباً لخطأ libsass/offline) -->
     <link
       rel="stylesheet"
       type="text/css"
-      href="{% sass_src 'assets/scss/style.scss' %}"
+      href="{% static 'assets/scss/style.css' %}"
     />
     <link
       id="color"
@@ -107,11 +107,11 @@
       href="{% static 'assets/css/color-1.css' %}"
       media="screen"
     />
-    <!-- Responsive css-->
+    <!-- Responsive css (استخدام CSS الجاهز تجنباً لخطأ libsass/offline) -->
     <link
       rel="stylesheet"
       type="text/css"
-      href="{% sass_src 'assets/scss/responsive.scss' %}"
+      href="{% static 'assets/scss/responsive.css' %}"
     />
     <!-- Aramco theme palette (ألوان الموقع الموحدة) -->
     <link

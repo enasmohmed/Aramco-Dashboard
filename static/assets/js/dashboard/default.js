@@ -94,8 +94,11 @@ function startTime() {
       },
     },
   };
-  var chart = new ApexCharts(document.querySelector("#Earnings-chart"), options);
-  chart.render();
+  var earningsEl = document.querySelector("#Earnings-chart");
+  if (earningsEl && typeof ApexCharts !== "undefined") {
+    var chart = new ApexCharts(earningsEl, options);
+    chart.render();
+  }
   var options = {
     series: [{
       name: 'Earning',
@@ -168,8 +171,11 @@ function startTime() {
     },
   },
 };
-var chart = new ApexCharts(document.querySelector("#Expenses-chart"), options);
-chart.render();
+var expensesEl = document.querySelector("#Expenses-chart");
+  if (expensesEl && typeof ApexCharts !== "undefined") {
+    var chart = new ApexCharts(expensesEl, options);
+    chart.render();
+  }
   var options = {
     series: [{
     name: 'TEAM A',
@@ -262,8 +268,11 @@ chart.render();
     },
   },
   };
-  var chart = new ApexCharts(document.querySelector("#growth-chart"), options);
-  chart.render();
+  var growthEl = document.querySelector("#growth-chart");
+  if (growthEl && typeof ApexCharts !== "undefined") {
+    var chart = new ApexCharts(growthEl, options);
+    chart.render();
+  }
     // overview chart
     var optionsoverview = {
       series: [
@@ -400,11 +409,11 @@ chart.render();
         },
       },
     };
-    var chartoverview = new ApexCharts(
-      document.querySelector("#orderoverview"),
-      optionsoverview
-    );
-    chartoverview.render();
+    var orderoverviewEl = document.querySelector("#orderoverview");
+    if (orderoverviewEl && typeof ApexCharts !== "undefined") {
+      var chartoverview = new ApexCharts(orderoverviewEl, optionsoverview);
+      chartoverview.render();
+    }
     // bar overview chart
   var optionsorder = {
     series: [
@@ -507,8 +516,8 @@ chart.render();
       },
     ],
   };
-  var chartorder = new ApexCharts(
-    document.querySelector("#order-bar"),
-    optionsorder
-  );
-  chartorder.render();
+  var orderBarEl = document.querySelector("#order-bar");
+  if (orderBarEl && typeof ApexCharts !== "undefined") {
+    var chartorder = new ApexCharts(orderBarEl, optionsorder);
+    chartorder.render();
+  }

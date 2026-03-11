@@ -11,78 +11,27 @@
     "outbound_kpi": {
       "released_orders": 132,
       "picked_orders": 132,
-      "number_of_pallets": 102
+      "number_of_pallets": 0
     },
     "outbound_kpi_keys_from_sheet": [
       "released_orders",
       "picked_orders",
       "number_of_pallets"
     ],
-    "returns_kpi": {
-      "total_skus": 100,
-      "total_lpns": 0
-    },
-    "returns_chart_data": {
-      "categories": [],
-      "series": [
-        {
-          "name": "On Time",
-          "data": []
-        },
-        {
-          "name": "Pending",
-          "data": []
-        },
-        {
-          "name": "Late",
-          "data": []
-        }
-      ]
-    },
     "inventory_kpi": {
-      "no_of_location": 1839,
+      "no_of_location": 1997,
       "no_of_location_riyadh": 535,
       "no_of_location_dammam": 769,
-      "no_of_location_jeddah": 535,
-      "total_qty": 18730,
+      "no_of_location_jeddah": 693,
+      "total_qty": 20081,
       "total_qty_riyadh": 5886,
       "total_qty_dammam": 6958,
-      "total_qty_jeddah": 5886,
+      "total_qty_jeddah": 7237,
       "hit_pct": 100.0,
       "total_skus": 0,
       "total_lpns": 0,
       "utilization_pct": ""
     },
-    "inventory_warehouse_table": [
-      {
-        "facility": "Jeddah",
-        "capacity": 1800,
-        "utilized": 664,
-        "pending": 0,
-        "empty": 1136,
-        "percentage": 36.89
-      },
-      {
-        "facility": "Dammam",
-        "capacity": 1575,
-        "utilized": 463,
-        "pending": 0,
-        "empty": 1112,
-        "percentage": 29.4
-      },
-      {
-        "facility": "Riyadh",
-        "capacity": 1125,
-        "utilized": 431,
-        "pending": 0,
-        "empty": 694,
-        "percentage": 38.31
-      }
-    ],
-    "inventory_capacity_data": {
-      "used": 34.6,
-      "available": 65.4
-    },
-    "_file_mtime": 1773114383.7255254
+    "_file_mtime": 1773206942.818664
   }
 }

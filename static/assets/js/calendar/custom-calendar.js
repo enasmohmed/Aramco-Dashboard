@@ -1,5 +1,6 @@
 document.addEventListener('DOMContentLoaded', function () {
   var calendarEl = document.getElementById('calendar');
+  if (!calendarEl || typeof FullCalendar === 'undefined') return;
 
   var calendar = new FullCalendar.Calendar(calendarEl, {
     initialDate: '2020-09-12',

@@ -129,7 +129,8 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# [ENAS CUSTOM]
+# [ENAS CUSTOM] مجلد static في جذر المشروع (ليتم خدمة typeahead/data/*.json وغيرها)
+STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
 STATICFILES_FINDERS = [
     "django.contrib.staticfiles.finders.FileSystemFinder",
     "django.contrib.staticfiles.finders.AppDirectoriesFinder",
@@ -139,8 +140,8 @@ STATICFILES_FINDERS = [
 # [ENAS CUSTOM]
 STATIC_URL = "/project/static/"
 
-STATIC_ROOT = BASE_DIR / "static"
-# STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+# لا يساوي STATICFILES_DIRS (مجلد جمع الملفات عند collectstatic)
+STATIC_ROOT = BASE_DIR / "staticfiles"
 SASS_PROCESSOR_ROOT = BASE_DIR / "static"
 
 CACHES = {

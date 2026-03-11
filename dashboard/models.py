@@ -44,10 +44,11 @@ class MeetingPoint(models.Model):
 
 
 class InboundShipmentRemark(models.Model):
-    """ملاحظات/أسباب تُضاف من الأدمن لشحنات Inbound وتظهر في جدول Inbound Shipments Detail"""
+    """ملاحظات/أسباب وتعديل الحالة (Hit/Miss) لشحنات Inbound و Return — تُحرَّر من الجدول"""
     shipment_nbr = models.CharField(max_length=255, db_index=True)
     facility = models.CharField(max_length=255, db_index=True)
     remark = models.TextField(blank=True)
+    status_override = models.CharField(max_length=10, blank=True, null=True)  # "Hit" or "Miss"; null = use computed
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -60,10 +61,11 @@ class InboundShipmentRemark(models.Model):
 
 
 class OutboundOrderRemark(models.Model):
-    """ملاحظات/أسباب تُضاف من الأدمن لأوامر Outbound وتظهر في جدول Outbound Shipments Detail"""
+    """ملاحظات/أسباب وتعديل الحالة (Hit/Miss) لأوامر Outbound — تُحرَّر من الجدول"""
     order_nbr = models.CharField(max_length=255, db_index=True)
     facility = models.CharField(max_length=255, db_index=True)
     remark = models.TextField(blank=True)
+    status_override = models.CharField(max_length=10, blank=True, null=True)  # "Hit" or "Miss"; null = use computed
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

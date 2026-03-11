@@ -4,7 +4,7 @@ from .models import MeetingPoint, InboundShipmentRemark, OutboundOrderRemark
 
 @admin.register(InboundShipmentRemark)
 class InboundShipmentRemarkAdmin(admin.ModelAdmin):
-    list_display = ("shipment_nbr", "facility", "remark_short", "updated_at")
+    list_display = ("shipment_nbr", "facility", "remark_short", "status_override", "updated_at")
     list_editable = ()
     list_filter = ("facility",)
     search_fields = ("shipment_nbr", "facility", "remark")
@@ -18,7 +18,7 @@ class InboundShipmentRemarkAdmin(admin.ModelAdmin):
 
 @admin.register(OutboundOrderRemark)
 class OutboundOrderRemarkAdmin(admin.ModelAdmin):
-    list_display = ("order_nbr", "facility", "remark_short", "updated_at")
+    list_display = ("order_nbr", "facility", "remark_short", "status_override", "updated_at")
     list_editable = ()
     list_filter = ("facility",)
     search_fields = ("order_nbr", "facility", "remark")

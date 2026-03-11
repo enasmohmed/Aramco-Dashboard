@@ -352,7 +352,7 @@
             const isOutbound = tabLower.includes("outbound");
             const isInbound = tabLower.includes("inbound");
             const isReturn = tabLower.includes("return") || tabLower.includes("refusal");
-            const isInventory = tabLower.includes("inventory");
+            const isInventory = tabLower.includes("inventory") || tabLower.includes("stock count");
 
             let labels = chart_info.dataPoints.map((dp) => dp.label);
             let values = chart_info.dataPoints.map((dp) => Number(dp.y));

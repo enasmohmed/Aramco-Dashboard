@@ -832,7 +832,7 @@
           </div>
         </div>
         <div class="card-body">
-          <div class="row g-3 mb-2">
+          <div class="row g-3 mb-4">
             <div class="col-12 col-md-6">
               <div class="inbound-kpi-card p-3">
                 <div class="inbound-kpi-label mb-2">Number of Shipments</div>
@@ -847,21 +847,6 @@
               </div>
             </div>
             <div class="col-12 col-md-6">
-              <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Total Quantity</div>
-                <div class="d-flex align-items-center justify-content-between">
-                  <div class="inbound-kpi-value">
-                    {{ inbound_kpi.total_quantity_display|default:inbound_kpi.total_quantity|default:"0" }}
-                  </div>
-                  <div class="inbound-kpi-icon bg-info-soft text-info">
-                    <i class="bi bi-truck"></i>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="row g-3 mb-4">
-            <div class="col-12">
               <div class="inbound-kpi-card p-3">
                 <div class="inbound-kpi-label mb-2">Number of Pallets (LPNs)</div>
                 <div class="d-flex align-items-center justify-content-between">
@@ -1003,50 +988,8 @@
               </div>
             </div>
           </div>
-          <div class="row g-3 mb-4">
-            {% if outbound_kpi.card4_label %}
-            <div class="col-12 col-md-6">
-              <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Number of Pallets (LPNs)</div>
-                <div class="d-flex align-items-center justify-content-between">
-                  <div class="inbound-kpi-value">
-                    {{ outbound_kpi.number_of_pallets|default:0 }}
-                  </div>
-                  <div class="inbound-kpi-icon bg-info-soft text-info">
-                    <i class="bi bi-truck"></i>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="col-12 col-md-6">
-              <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">{{ outbound_kpi.card4_label }}</div>
-                <div class="d-flex align-items-center justify-content-between">
-                  <div class="inbound-kpi-value">
-                    {{ outbound_kpi.card4_value|default:"" }}
-                  </div>
-                  <div class="inbound-kpi-icon bg-secondary bg-opacity-25 text-secondary">
-                    <i class="bi bi-truck"></i>
-                  </div>
-                </div>
-              </div>
-            </div>
-            {% else %}
-            <div class="col-12">
-              <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Number of Pallets (LPNs)</div>
-                <div class="d-flex align-items-center justify-content-between">
-                  <div class="inbound-kpi-value">
-                    {{ outbound_kpi.number_of_pallets|default:0 }}
-                  </div>
-                  <div class="inbound-kpi-icon bg-info-soft text-info">
-                    <i class="bi bi-truck"></i>
-                  </div>
-                </div>
-              </div>
-            </div>
-            {% endif %}
-          </div>
+          <!-- Outbound: Number of Pallets (LPNs) card removed per requirement -->
+          <div class="row g-3 mb-4"></div>
           <div
             class="pod-compliance-block mb-3 p-3 dashboard-card-elevated rounded-3"
           >
@@ -1066,7 +1009,7 @@
               style="height: 280px; min-height: 280px"
             ></div>
             <div class="d-flex flex-wrap justify-content-center gap-3 gap-md-4 mt-2 pt-2 border-top border-light">
-              <span class="small text-muted">Hit % by month (same as PODs tab — PODs KPI Hit & Miss)</span>
+              <span class="small text-muted">Chart data from Transportation tab — PODs KPI table (Hit % by month)</span>
             </div>
           </div>
         </div>
@@ -1097,10 +1040,10 @@
           <div class="row g-2 mb-3">
             <div class="col-12 col-sm-6">
               <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Total SKUs</div>
+                <div class="inbound-kpi-label mb-2">Total of Return</div>
                 <div class="inbound-kpi-row">
                   <div class="inbound-kpi-value">
-                    {{ returns_kpi.total_skus|default:0 }}
+                    {{ returns_kpi.total_of_return|default:returns_kpi.total_skus|default:0 }}
                   </div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
                     <i class="bi bi-truck"></i>
@@ -1110,10 +1053,10 @@
             </div>
             <div class="col-12 col-sm-6">
               <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Total LPNs</div>
+                <div class="inbound-kpi-label mb-2">Total Quantity</div>
                 <div class="inbound-kpi-row">
                   <div class="inbound-kpi-value">
-                    {{ returns_kpi.total_lpns|default:0 }}
+                    {{ returns_kpi.total_quantity|default:returns_kpi.total_lpns|default:0 }}
                   </div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
                     <i class="bi bi-truck"></i>
@@ -1142,7 +1085,7 @@
             </div>
             <div id="chart-returns-sla" class="returns-chart-container" style="height: 280px; min-height: 280px;"></div>
             <div class="d-flex flex-wrap justify-content-center gap-3 gap-md-4 mt-2 pt-2 border-top border-light">
-              <span class="small text-muted">Hit % by facility (same as Outbound tab)</span>
+              <span class="small text-muted">Order Process Time: Hit % by facility — data from Outbound tab (filter_outbound_shipments)</span>
             </div>
           </div>
         </div>
@@ -1174,7 +1117,7 @@
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value fw-bold" id="inventory-no-of-location">{{ inventory_kpi.no_of_location|default:0 }}</div>
                   <div class="inbound-kpi-icon bg-success-soft text-success">
-                    <i class="bi bi-truck"></i>
+                    <i class="bi bi-geo-alt" aria-hidden="true"></i>
                   </div>
                 </div>
                 <div class="small text-muted mt-1">Hit: {{ inventory_kpi.hit_pct|default:0 }}%</div>

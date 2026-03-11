@@ -574,11 +574,25 @@
 
     function writeTabCache(key, payload) {
       try {
-        localStorage.setItem(
-          key,
-          JSON.stringify({ timestamp: Date.now(), payload }),
-        );
+        if ((key || "").indexOf(":all:") !== -1) {
+          return;
+        }
+        var s = JSON.stringify({ timestamp: Date.now(), payload: payload });
+        if (s.length > 2 * 1024 * 1024) {
+          return;
+        }
+        localStorage.setItem(key, s);
       } catch (err) {
+        if (err && err.name === "QuotaExceededError") {
+          try {
+            var keys = [];
+            for (var i = 0; i < localStorage.length; i++) {
+              var k = localStorage.key(i);
+              if (k && k.indexOf(TAB_CACHE_PREFIX) === 0) keys.push(k);
+            }
+            keys.slice(0, 3).forEach(function (k) { localStorage.removeItem(k); });
+          } catch (e) {}
+        }
         console.warn("⚠️ Failed to write tab cache:", err);
       }
     }
@@ -707,6 +721,72 @@
       queueInitialChartRefresh(document.getElementById("tab-content"));
     });
 
+    window.allInOneChartInstances = window.allInOneChartInstances || {};
+    function drawAllInOneCharts(tab_cards) {
+      if (!tab_cards || !window.Chart) return;
+      tab_cards.forEach(function (tab) {
+        var slug = (tab.name || "")
+          .toLowerCase()
+          .replace(/ & /g, "-")
+          .replace(/ /g, "-")
+          .replace(/'/g, "");
+        slug = slug.replace(/[^a-z0-9-]/g, "").replace(/^-|-$/g, "") || "chart";
+        var chartData = tab.chart_data || [];
+        var chartType = (tab.chart_type || "bar").toLowerCase();
+        var el = document.getElementById("all-one-chart-" + slug);
+        if (!el || !chartData.length) return;
+        if (window.allInOneChartInstances[slug]) {
+          try {
+            window.allInOneChartInstances[slug].destroy();
+          } catch (e) {}
+          window.allInOneChartInstances[slug] = null;
+        }
+        var ds = chartData[0] || {};
+        var dataPoints = ds.dataPoints || [];
+        var labels = dataPoints.map(function (p) { return p.label || ""; });
+        var values = dataPoints.map(function (p) {
+          var v = Number(p.y);
+          return (typeof v === "number" && !isNaN(v)) ? v : 0;
+        });
+        if (values.length === 0) {
+          values = [0];
+          labels = ["—"];
+        }
+        var colors = ds.color;
+        if (typeof colors === "string") colors = [colors];
+        if (!colors || !colors.length) colors = ["#9084ad", "#e8f1fb", "#538fe7", "#28a745", "#dc3545"];
+        while (colors.length < values.length) colors.push(colors[colors.length % colors.length]);
+        var isPie = chartType === "pie" || chartType === "doughnut";
+        var canvas = document.createElement("canvas");
+        canvas.style.maxHeight = "200px";
+        el.innerHTML = "";
+        el.appendChild(canvas);
+        var config = {
+          type: isPie ? "doughnut" : "bar",
+          data: {
+            labels: labels,
+            datasets: [{
+              label: ds.name || "Hit %",
+              data: values,
+              backgroundColor: isPie ? colors.slice(0, values.length) : (colors[0] || "#9084ad"),
+              borderWidth: 1,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: { legend: { display: isPie } },
+            scales: isPie ? {} : { y: { beginAtZero: true } },
+          },
+        };
+        try {
+          window.allInOneChartInstances[slug] = new Chart(canvas, config);
+        } catch (e) {
+          console.warn("All-in-One chart draw error:", slug, e);
+        }
+      });
+    }
+
     function handleTabResponse(data, options = {}) {
       const fromCache = options.fromCache || false;
       if (!fromCache) {
@@ -748,7 +828,12 @@
           reinitializeScripts(tabContent[0]);
           attachInnerTabListeners(tabContent[0]);
 
-          // ✅ تحميل الشارتات مع delay أطول لضمان تحميل DOM بالكامل
+          // ✅ رسم الشارتات من التابات — إذا الشارت دائرة (pie) نعرضه دائرة في All-in-One
+          if (data.tab_cards && data.tab_cards.length && typeof window.drawAllInOneCharts === "function") {
+            setTimeout(function () { window.drawAllInOneCharts(data.tab_cards); }, 300);
+            setTimeout(function () { window.drawAllInOneCharts(data.tab_cards); }, 800);
+          }
+
           setTimeout(() => {
             if (window.initOverviewCharts) {
               window.initOverviewCharts("#tab-content");
@@ -756,7 +841,6 @@
             queueInitialChartRefresh(tabContent[0]);
           }, 500);
 
-          // ✅ محاولة إضافية بعد delay أطول
           setTimeout(() => {
             queueInitialChartRefresh(tabContent[0]);
             window.dispatchEvent(new Event("resize"));
@@ -881,7 +965,7 @@
     }
 
     function preloadOtherTabs(month, quarter) {
-      const tabsToPreload = ["dashboard", "inbound", "pods update", "inventory", "return & refusal", "outbound"];
+      const tabsToPreload = ["dashboard", "inbound", "transportation", "inventory", "stock count", "return & refusal", "outbound"];
       const currentTab = (selectedTab || "").toLowerCase();
       tabsToPreload.forEach(function (tabName) {
         if (tabName === currentTab) return;

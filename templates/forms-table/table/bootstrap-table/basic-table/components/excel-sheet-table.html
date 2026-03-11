@@ -128,7 +128,7 @@
 </style>
 
 
-{% if not tab.outbound_html and not tab.inbound_html and tab.name|lower != 'return & refusal' and tab.name|lower != 'expiry' and tab.name|lower != 'pods update' and tab.name|lower != 'outbound shipments' and tab.name|lower != 'inventory' %}
+{% if not tab.outbound_html and not tab.inbound_html and tab.name|lower != 'return & refusal' and tab.name|lower != 'expiry' and tab.name|lower != 'transportation' and tab.name|lower != 'outbound shipments' and tab.name|lower != 'inventory' and tab.name|lower != 'stock count' %}
 {% with kpi_table=tab.sub_tables.0.data %}
 <div class="container-fluid px-0">
   <div class="row g-4 mx-0">
@@ -215,30 +215,32 @@
   {# ================= RETURN & REFUSAL: كروت وفلاتر وجدول مثل Inbound ================= #}
   {% if tab_name_lower == 'return & refusal' %}
   <div class="col-12">
-    {# 1) الكروت الأربعة: Total / Successful Shipments (Hit % + count) / Failed Shipments (Miss % + count) / Target #}
+    {# 1) الكروت الأربعة: Total Return / Successful Returns / Failed Returns / Target #}
     {% if tab.stats %}
     <div class="row g-4 mx-0 mb-4">
       <div class="col-12 col-md-6 col-lg-3">
         <div class="kpi-card text-center">
-          <div class="kpi-icon text-primary"><i class="bi bi-truck"></i></div>
-          <div class="kpi-title">Total Shipments</div>
+          <div class="kpi-icon text-primary">
+            <img src="{% static 'assets/images/icons-return.png' %}" alt="Total Return" style="max-width: 72px; max-height: 72px; object-fit: contain;" />
+          </div>
+          <div class="kpi-title">Total Return</div>
           <div class="kpi-value">{{ tab.stats.total|default:0 }}</div>
         </div>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
         <div class="kpi-card text-center success">
           <div class="kpi-icon text-success"><i class="bi bi-check-circle-fill"></i></div>
-          <div class="kpi-title">Successful Shipments</div>
+          <div class="kpi-title">Successful Returns</div>
           <div class="kpi-value">{{ tab.stats.hit_pct|floatformat:0|default:0 }}%</div>
-          <small class="text-muted d-block mt-1">{{ tab.stats.hit|default:0 }} shipments</small>
+          <small class="text-muted d-block mt-1">{{ tab.stats.hit|default:0 }} returns</small>
         </div>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
         <div class="kpi-card text-center danger">
           <div class="kpi-icon text-danger"><i class="bi bi-x-circle-fill"></i></div>
-          <div class="kpi-title">Failed Shipments</div>
+          <div class="kpi-title">Failed Returns</div>
           <div class="kpi-value">{{ tab.stats.miss_pct|floatformat:0|default:0 }}%</div>
-          <small class="text-muted d-block mt-1">{{ tab.stats.miss|default:0 }} shipments</small>
+          <small class="text-muted d-block mt-1">{{ tab.stats.miss|default:0 }} returns</small>
         </div>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
@@ -800,30 +802,32 @@
   {# ================= OUTBOUND SHIPMENTS: الشارت أولاً ثم 3 جداول (المدن) ثم جدول الإكسل بالتفاصيل ================= #}
   {% elif tab_name_lower == 'outbound shipments' %}
   <div class="col-12">
-    {# ===== 0) كروت KPI: Total / Successful / Failed Shipments + Target (زي Inbound: العدد والنسبة) ===== #}
+    {# ===== 0) كروت KPI: Total / Successful / Failed Orders + Target ===== #}
     {% if tab.stats.total %}
     <div class="row g-4 mx-0 mb-4">
       <div class="col-12 col-md-6 col-lg-3">
         <div class="kpi-card text-center">
-          <div class="kpi-icon text-primary"><i class="bi bi-truck"></i></div>
-          <div class="kpi-title">Total Shipments</div>
+          <div class="kpi-icon text-primary" style="border-radius: 12px; display: inline-flex; align-items: center; justify-content: center;">
+            <img src="{% static 'assets/images/icons-purchase-order.png' %}" alt="Total Order" style="width: 88px; height: 88px; object-fit: contain;" />
+          </div>
+          <div class="kpi-title">Total Order</div>
           <div class="kpi-value">{{ tab.stats.total|default:0 }}</div>
         </div>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
         <div class="kpi-card text-center success">
           <div class="kpi-icon text-success"><i class="bi bi-check-circle-fill"></i></div>
-          <div class="kpi-title">Successful Shipments</div>
+          <div class="kpi-title">Successful Orders</div>
           <div class="kpi-value">{{ tab.stats.hit_pct|default:0|floatformat:0 }}%</div>
-          <small class="text-success d-block mt-1">{{ tab.stats.hit|default:0 }} shipments</small>
+          <small class="text-success d-block mt-1">{{ tab.stats.hit|default:0 }} orders</small>
         </div>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
         <div class="kpi-card text-center danger">
           <div class="kpi-icon text-danger"><i class="bi bi-x-circle-fill"></i></div>
-          <div class="kpi-title">Failed Shipments</div>
+          <div class="kpi-title">Failed Orders</div>
           <div class="kpi-value">{{ tab.stats.failed_pct|default:0|floatformat:0 }}%</div>
-          <small class="text-muted d-block mt-1">{{ tab.stats.failed|default:0 }} shipments</small>
+          <small class="text-muted d-block mt-1">{{ tab.stats.failed|default:0 }} orders</small>
         </div>
       </div>
       <div class="col-12 col-md-6 col-lg-3">
@@ -907,12 +911,12 @@
       {% if sub.full_width %}
     <div class="row mt-4">
       <div class="col-12">
-        <div class="card" {% if sub.id == 'sub-table-outbound-detail' %}id="outbound-detail-card"{% endif %}>
+        <div class="card" {% if sub.id == 'sub-table-outbound-detail' %}id="outbound-detail-card"{% elif sub.id == 'sub-table-outbound-full-sheet' %}id="outbound-full-sheet-card"{% endif %}>
           <div class="card-header pb-0 card-no-border text-center">
             <h4 class="mb-2">{{ sub.title }}</h4>
           </div>
 
-          {% if sub.filter_options and sub.id == 'sub-table-outbound-detail' %}
+          {% if sub.filter_options and sub.id == 'sub-table-outbound-detail' or sub.filter_options and sub.id == 'sub-table-outbound-full-sheet' %}
           <div class="card border-0 shadow-sm mb-2">
             <div class="card-body py-2 px-3">
               <div class="row g-3 align-items-end filter-row">
@@ -955,7 +959,7 @@
           {% endif %}
 
           <div class="card-body text-center">
-            <div class="table-responsive custom-scrollbar">
+            <div class="table-responsive custom-scrollbar{% if sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-outbound-full-sheet' %} inbound-detail-table-scroll{% endif %}">
               <table class="table table-bordered" {% if sub.id == 'sub-table-outbound-detail' %}id="outbound-shipments-detail-table"{% endif %}>
                 <thead class="table-primary">
                   <tr role="row">
@@ -1063,66 +1067,77 @@
       {% endif %}
     {% endfor %}
   </div>
-  {# ================= INVENTORY: شارت فقط ثم الجدول (بدون كروت KPI) ================= #}
-  {% elif tab_name_lower == 'inventory' %}
+  {# ================= STOCK COUNT: كل منطقة في ديف — جدول على اليسار + شارت Hit % على اليمين ================= #}
+  {% elif tab_name_lower == 'inventory' or tab_name_lower == 'stock count' %}
+  <style>
+    .stockcount-pie-wrapper .chart-container { height: 280px !important; max-width: 280px; width: 100% !important; margin: 0 auto; }
+  </style>
   <div class="col-12">
-    {# ===== 1) الشارت في أول ديف ===== #}
-    {% if tab.chart_data %}
-    <div class="row mb-4">
-      <div class="col-12">
-        <div class="table-card">
-          {% render_chart tab.name %}
+    {# كل منطقة: جدول يسار (في منتصف الديف)، شارت يمين #}
+    {% for sub in tab.sub_tables %}
+      {% if sub.region_section %}
+    <div class="row mb-4 align-items-stretch stockcount-region-row" data-region-id="{{ sub.id }}">
+      <div class="col-12 col-lg-7 mb-3 mb-lg-0">
+        <div class="card h-100">
+          <div class="card-header pb-0 card-no-border">
+            <h5 class="mb-0 fw-bold" style="color: #9084ad">{{ sub.title }}</h5>
+          </div>
+          <div class="card-body p-2">
+            <div class="table-responsive custom-scrollbar inbound-detail-table-scroll" style="max-height: 400px;">
+              <table class="table table-striped table-bordered text-center align-middle mb-0 stockcount-region-table">
+                <thead class="table-light sticky-top">
+                  <tr>
+                    {% for col in sub.columns %}
+                    <th class="text-nowrap" style="min-width: 4rem;">{{ col }}</th>
+                    {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in sub.data %}
+                  <tr>
+                    {% for col in sub.columns %}
+                    {% with value=row|get_item:col %}
+                    {% if col == 'Status' or col|lower == 'hit or miss' or col|lower == 'hit/miss' %}
+                    <td>
+                      {% if value|default_if_none:""|trim|lower == "hit" %}
+                      <span class="badge bg-success rounded-pill">Hit</span>
+                      {% elif value|default_if_none:""|trim|lower == "miss" %}
+                      <span class="badge bg-danger rounded-pill">Miss</span>
+                      {% else %}{{ value|default:"—" }}{% endif %}
+                    </td>
+                    {% else %}
+                    <td class="text-nowrap" style="min-width: 4rem;">{{ value|default:"—" }}</td>
+                    {% endif %}
+                    {% endwith %}
+                    {% endfor %}
+                  </tr>
+                  {% empty %}
+                  <tr><td colspan="{{ sub.columns|length }}" class="text-muted">No data for this region.</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-    {% endif %}
-
-    {# ===== 2) جداول المناطق الثلاث (Hit / Miss لكل شهر) ===== #}
-    {% for sub in tab.sub_tables %}
-      {% if sub.facility_name %}
-    <div class="row mb-4">
-      <div class="col-12">
-        <div class="table-card">
-          <h5 class="text-center mt-3 mb-3 fw-bold" style="color: #9084ad">{{ sub.title }}</h5>
-          <div class="table-responsive custom-scrollbar table-top" style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
-            <table class="table table-striped table-bordered text-center align-middle mb-0 inbound-facility-table">
-              <thead class="table-light">
-                {% if sub.id == 'sub-table-inventory-facilities-hit' %}
-                <tr>
-                  <th class="text-nowrap" style="min-width: 4rem;" rowspan="2">KPI</th>
-                  {% for col in sub.columns|slice:"1:" %}
-                  {% if forloop.counter0|divisibleby:2 %}
-                  {% with parts=col|split:" " %}
-                  <th class="text-center text-nowrap" colspan="2">{{ parts.0 }}</th>
-                  {% endwith %}
-                  {% endif %}
-                  {% endfor %}
-                </tr>
-                <tr>
-                  {% for col in sub.columns|slice:"1:" %}
-                  {% with parts=col|split:" " %}
-                  <th class="text-nowrap" style="min-width: 4rem;">{{ parts.1|default:parts.0 }}</th>
-                  {% endwith %}
-                  {% endfor %}
-                </tr>
-                {% else %}
-                <tr>
-                  {% for col in sub.columns %}
-                  <th class="text-nowrap" style="min-width: 4rem;">{{ col }}</th>
-                  {% endfor %}
-                </tr>
-                {% endif %}
-              </thead>
-              <tbody>
-                {% for row in sub.data %}
-                <tr>
-                  {% for col in sub.columns %}
-                  <td class="text-nowrap" style="min-width: 4rem;">{{ row|get_item:col }}</td>
-                  {% endfor %}
-                </tr>
+      <div class="col-12 col-lg-5">
+        <div class="card h-100">
+          <div class="card-header pb-0 card-no-border d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <h5 class="mb-0 fw-bold" style="color: #9084ad">{{ sub.title }} — Hit %</h5>
+            {% if sub.chart_columns %}
+            <div class="d-flex align-items-center gap-2">
+              <label class="form-label small mb-0 text-nowrap">Add column to chart:</label>
+              <select class="form-select form-select-sm stockcount-add-col" style="max-width: 180px;" data-region-id="{{ sub.id }}" data-canvas-id="{{ sub.canvas_id|default:'' }}">
+                <option value="">— Hit % only —</option>
+                {% for col in sub.chart_columns %}
+                <option value="{{ col|escape }}">{{ col }}</option>
                 {% endfor %}
-              </tbody>
-            </table>
+              </select>
+            </div>
+            {% endif %}
+          </div>
+          <div class="card-body d-flex align-items-center justify-content-center stockcount-pie-wrapper" style="min-height: 280px;">
+            {% render_chart sub.id %}
           </div>
         </div>
       </div>
@@ -1130,7 +1145,73 @@
       {% endif %}
     {% endfor %}
 
-    {# ===== 3) جدول Inventory Shipments Detail (زي Inbound) مع فلاتر وبادج Hit/Miss ===== #}
+    {# خيار إضافة عمود على الشارت: يعمل عندما يوجد أكثر من شارت (مناطق) #}
+    {% if tab_name_lower == 'inventory' or tab_name_lower == 'stock count' %}
+    <script>
+    (function() {
+      var selects = document.querySelectorAll('.stockcount-add-col');
+      if (!selects.length) return;
+      selects.forEach(function(sel) {
+        sel.addEventListener('change', function() {
+          var row = sel.closest('.stockcount-region-row');
+          if (!row) return;
+          var table = row.querySelector('.stockcount-region-table');
+          var canvas = row.querySelector('canvas');
+          if (!table) return;
+          var canvasId = (sel.getAttribute('data-canvas-id') || '').trim();
+          if (!canvasId && canvas) canvasId = canvas.id;
+          if (!canvasId) return;
+          var chart = window.chartInstances && window.chartInstances[canvasId];
+          if (!chart) return;
+          var colName = sel.value;
+          var thead = table.querySelector('thead tr');
+          var ths = thead ? thead.querySelectorAll('th') : [];
+          var colIdx = -1;
+          for (var i = 0; i < ths.length; i++) {
+            if ((ths[i].textContent || '').trim() === colName) { colIdx = i; break; }
+          }
+          if (colIdx < 0 && colName) return;
+          var sum = 0, count = 0;
+          if (colName) {
+            var rows = table.querySelectorAll('tbody tr');
+            rows.forEach(function(tr) {
+              var cells = tr.querySelectorAll('td');
+              if (cells[colIdx]) {
+                var v = (cells[colIdx].textContent || '').trim().replace(/,/g, '');
+                if (v === '' || v === '—' || v === '–' || v === '-') v = '0';
+                var n = parseFloat(v);
+                if (!isNaN(n)) { sum += n; count++; }
+                else if (v) count++;
+              }
+            });
+          }
+          var data = chart.data;
+          if (!data.datasets) return;
+          var extra = data.datasets.filter(function(d) { return d.label === colName || (d.chartColumnLabel === colName); });
+          extra.forEach(function(d) {
+            var i = data.datasets.indexOf(d);
+            if (i >= 0) data.datasets.splice(i, 1);
+          });
+          if (colName) {
+            var displayVal = (count && !isNaN(sum)) ? sum : 0;
+            var colors = ['#9084ad', '#e8f1fb', '#538fe7', '#28a745', '#ffc107'];
+            var idx = (data.datasets.length || 0) % colors.length;
+            data.datasets.push({
+              label: colName,
+              chartColumnLabel: colName,
+              data: [displayVal],
+              backgroundColor: colors[idx],
+              valueSuffix: ''
+            });
+          }
+          chart.update();
+        });
+      });
+    })();
+    </script>
+    {% endif %}
+
+    {# جدول كامل مع فلاتر (لو وُجد sub.full_width) ===== #}
     {% for sub in tab.sub_tables %}
       {% if sub.full_width %}
     <div class="row mt-4">
@@ -1293,10 +1374,22 @@
       {% endfor %}
     </div>
   </div>
-  {# ================= PODs: جدول KPI + شارت + تفاصيل فقط (بدون كروت KPI فوق) ================= #}
-  {% elif tab_name_lower == 'pods update' %}
+  {# ================= Transportation: كارت Number of track + جدول PODs KPI + شارت + جدول On Time Receiving ================= #}
+  {% elif tab_name_lower == 'transportation' %}
   <div class="col-12">
-    {# جدول KPI + شارت Hit % للشهور فقط #}
+    {% if tab.stats.number_of_track is not None %}
+    <div class="row mb-4 justify-content-center">
+      <div class="col-12" style="max-width: 420px;">
+        <div class="card h-100 border-2 shadow-sm rounded-3" style="border-color: #9084ad !important; background: linear-gradient(135deg, #f8f7fc 0%, #fff 100%);">
+          <div class="card-body text-center py-4 px-4">
+            <h6 class="text-uppercase mb-2 small fw-semibold" style="color: #6c757d; letter-spacing: 0.5px;">Number of track</h6>
+            <p class="mb-0 fw-bold display-6" style="color: #9084ad;">{{ tab.stats.number_of_track }}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    {# جدول PODs KPI + شارت Hit % #}
     {% if tab.sub_tables %}
     {% with sub=tab.sub_tables.0 %}
     <div class="row mb-4">
@@ -1618,7 +1711,7 @@
 
 
           <div class="card-body text-center ">
-            <div class="table-responsive custom-scrollbar{% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' %} inbound-detail-table-scroll{% endif %}">
+            <div class="table-responsive custom-scrollbar{% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' or sub.id == 'sub-table-inbound-full-sheet' or sub.id == 'sub-table-outbound-full-sheet' %} inbound-detail-table-scroll{% endif %}">
               <table class="table table-bordered" {% if sub.id == 'sub-table-inbound-detail' %}id="inbound-shipments-detail-table"{% elif sub.id == 'sub-table-outbound-detail' %}id="outbound-shipments-detail-table"{% elif sub.id == 'sub-table-return-detail' %}id="return-shipments-detail-table"{% endif %}>
                 <thead class="table-primary">
                   <tr role="row">
@@ -1632,12 +1725,30 @@
                   <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}"{% endif %} data-status="{% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' %}{{ row|get_item:'HIT or MISS'|default:'' }}{% else %}{{ row|get_item:'Status'|default:'' }}{% endif %}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.id == 'sub-table-return-detail' %}data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %} {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{% if sub.id == 'sub-table-inventory-detail' %}{{ row|get_item:'Status'|default:'' }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}"{% endif %}{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
-                    {# ===== INBOUND / RETURN: Shipment_nbr & Received QTY badges ===== #}
+                    {# ===== INBOUND / RETURN: Shipment_nbr, Received QTY, Remark (editable), HIT or MISS (عرض فقط) ===== #}
                     {% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-return-detail' %}
                     {% if col|lower == "shipment_nbr" or col|lower == "shipment nbr" %}
                     <td><span class="badge bg-primary rounded-pill">{{ value|default:"—" }}</span></td>
                     {% elif "received" in col|lower and "qty" in col|lower %}
                     <td><span class="badge bg-info rounded-pill">{{ value|default:"—" }}</span></td>
+                    {% elif col|lower == "remark" %}
+                    <td class="align-middle p-1">
+                      <input type="text" class="form-control form-control-sm editable-remark" placeholder="Add remark..."
+                        data-tab="{% if sub.id == 'sub-table-return-detail' %}return{% else %}inbound{% endif %}"
+                        data-key="{{ row|get_item:'Shipment_nbr'|default:'' }}"
+                        data-facility="{{ row|get_item:'Facility Code'|default:'' }}"
+                        value="{{ value|default:'' }}" />
+                    </td>
+                    {% elif col|lower == "hit or miss" or col|lower == "hit/miss" %}
+                    <td>
+                      {% if value|default_if_none:""|trim|lower == "hit" %}
+                      <span class="badge bg-success rounded-pill text-uppercase">Hit</span>
+                      {% elif value|default_if_none:""|trim|lower == "miss" %}
+                      <span class="badge bg-danger rounded-pill text-uppercase">Miss</span>
+                      {% else %}
+                      <span class="badge bg-secondary rounded-pill">{{ value|default:"—" }}</span>
+                      {% endif %}
+                    </td>
                     {% else %}
                     <td>{{ value }}</td>
                     {% endif %}
@@ -1697,7 +1808,36 @@
                       {% endif %}
                     </td>
 
-                    {# ===== HIT / MISS BADGE (Outbound etc.) ===== #}
+                    {# ===== OUTBOUND: Remark و HIT or MISS (قابلان للتحرير) ===== #}
+                    {% elif sub.id == 'sub-table-outbound-detail' and col|lower == "remark" %}
+                    <td class="align-middle p-1">
+                      <input type="text" class="form-control form-control-sm editable-remark" placeholder="Add remark..."
+                        data-tab="outbound"
+                        data-key="{{ row|get_item:'Order Nbr'|default:'' }}"
+                        data-facility="{{ row|get_item:'Facility Code'|default:'' }}"
+                        value="{{ value|default:'' }}" />
+                    </td>
+                    {% elif sub.id == 'sub-table-outbound-detail' and col|lower == "hit or miss" %}
+                    <td>
+                      {% if value|default_if_none:""|trim|lower == "hit" %}
+                      <span class="badge bg-success rounded-pill text-uppercase">Hit</span>
+                      {% elif value|default_if_none:""|trim|lower == "miss" %}
+                      <span class="badge bg-danger rounded-pill text-uppercase">Miss</span>
+                      {% else %}
+                      <span class="badge bg-secondary rounded-pill">{{ value|default:"—" }}</span>
+                      {% endif %}
+                    </td>
+                    {% elif sub.id == 'sub-table-outbound-detail' and col|lower == "hit/miss" %}
+                    <td>
+                      {% if value|default_if_none:""|trim|lower == "hit" %}
+                      <span class="badge bg-success rounded-pill text-uppercase">Hit</span>
+                      {% elif value|default_if_none:""|trim|lower == "miss" %}
+                      <span class="badge bg-danger rounded-pill text-uppercase">Miss</span>
+                      {% else %}
+                      <span class="badge bg-secondary rounded-pill">{{ value|default:"—" }}</span>
+                      {% endif %}
+                    </td>
+                    {# ===== HIT / MISS BADGE (غيره مثل Inventory) ===== #}
                     {% elif col|lower == "hit or miss" or col|lower == "hit/miss" %}
                     <td>
                       {% if value|default_if_none:""|trim|lower == "hit" %}
@@ -1933,23 +2073,28 @@
               tr.style.display = show ? '' : 'none';
             }
           }
+          function cardFromEvent(e) {
+            if (!e.target || !e.target.closest) return null;
+            var card = e.target.closest('#outbound-detail-card') || e.target.closest('#outbound-full-sheet-card');
+            return (card && e.target.classList && e.target.classList.contains('inbound-detail-filter')) ? card : null;
+          }
           document.addEventListener('change', function(e) {
-            var card = e.target && e.target.closest && e.target.closest('#outbound-detail-card');
-            if (card && e.target.classList && e.target.classList.contains('inbound-detail-filter')) {
-              applyOutboundFilters(card);
-            }
+            var card = cardFromEvent(e);
+            if (card) applyOutboundFilters(card);
           });
           document.addEventListener('input', function(e) {
-            var card = e.target && e.target.closest && e.target.closest('#outbound-detail-card');
-            if (card && e.target.classList && e.target.classList.contains('inbound-detail-filter')) {
-              applyOutboundFilters(card);
-            }
+            var card = cardFromEvent(e);
+            if (card) applyOutboundFilters(card);
           });
           document.addEventListener('DOMContentLoaded', function() {
             var card = document.getElementById('outbound-detail-card');
             if (card) applyOutboundFilters(card);
+            card = document.getElementById('outbound-full-sheet-card');
+            if (card) applyOutboundFilters(card);
           });
           var card = document.getElementById('outbound-detail-card');
+          if (card) applyOutboundFilters(card);
+          card = document.getElementById('outbound-full-sheet-card');
           if (card) applyOutboundFilters(card);
         })();
 
@@ -1996,6 +2141,22 @@
             var s = (tr.getAttribute('data-status') || '').trim();
             var m = (tr.getAttribute('data-month') || '').trim();
             var show = (!delivery || d === delivery) && (!status || s === status) && (!month || m === month);
+
+            // لو اختار المستخدم Hit أو Miss، اعرض فقط الشحنات اللي فيها بيانات فعلية (مش صفوف فاضية)
+            if (show && status) {
+              var hasData = false;
+              var tds = tr.querySelectorAll('td');
+              tds.forEach(function(td) {
+                var txt = (td.textContent || '').trim();
+                if (!txt || txt === '—' || txt === '-' || txt === 'N/A') return;
+                var lower = txt.toLowerCase();
+                if (lower === 'hit' || lower === 'miss' || lower === 'pending') return;
+                if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)$/i.test(lower)) return;
+                hasData = true;
+              });
+              if (!hasData) show = false;
+            }
+
             tr.style.display = show ? '' : 'none';
           });
         }
@@ -2003,5 +2164,38 @@
         for (var i = 0; i < selects.length; i++) {
           selects[i].addEventListener('change', applyPodsFilters);
         }
+      })();
+
+      (function saveRemarkStatus() {
+        function getCsrfToken() {
+          var m = document.cookie.match(/\bcsrftoken=([^;]*)/);
+          return m ? m[1] : '';
+        }
+        var saveUrl = '{% url "dashboard:save_remark_status" %}';
+        if (!saveUrl || saveUrl === '') return;
+        function sendSave(payload) {
+          var xhr = new XMLHttpRequest();
+          xhr.open('POST', saveUrl, true);
+          xhr.setRequestHeader('Content-Type', 'application/json');
+          xhr.setRequestHeader('X-CSRFToken', getCsrfToken());
+          xhr.setRequestHeader('Accept', 'application/json');
+          xhr.onload = function() {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try { var r = JSON.parse(xhr.responseText); if (r.success) return; } catch(e) {}
+            }
+            console.warn('save-remark-status failed', xhr.status, xhr.responseText);
+          };
+          xhr.send(JSON.stringify(payload));
+        }
+        document.addEventListener('blur', function(e) {
+          var inp = e.target && e.target.classList && e.target.classList.contains('editable-remark');
+          if (!inp) return;
+          var tab = inp.getAttribute('data-tab');
+          var key = inp.getAttribute('data-key');
+          var fac = inp.getAttribute('data-facility');
+          var remark = (inp.value || '').trim();
+          if (!tab || !key || !fac) return;
+          sendSave({ tab: tab, key: key, facility: fac, remark: remark, status: '' });
+        }, true);
       })();
 </script>
