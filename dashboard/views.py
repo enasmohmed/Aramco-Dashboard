@@ -563,11 +563,14 @@ def _read_inbound_data_from_excel(excel_path):
         "Shipment No", "Shipment Number", "ShipmentNbr",
     ])
     n_shipments = int(df[shipment_col].dropna().astype(str).str.strip().nunique()) if shipment_col else 0
-    # عدد شحنات الـ Return من نفس شيت Inbound: Shipment_nbr التي تبدأ بـ 250 (لتاب الداشبورد — Total of Return)
+    # Total of Return (لتاب الداشبورد): من نفس شيت Inbound — عدد Shipment_nbr المميزة التي تبدأ بـ 250
+    # المطلوب: فلترة Shipment_nbr اللي بتبدأ بـ 250 (مثلاً 2501715389-1) بدون حذف أي جزء منها،
+    # ثم حساب عدد القيم المميزة (بدون تكرار) بعد strip للمسافات فقط.
     n_return_shipments = 0
     if shipment_col:
         ship_series = df[shipment_col].astype(str).str.strip()
-        return_mask = ship_series.str.startswith("250", na=False)
+        ship_series = ship_series.replace("", np.nan).replace("nan", np.nan).dropna()
+        return_mask = ship_series.astype(str).str.startswith("250", na=False)
         n_return_shipments = int(ship_series.loc[return_mask].nunique())
 
     # Number of Pallets (LPNs): عمود LPN — عدد المميز (حذف المتكرر)
@@ -601,7 +604,7 @@ def _read_inbound_data_from_excel(excel_path):
         "number_of_pallets": n_pallets,
         "total_quantity": n_qty,
         "total_quantity_display": qty_display,
-        "number_of_return_shipments": n_return_shipments,  # Shipment_nbr تبدأ بـ 250 — للداشبورد Total of Return
+        "number_of_return_shipments": n_return_shipments,
     }
 
     # Pending Shipments: من عمود Status في نفس الشيت — In Transit, Receiving Complete, Verified
@@ -7092,8 +7095,10 @@ class UploadExcelViewRoche(View):
                     base_cols.append(col_expected)
                 if col_actual and col_actual != col_expected:
                     base_cols.append(col_actual)
-                if col_arrived_late:
-                    base_cols.append(col_arrived_late)
+                # لا نعرض عمود Arrived Late في الجدول التفصيلي
+                # بدلاً منه نعرض عمود Late Shipment Reason إن وُجد في البيانات
+                if "Late Shipment Reason" in detail_df.columns:
+                    base_cols.append("Late Shipment Reason")
                 base_cols.append("Hit or Miss")
                 if "Month" in detail_df.columns:
                     base_cols.append("Month")
@@ -9026,12 +9031,14 @@ class UploadExcelViewRoche(View):
                                     }
                                 )
                         if pie_points:
-                            # All-in-One: شارت Stock Count أعمدة عادية (مثل باقي التابات)
+                            # All-in-One: نفس شارت تب Stock Count (دائرة واحدة تضم 3 مناطق)
                             res["chart_data"] = [
                                 {
-                                    "type": "column",
+                                    "type": "doughnut",
                                     "name": "Stock Count Hit %",
                                     "valueSuffix": "%",
+                                    # drawAllInOneCharts لا يقرأ color لكل نقطة، بل يقرأ ds.color كـ array
+                                    "color": [p.get("color") for p in pie_points],
                                     "dataPoints": [
                                         {"label": p["label"], "y": p["y"]}
                                         for p in pie_points
@@ -9101,18 +9108,21 @@ class UploadExcelViewRoche(View):
                 hit_pct_val = 0
                 target_pct = target_manual.get(tab_name.lower(), 100)
 
-            # All-in-One: كارد Stock Count يعرض شارت أعمدة فقط (التاب نفسه يبقى دائرة)
+            # All-in-One: Stock Count يعرض نفس الدائرة (Riyadh/Dammam/Jeddah) مثل التاب
             if tab_lower == "stock count":
-                chart_type = "column"
-                # إذا مفيش chart_data (خطأ أو داتا فاضية) نعرض عمود واحد بنسبة Hit % عشان الشارت يظهر
+                chart_type = "doughnut"
+                # إذا مفيش chart_data (خطأ أو داتا فاضية) نعرض دائرة بثلاث قطاعات (0%) عشان الشارت يظهر
                 if not chart_data or not isinstance(chart_data, list) or len(chart_data) == 0:
                     chart_data = [
                         {
-                            "type": "column",
+                            "type": "doughnut",
                             "name": "Stock Count Hit %",
                             "valueSuffix": "%",
+                            "color": ["#9084ad", "#a4aeb8", "#538fe7"],
                             "dataPoints": [
-                                {"label": "Hit %", "y": hit_pct_val},
+                                {"label": "Riyadh", "y": 0},
+                                {"label": "Dammam", "y": 0},
+                                {"label": "Jeddah", "y": 0},
                             ],
                         }
                     ]
@@ -9156,15 +9166,20 @@ class UploadExcelViewRoche(View):
                         "chart_data": [],
                         "chart_type": "bar",
                     }
-                    # Stock Count: حتى مع الخطأ نعرض شارت عمود واحد عشان ما يظهرش "No data available" مكان الشارت
+                    # Stock Count (All-in-One): حتى مع الخطأ نعرض دائرة بثلاث مناطق (0%) عشان ما يظهرش "No data available" مكان الشارت
                     if tab_name and tab_name.strip().lower() == "stock count":
-                        fallback_card["chart_type"] = "column"
+                        fallback_card["chart_type"] = "doughnut"
                         fallback_card["chart_data"] = [
                             {
-                                "type": "column",
+                                "type": "doughnut",
                                 "name": "Stock Count Hit %",
                                 "valueSuffix": "%",
-                                "dataPoints": [{"label": "Hit %", "y": 0}],
+                                "color": ["#9084ad", "#a4aeb8", "#538fe7"],
+                                "dataPoints": [
+                                    {"label": "Riyadh", "y": 0},
+                                    {"label": "Dammam", "y": 0},
+                                    {"label": "Jeddah", "y": 0},
+                                ],
                             }
                         ]
                     tab_cards.append(fallback_card)
@@ -9240,6 +9255,46 @@ class UploadExcelViewRoche(View):
         context["title"] = self.DASHBOARD_TAB_NAME
         # نفس ملف التابات بالضبط (الملف المرفوع أو latest/all_sheet من المجلد) لقراءة كروت الداشبورد
         excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
+
+        # نفس منطق التابات: month/quarter في الـrequest يؤثر على Transportation (PODs KPI)
+        selected_month = (request.GET.get("month", "") if request else "").strip()
+        selected_quarter = (request.GET.get("quarter", "") if request else "").strip()
+        quarter_months = []
+        if selected_quarter:
+            try:
+                quarter_months = self._resolve_quarter_months(selected_quarter)
+            except Exception:
+                quarter_months = []
+        effective_month = None if quarter_months else (selected_month or None)
+
+        def _canvas_chart_to_apex_payload(canvas_chart_data):
+            """
+            تحويل chart_data (CanvasJS-style) إلى payload مناسب لـ ApexCharts في الداشبورد:
+            {categories: [...], series: [{name, data}, ...]}
+            """
+            categories_local = []
+            series_local = []
+            if not canvas_chart_data or not isinstance(canvas_chart_data, list):
+                return {"categories": [], "series": []}
+            for s in canvas_chart_data:
+                if not isinstance(s, dict):
+                    continue
+                pts = s.get("dataPoints") or []
+                if pts and not categories_local:
+                    categories_local = [p.get("label", "") for p in pts]
+                data_vals = []
+                for p in pts:
+                    try:
+                        data_vals.append(float(p.get("y", 0) or 0))
+                    except Exception:
+                        data_vals.append(0.0)
+                series_local.append(
+                    {
+                        "name": (s.get("name") or "").strip() or "Hit %",
+                        "data": data_vals,
+                    }
+                )
+            return {"categories": categories_local, "series": series_local}
 
         # كل الداتا من الشيت فقط — لا قيم يدوية. لو مفيش ملف أو الشيت فاضي نستخدم قيم فارغة/صفر.
         # محاولة قراءة من كاش الداتابيز أولاً لتسريع فتح الداشبورد
@@ -9353,29 +9408,16 @@ class UploadExcelViewRoche(View):
                     context["outbound_kpi_keys_from_sheet"] = outbound_data.get("outbound_kpi_keys_from_sheet", [])
 
                 try:
-                    # نفس بيانات جدول PODs KPI (نفس الشهور: يناير، فبراير، مارس)
+                    # نفس شارت Transportation (PODs KPI) حسب month/quarter من الـrequest
                     pods_result = self.filter_pods_update(
-                        request, selected_month=None, selected_months=["Jan", "Feb", "Mar"]
+                        request,
+                        selected_month=effective_month,
+                        selected_months=quarter_months or None,
                     )
-                    if pods_result and "error" not in pods_result and pods_result.get("sub_tables"):
-                        st = pods_result["sub_tables"][0]
-                        pod_chart = st.get("chart_data") or []
-                        if pod_chart and isinstance(pod_chart, list):
-                            categories_pod = []
-                            series_pod = []
-                            for s in pod_chart:
-                                pts = s.get("dataPoints") or []
-                                if pts and not categories_pod:
-                                    categories_pod = [p.get("label", "") for p in pts]
-                                data_vals = [float(p.get("y", 0)) for p in pts]
-                                series_pod.append({
-                                    "name": s.get("name") or "Hit %",
-                                    "data": data_vals,
-                                })
-                            context["pod_compliance_chart_data"] = {
-                                "categories": categories_pod,
-                                "series": series_pod,
-                            }
+                    if pods_result and "error" not in pods_result:
+                        context["pod_compliance_chart_data"] = _canvas_chart_to_apex_payload(
+                            pods_result.get("chart_data")
+                        )
                 except Exception:
                     pass
                 if "pod_compliance_chart_data" not in context:
@@ -9436,32 +9478,19 @@ class UploadExcelViewRoche(View):
                 if returns_region:
                     context["returns_region_table"] = returns_region.get("returns_region_table", [])
 
-        # PODs Compliance = نفس شارت تاب Transportation (PODs KPI — Hit % by month)
-        # جدول PODs KPI يعرض 3 شهور فقط (Jan, Feb, Mar) — الشارت يقرأ نفس التلاتة
+        # PODs Compliance في Dashboard لازم يطابق شارت Transportation (PODs KPI) تماماً
+        # لذلك نعيد بناؤه من filter_pods_update حسب month/quarter الحاليين (حتى لو الداشبورد محمّل من كاش)
         if request and excel_path:
             try:
                 pods_result = self.filter_pods_update(
-                    request, selected_month=None, selected_months=["Jan", "Feb", "Mar"]
+                    request,
+                    selected_month=effective_month,
+                    selected_months=quarter_months or None,
                 )
-                if pods_result and "error" not in pods_result and pods_result.get("sub_tables"):
-                    st = pods_result["sub_tables"][0]
-                    pod_chart = st.get("chart_data") or []
-                    if pod_chart and isinstance(pod_chart, list):
-                        categories_pod = []
-                        series_pod = []
-                        for s in pod_chart:
-                            pts = s.get("dataPoints") or []
-                            if pts and not categories_pod:
-                                categories_pod = [p.get("label", "") for p in pts]
-                            data_vals = [float(p.get("y", 0)) for p in pts]
-                            series_pod.append({
-                                "name": s.get("name") or "Hit %",
-                                "data": data_vals,
-                            })
-                        context["pod_compliance_chart_data"] = {
-                            "categories": categories_pod,
-                            "series": series_pod,
-                        }
+                if pods_result and "error" not in pods_result:
+                    context["pod_compliance_chart_data"] = _canvas_chart_to_apex_payload(
+                        pods_result.get("chart_data")
+                    )
             except Exception:
                 pass
 
@@ -9543,13 +9572,12 @@ class UploadExcelViewRoche(View):
         context.setdefault("pod_status_breakdown", _empty_pod_breakdown)
 
         context.setdefault("returns_kpi", {"total_skus": 0, "total_lpns": 0})
-        # Total LPNs في قسم Returns = نفس رقم Inbound (Number of Pallets).
-        # Total of Return = من شيت Inbound: عدد Shipment_nbr المميزة التي تبدأ بـ 250 (إن وُجد)، وإلا من شيت Return
+        # Total LPNs = من Inbound (Number of Pallets). Total of Return = من شيت Inbound: عدد Shipment_nbr المميزة التي تبدأ بـ 250
         context["returns_kpi"] = dict(context["returns_kpi"])
         context["returns_kpi"]["total_lpns"] = context.get("inbound_kpi", {}).get("number_of_pallets", 0)
-        inbound_return_count = context.get("inbound_kpi", {}).get("number_of_return_shipments")
+        inbound_return = context.get("inbound_kpi", {}).get("number_of_return_shipments")
         context["returns_kpi"]["total_of_return"] = (
-            inbound_return_count if inbound_return_count is not None else context["returns_kpi"].get("total_skus", 0)
+            inbound_return if inbound_return is not None else context["returns_kpi"].get("total_skus", 0)
         )
         context["returns_kpi"]["total_quantity"] = context["returns_kpi"].get("total_lpns", context["returns_kpi"]["total_lpns"])
         context.setdefault("returns_chart_data", _empty_pod_chart)
@@ -9570,6 +9598,36 @@ class UploadExcelViewRoche(View):
         # Capacity Used vs Available: مصدر الداتا (لم يُحذف): شيت Dashboard Warehouse أو Inventory_Snapshot (Used_Space_m3 / Available_Space_m3).
         # إن كانت النسبة صفر والجدول فيه بيانات، نحسب من الجدول (utilized / capacity)
         cap = context.get("inventory_capacity_data") or {}
+        if cap.get("used") == 0 and cap.get("available") == 0:
+            # fallback: لو الداشبورد لسه شايف ملف KPI الأساسي في media، استخدمه فقط لهذا الشارت
+            try:
+                kpi_filename = "Aramco_Tamer3PL_KPI_Dashboard.xlsx"
+                kpi_path = os.path.join(settings.MEDIA_ROOT, "excel_uploads", kpi_filename)
+                if os.path.exists(kpi_path):
+                    dashboard_wh = _read_dashboard_warehouse_from_excel(kpi_path)
+                    kpi_cap = None
+                    if dashboard_wh and dashboard_wh.get("inventory_capacity_data"):
+                        kpi_cap = dashboard_wh.get("inventory_capacity_data")
+                    if not kpi_cap:
+                        cap_data = _read_inventory_snapshot_capacity_from_excel(kpi_path)
+                        if cap_data and cap_data.get("inventory_capacity_data"):
+                            kpi_cap = cap_data.get("inventory_capacity_data")
+                    if kpi_cap and isinstance(kpi_cap, dict):
+                        used_v = kpi_cap.get("used", 0) or 0
+                        avail_v = kpi_cap.get("available", 0) or 0
+                        try:
+                            used_v = float(used_v)
+                        except Exception:
+                            used_v = 0
+                        try:
+                            avail_v = float(avail_v)
+                        except Exception:
+                            avail_v = 0
+                        if used_v or avail_v:
+                            context["inventory_capacity_data"] = {"used": used_v, "available": avail_v}
+                            cap = context["inventory_capacity_data"]
+            except Exception:
+                pass
         if (cap.get("used") == 0 and cap.get("available") == 0) and context.get("inventory_warehouse_table"):
             total_utilized = sum(
                 int((r.get("utilized") or 0)) for r in context["inventory_warehouse_table"]

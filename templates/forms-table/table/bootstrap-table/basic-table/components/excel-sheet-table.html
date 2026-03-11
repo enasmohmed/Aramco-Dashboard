@@ -1740,14 +1740,16 @@
                         value="{{ value|default:'' }}" />
                     </td>
                     {% elif col|lower == "hit or miss" or col|lower == "hit/miss" %}
-                    <td>
-                      {% if value|default_if_none:""|trim|lower == "hit" %}
-                      <span class="badge bg-success rounded-pill text-uppercase">Hit</span>
-                      {% elif value|default_if_none:""|trim|lower == "miss" %}
-                      <span class="badge bg-danger rounded-pill text-uppercase">Miss</span>
-                      {% else %}
-                      <span class="badge bg-secondary rounded-pill">{{ value|default:"—" }}</span>
-                      {% endif %}
+                    <td class="align-middle p-1">
+                      <select
+                        class="form-select form-select-sm editable-status"
+                        data-tab="{% if sub.id == 'sub-table-return-detail' %}return{% else %}inbound{% endif %}"
+                        data-key="{{ row|get_item:'Shipment_nbr'|default:'' }}"
+                        data-facility="{{ row|get_item:'Facility Code'|default:'' }}"
+                      >
+                        <option value="Hit" {% if value|default_if_none:""|trim|lower == "hit" %}selected{% endif %}>Hit</option>
+                        <option value="Miss" {% if value|default_if_none:""|trim|lower == "miss" %}selected{% endif %}>Miss</option>
+                      </select>
                     </td>
                     {% else %}
                     <td>{{ value }}</td>
@@ -1817,25 +1819,17 @@
                         data-facility="{{ row|get_item:'Facility Code'|default:'' }}"
                         value="{{ value|default:'' }}" />
                     </td>
-                    {% elif sub.id == 'sub-table-outbound-detail' and col|lower == "hit or miss" %}
-                    <td>
-                      {% if value|default_if_none:""|trim|lower == "hit" %}
-                      <span class="badge bg-success rounded-pill text-uppercase">Hit</span>
-                      {% elif value|default_if_none:""|trim|lower == "miss" %}
-                      <span class="badge bg-danger rounded-pill text-uppercase">Miss</span>
-                      {% else %}
-                      <span class="badge bg-secondary rounded-pill">{{ value|default:"—" }}</span>
-                      {% endif %}
-                    </td>
-                    {% elif sub.id == 'sub-table-outbound-detail' and col|lower == "hit/miss" %}
-                    <td>
-                      {% if value|default_if_none:""|trim|lower == "hit" %}
-                      <span class="badge bg-success rounded-pill text-uppercase">Hit</span>
-                      {% elif value|default_if_none:""|trim|lower == "miss" %}
-                      <span class="badge bg-danger rounded-pill text-uppercase">Miss</span>
-                      {% else %}
-                      <span class="badge bg-secondary rounded-pill">{{ value|default:"—" }}</span>
-                      {% endif %}
+                    {% elif sub.id == 'sub-table-outbound-detail' and col|lower == "hit or miss" or sub.id == 'sub-table-outbound-detail' and col|lower == "hit/miss" %}
+                    <td class="align-middle p-1">
+                      <select
+                        class="form-select form-select-sm editable-status"
+                        data-tab="outbound"
+                        data-key="{{ row|get_item:'Order Nbr'|default:'' }}"
+                        data-facility="{{ row|get_item:'Facility Code'|default:'' }}"
+                      >
+                        <option value="Hit" {% if value|default_if_none:""|trim|lower == "hit" %}selected{% endif %}>Hit</option>
+                        <option value="Miss" {% if value|default_if_none:""|trim|lower == "miss" %}selected{% endif %}>Miss</option>
+                      </select>
                     </td>
                     {# ===== HIT / MISS BADGE (غيره مثل Inventory) ===== #}
                     {% elif col|lower == "hit or miss" or col|lower == "hit/miss" %}
@@ -2187,6 +2181,18 @@
           };
           xhr.send(JSON.stringify(payload));
         }
+        function findRowRemarkAndStatus(el) {
+          var tr = el && el.closest ? el.closest('tr') : null;
+          if (!tr) return { tr: null, remark: '', status: '' };
+          var remarkInp = tr.querySelector('input.editable-remark');
+          var statusSel = tr.querySelector('select.editable-status');
+          return {
+            tr: tr,
+            remark: remarkInp ? (remarkInp.value || '').trim() : '',
+            status: statusSel ? (statusSel.value || '').trim() : '',
+          };
+        }
+
         document.addEventListener('blur', function(e) {
           var inp = e.target && e.target.classList && e.target.classList.contains('editable-remark');
           if (!inp) return;
@@ -2195,7 +2201,26 @@
           var fac = inp.getAttribute('data-facility');
           var remark = (inp.value || '').trim();
           if (!tab || !key || !fac) return;
-          sendSave({ tab: tab, key: key, facility: fac, remark: remark, status: '' });
+          var rs = findRowRemarkAndStatus(inp);
+          // لو فيه dropdown للحالة في نفس الصف، ابعته مع الـremark عشان ينعكس فوراً
+          sendSave({ tab: tab, key: key, facility: fac, remark: remark, status: rs.status || '' });
+        }, true);
+
+        document.addEventListener('change', function(e) {
+          var sel = e.target && e.target.classList && e.target.classList.contains('editable-status');
+          if (!sel) return;
+          var tab = sel.getAttribute('data-tab');
+          var key = sel.getAttribute('data-key');
+          var fac = sel.getAttribute('data-facility');
+          var status = (sel.value || '').trim();
+          if (!tab || !key || !fac) return;
+          var rs = findRowRemarkAndStatus(sel);
+          sendSave({ tab: tab, key: key, facility: fac, remark: rs.remark || '', status: status });
+          // تحديث داتا-attributes للفلاتر بدون إعادة تحميل
+          if (rs.tr) {
+            rs.tr.setAttribute('data-status', status);
+            rs.tr.setAttribute('data-hit-miss', (status || '').toLowerCase());
+          }
         }, true);
       })();
 </script>

@@ -993,23 +993,25 @@
           <div
             class="pod-compliance-block mb-3 p-3 dashboard-card-elevated rounded-3"
           >
-            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-              <span class="dashboard-section-title fw-bold text-dark"
-                >PODs Compliance</span
-              >
-              <!--              <span class="dashboard-kpi-value mb-0">{{ outbound_kpi.pod_compliance_pct|default:94 }}%</span>-->
-              <!--              <select class="form-select form-select-sm w-auto" id="outbound-period">-->
-              <!--                <option value="6">Last 6 Months</option>-->
-              <!--                <option value="12">Last 12 Months</option>-->
-              <!--              </select>-->
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+              <span class="dashboard-section-title fw-bold text-dark">Order Process Time</span>
+              <div class="d-flex flex-wrap align-items-center gap-3 gap-md-4">
+                <div class="d-flex align-items-center gap-2">
+                  <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #3F8F7A;"></span>
+                  <span class="small text-dark">Hit: <strong>{{ order_process_kpi.hit_pct|default:0 }}%</strong> ({{ order_process_kpi.hit|default:0 }})</span>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                  <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #E8A8A2;"></span>
+                  <span class="small text-dark">Miss: <strong>{{ order_process_kpi.miss_pct|default:0 }}%</strong> ({{ order_process_kpi.miss|default:0 }})</span>
+                </div>
+                {% if order_process_kpi.total %}
+                <span class="small text-muted">Total: {{ order_process_kpi.total }}</span>
+                {% endif %}
+              </div>
             </div>
-            <div
-              id="chart-outbound-sla"
-              class="pods-chart-container"
-              style="height: 280px; min-height: 280px"
-            ></div>
+            <div id="chart-returns-sla" class="returns-chart-container" style="height: 280px; min-height: 280px;"></div>
             <div class="d-flex flex-wrap justify-content-center gap-3 gap-md-4 mt-2 pt-2 border-top border-light">
-              <span class="small text-muted">Chart data from Transportation tab — PODs KPI table (Hit % by month)</span>
+              <span class="small text-muted">Order Process Time: Hit % by facility — data from Outbound tab (filter_outbound_shipments)</span>
             </div>
           </div>
         </div>
@@ -1067,25 +1069,18 @@
           </div>
 
           <div class="pod-compliance-block returns-order-process-block">
-            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
-              <span class="dashboard-section-title fw-bold text-dark">Order Process Time</span>
-              <div class="d-flex flex-wrap align-items-center gap-3 gap-md-4">
-                <div class="d-flex align-items-center gap-2">
-                  <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #3F8F7A;"></span>
-                  <span class="small text-dark">Hit: <strong>{{ order_process_kpi.hit_pct|default:0 }}%</strong> ({{ order_process_kpi.hit|default:0 }})</span>
-                </div>
-                <div class="d-flex align-items-center gap-2">
-                  <span class="rounded-circle d-inline-block" style="width: 10px; height: 10px; background-color: #E8A8A2;"></span>
-                  <span class="small text-dark">Miss: <strong>{{ order_process_kpi.miss_pct|default:0 }}%</strong> ({{ order_process_kpi.miss|default:0 }})</span>
-                </div>
-                {% if order_process_kpi.total %}
-                <span class="small text-muted">Total: {{ order_process_kpi.total }}</span>
-                {% endif %}
-              </div>
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+              <span class="dashboard-section-title fw-bold text-dark"
+                >PODs Compliance</span
+              >
             </div>
-            <div id="chart-returns-sla" class="returns-chart-container" style="height: 280px; min-height: 280px;"></div>
+            <div
+              id="chart-outbound-sla"
+              class="pods-chart-container"
+              style="height: 280px; min-height: 280px"
+            ></div>
             <div class="d-flex flex-wrap justify-content-center gap-3 gap-md-4 mt-2 pt-2 border-top border-light">
-              <span class="small text-muted">Order Process Time: Hit % by facility — data from Outbound tab (filter_outbound_shipments)</span>
+              <span class="small text-muted">Chart data from Transportation tab — PODs KPI table (Hit % by month)</span>
             </div>
           </div>
         </div>

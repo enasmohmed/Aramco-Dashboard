@@ -5,7 +5,8 @@
       "number_of_shipments": 100,
       "number_of_pallets": 2414,
       "total_quantity": 26197,
-      "total_quantity_display": "26.2k"
+      "total_quantity_display": "26.2k",
+      "number_of_return_shipments": 10
     },
     "pending_shipments": [],
     "outbound_kpi": {
@@ -32,6 +33,6 @@
       "total_lpns": 0,
       "utilization_pct": ""
     },
-    "_file_mtime": 1773206942.818664
+    "_file_mtime": 1773210690.2883453
   }
 }

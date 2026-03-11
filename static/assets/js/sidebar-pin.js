@@ -2,6 +2,8 @@
 (function () {
   const pinTitle = document.querySelector(".pin-title");
   let pinIcon = document.querySelectorAll(".sidebar-list .fa-thumb-tack");
+  // بعض الصفحات لا تحتوي على عناصر الـsidebar/pin title
+  if (!pinTitle || !pinIcon || !pinIcon.forEach) return;
   function togglePinnedName() {
     if (document.getElementsByClassName("pined").length) {
       if (!pinTitle.classList.contains("show")) pinTitle.classList.add("show");
@@ -37,15 +39,17 @@
       var elem = item;
       var topPos = elem.offsetTop;
       togglePinnedName();
+      var wrappers = document.getElementsByClassName("simplebar-content-wrapper");
+      if (!wrappers || !wrappers.length) return;
       if (item.parentElement.parentElement.classList.contains("pined")) {
         scrollTo(
-          document.getElementsByClassName("simplebar-content-wrapper")[0],
+          wrappers[0],
           topPos - 30,
           600
         );
       } else {
         scrollTo(
-          document.getElementsByClassName("simplebar-content-wrapper")[0],
+          wrappers[0],
           elem.parentNode.offsetTop - 30,
           600
         );
