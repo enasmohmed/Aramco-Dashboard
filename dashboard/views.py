@@ -6200,10 +6200,11 @@ class UploadExcelViewRoche(View):
 
             df.columns = df.columns.astype(str).str.strip()
 
-            # إذا الصف الأول عنوان (مثل "ARAMCO Inbound Report" أو "Return & Refusal") والرؤوس في صف تالي، نكتشف صف الرؤوس
+            # إذا الصف الأول عنوان (مثل "ARAMCO Inbound Report") أو أعمدة عامة (Col_1, Col_2)، نكتشف صف الرؤوس الحقيقي
             first_col = str(df.columns[0]).strip() if len(df.columns) else ""
             need_header_detect = (
                 first_col.startswith("Unnamed:")
+                or first_col.startswith("Col_")
                 or first_col == "ARAMCO Inbound Report"
                 or (first_col and "inbound report" in first_col.lower())
                 or (is_return_tab and first_col and ("return" in first_col.lower() or "refusal" in first_col.lower()))
@@ -6219,10 +6220,11 @@ class UploadExcelViewRoche(View):
                     for idx in range(min(10, raw.shape[0])):
                         row = raw.iloc[idx]
                         cells = " ".join(str(c).strip().lower() for c in row.dropna().astype(str))
+                        # Inbound: facility + shipment + (create أو offloading) + (received أو lpn)
                         if (
-                            "facility" in cells
-                            and ("shipment" in cells or "shipment_nbr" in cells)
-                            and ("create" in cells or "creation" in cells)
+                            ("facility" in cells or "region" in cells)
+                            and ("shipment" in cells or "shipment_nbr" in cells or "shipment nbr" in cells)
+                            and ("create" in cells or "creation" in cells or "offloading" in cells or "offload" in cells)
                             and ("received" in cells or "lpn" in cells)
                         ):
                             header_row_idx = idx
@@ -6238,10 +6240,18 @@ class UploadExcelViewRoche(View):
                         df.columns = headers
                         df = df.reset_index(drop=True)
                     else:
-                        df = raw.copy()
-                        headers = [str(c).strip() if pd.notna(c) and str(c).strip() else f"Col_{i}" for i, c in enumerate(raw.iloc[0].values)]
-                        df.columns = headers
-                        df = df.iloc[1:].reset_index(drop=True)
+                        # Fallback: إذا الصف الأول يبدو عنوان (ARAMCO / Inbound / Report) استخدم الصف الثاني كرؤوس
+                        row0_str = " ".join(str(c).strip().lower() for c in raw.iloc[0] if pd.notna(c) and str(c).strip())
+                        if raw.shape[0] >= 2 and ("aramco" in row0_str or "inbound" in row0_str or "report" in row0_str):
+                            headers = [str(c).strip() if pd.notna(c) and str(c).strip() else f"Col_{i}" for i, c in enumerate(raw.iloc[1].values)]
+                            df = raw.iloc[2:].copy()
+                            df.columns = headers
+                            df = df.reset_index(drop=True)
+                        else:
+                            df = raw.copy()
+                            headers = [str(c).strip() if pd.notna(c) and str(c).strip() else f"Col_{i}" for i, c in enumerate(raw.iloc[0].values)]
+                            df.columns = headers
+                            df = df.iloc[1:].reset_index(drop=True)
 
             df.columns = df.columns.astype(str).str.strip()
 
@@ -9055,11 +9065,140 @@ class UploadExcelViewRoche(View):
                     "chart_full_width": idx_reg == 0,
                 })
 
+            # ─── ARAMCO SOH: Number Of Damages (فلترة بـ Facility ثم Lock Code غير الفارغ)، 4 كروت + جدول ───
+            soh_damages_cards = []
+            soh_damages_table = {"columns": [], "data": []}
+            soh_sheet_name = None
+            for s in xls.sheet_names:
+                if (s or "").strip() == "ARAMCO SOH":
+                    soh_sheet_name = s
+                    break
+            if not soh_sheet_name:
+                for s in xls.sheet_names:
+                    if "soh" in (s or "").lower() and "aramco" in (s or "").lower():
+                        soh_sheet_name = s
+                        break
+            if not soh_sheet_name:
+                for s in xls.sheet_names:
+                    if "soh" in (s or "").lower():
+                        soh_sheet_name = s
+                        break
+            if soh_sheet_name:
+                try:
+                    soh_raw = pd.read_excel(excel_path, sheet_name=soh_sheet_name, engine="openpyxl", header=None)
+                    if soh_raw.empty or soh_raw.shape[0] < 2:
+                        soh_raw = None
+                    soh_df = None
+                    soh_header_row_idx = 0
+                    if soh_raw is not None:
+                        # اكتشاف صف الرؤوس: الصف الذي فيه Facility و (Item code أو Create Date)
+                        for idx in range(min(15, soh_raw.shape[0])):
+                            row = soh_raw.iloc[idx]
+                            cells = " ".join(str(c).strip().lower() for c in row.dropna().astype(str))
+                            if "facility" in cells and ("item code" in cells or "itemcode" in cells or "create date" in cells or "createdate" in cells):
+                                soh_header_row_idx = idx
+                                break
+                        headers_soh = [str(c).strip() if pd.notna(c) and str(c).strip() else f"Col_{i}" for i, c in enumerate(soh_raw.iloc[soh_header_row_idx].values)]
+                        soh_df = soh_raw.iloc[soh_header_row_idx + 1 :].copy()
+                        soh_df.columns = headers_soh
+                        soh_df = soh_df.reset_index(drop=True)
+                        soh_df.columns = [str(c).strip() for c in soh_df.columns]
+                    if soh_df is not None and not soh_df.empty:
+                        def _find_soh_col(names):
+                            for n in names:
+                                n_lo = str(n).lower().replace(" ", "").replace("_", "")
+                                for c in soh_df.columns:
+                                    if c and n_lo in str(c).lower().replace(" ", "").replace("_", ""):
+                                        return c
+                            return None
+
+                        fac_col = _find_soh_col(["Facility", "Facility Code", "Region", "Site"])
+                        lock_col = _find_soh_col(["Lock Code", "LockCode", "Lock_Code"])
+                        create_col = _find_soh_col(["Create Date", "CreateDate", "Creation Date", "Create D&T"])
+                        item_code_col = _find_soh_col(["Item code", "Item Code", "Item_Code", "ItemCode"])
+                        item_desc_col = _find_soh_col(["Item Description", "Item_Description", "Item Desc"])
+                        batch_col = _find_soh_col(["Batch number", "Batch Number", "Batch_Number", "BatchNumber"])
+                        prod_col = _find_soh_col(["Production date", "Production Date", "Production_Date"])
+                        exp_col = _find_soh_col(["Expiry date", "Expiry Date", "Expiry_Date", "ExpiryDate"])
+                        qty_col = _find_soh_col(["TOTAL QTY ON HAND", "Total Qty On Hand", "Total_Qty_On_Hand", "Qty On Hand", "QTY ON HAND"])
+                        lpn_col = _find_soh_col(["LPN number", "LPN Number", "LPN_Number", "LPN"])
+
+                        if fac_col:
+                            # فلترة: إذا وُجد عمود Lock Code نفلتر بغير الفارغ فقط، وإلا نأخذ كل الصفوف
+                            if lock_col and lock_col in soh_df.columns:
+                                soh_df["_lock_ok"] = soh_df[lock_col].apply(
+                                    lambda v: v is not None and str(v).strip() != "" and not (isinstance(v, float) and pd.isna(v))
+                                )
+                                soh_filtered = soh_df[soh_df["_lock_ok"]].copy()
+                            else:
+                                soh_filtered = soh_df.copy()
+
+                            def _norm_fac_soh(val):
+                                v = (str(val or "").strip()).lower()
+                                if not v:
+                                    return ""
+                                if "jeddah" in v or "jedda" in v:
+                                    return "Jeddah"
+                                if "riyadh" in v or "riyad" in v:
+                                    return "Riyadh"
+                                if "dammam" in v or "damam" in v:
+                                    return "Dammam"
+                                return str(val or "").strip()
+
+                            soh_filtered["_Facility_Norm"] = soh_filtered[fac_col].apply(_norm_fac_soh)
+                            soh_facilities_order = ["Jeddah", "Riyadh", "Dammam"]
+                            counts = soh_filtered["_Facility_Norm"].value_counts()
+                            total_count = len(soh_filtered)
+                            for fac in soh_facilities_order:
+                                soh_damages_cards.append({
+                                    "name": fac,
+                                    "count": int(counts.get(fac, 0)),
+                                })
+                            soh_damages_cards.append({"name": "Total", "count": total_count})
+
+                            # جدول: أعمدة محددة فقط
+                            display_cols = [
+                                (fac_col, "Facility"),
+                                (create_col, "Create Date"),
+                                (item_code_col, "Item code"),
+                                (item_desc_col, "Item Description"),
+                                (batch_col, "Batch number"),
+                                (prod_col, "Production date"),
+                                (exp_col, "Expiry date"),
+                                (qty_col, "TOTAL QTY ON HAND"),
+                                (lpn_col, "LPN number"),
+                                (lock_col, "Lock Code"),
+                            ]
+                            table_col_names = [label for _, label in display_cols]
+                            soh_damages_table["columns"] = table_col_names
+                            def _cell_str(v):
+                                if v is None or (isinstance(v, float) and pd.isna(v)):
+                                    return ""
+                                if hasattr(v, "strftime"):
+                                    return v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else str(v)[:10]
+                                return str(v).strip()
+
+                            table_rows_soh = []
+                            for _, r in soh_filtered.iterrows():
+                                row_dict = {}
+                                for col, label in display_cols:
+                                    if col and col in r.index:
+                                        row_dict[label] = _cell_str(r[col])
+                                    else:
+                                        row_dict[label] = ""
+                                table_rows_soh.append(row_dict)
+                            soh_damages_table["data"] = table_rows_soh
+                except Exception as soh_err:
+                    import traceback
+                    traceback.print_exc()
+
             tab_data = {
                 "name": "Utilization",
                 "sub_tables": sub_tables,
                 "chart_data": chart_data_first,
                 "raw_excel_table": {"columns": raw_columns, "data": raw_data_rows},
+                "soh_damages_cards": soh_damages_cards,
+                "soh_damages_table": soh_damages_table,
             }
 
             html = render_to_string(

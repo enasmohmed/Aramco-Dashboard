@@ -870,41 +870,12 @@
                   Pending Shipments
                 </h5>
 
-                {% if inbound_tab_chart_apex and inbound_tab_sub_tables %}
-                {# نفس شارت وجداول تاب Inbound — نفس الأعمدة والمصدر #}
+                {% if inbound_tab_chart_apex %}
+                {# نفس شارت تاب Inbound فقط (بدون جدول) #}
                 <div class="row">
-                  <div class="col-12 mb-3">
+                  <div class="col-12">
                     <div id="dashboard-inbound-chart" style="min-height: 280px;"></div>
                     {{ inbound_tab_chart_apex|json_script:"inbound-tab-chart-apex" }}
-                  </div>
-                  <div class="col-12">
-                    <div class="table-responsive custom-scrollbar">
-                      {% for sub in inbound_tab_sub_tables %}
-                      {% if sub.columns and sub.data is not None %}
-                      <h6 class="mb-2 mt-2">{{ sub.title|default:"" }}</h6>
-                      <table class="table table-sm table-bordered table-striped text-center align-middle mb-3">
-                        <thead class="table-light">
-                          <tr>
-                            {% for col in sub.columns %}
-                            <th class="text-nowrap">{{ col }}</th>
-                            {% endfor %}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {% for row in sub.data %}
-                          <tr>
-                            {% for col in sub.columns %}
-                            <td>{{ row|get_item:col }}</td>
-                            {% endfor %}
-                          </tr>
-                          {% empty %}
-                          <tr><td colspan="{{ sub.columns|length }}" class="text-muted">No data</td></tr>
-                          {% endfor %}
-                        </tbody>
-                      </table>
-                      {% endif %}
-                      {% endfor %}
-                    </div>
                   </div>
                 </div>
                 {% else %}
@@ -1423,12 +1394,12 @@
 
 <script>
   (function () {
-    // ─── تحكم من الكونسول: غيّر PODS_CHART_CONFIG ثم نفّذ initPodsComplianceChart() ───
+    // ─── ألوان الشارت: كل منطقة/سلسلة بلون (Riyadh / Dammam / Jeddah) ───
     window.PODS_CHART_CONFIG = {
       height: 350,
       columnWidth: "65%",
       borderRadius: 4,
-      colors: ["#007fa3", "#7FB7A6", "#A8C8EB"],
+      colors: ["#9084ad", "#a4aeb8", "#538fe7"],
     };
 
     function renderPodsComplianceChart() {
@@ -1445,7 +1416,7 @@
       var colors =
         Array.isArray(cfg.colors) && cfg.colors.length
           ? cfg.colors
-          : ["#7FB7A6", "#A8C8EB", "#E8A8A2"];
+          : ["#9084ad", "#a4aeb8", "#538fe7"];
 
       var dataEl = document.getElementById("pod-compliance-chart-data");
       var categories = [];
@@ -1504,7 +1475,14 @@
           },
           title: { text: "" },
         },
-        legend: { show: false },
+        legend: {
+          show: true,
+          position: "top",
+          horizontalAlign: "right",
+          fontSize: "12px",
+          fontWeight: 600,
+          itemMargin: { horizontal: 10, vertical: 4 },
+        },
         colors: colors,
         dataLabels: { enabled: false },
         grid: { borderColor: "#E1E5EA", strokeDashArray: 4 },
