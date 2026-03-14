@@ -1450,6 +1450,170 @@ def _read_inventory_snapshot_capacity_from_excel(excel_path):
     }
 
 
+def _read_capacity_from_aramco_utilization(excel_path):
+    """
+    يقرأ من شيت ARAMCO_Utilization لتاب الداشبورد (Capacity Used vs Available + جدول Warehouse):
+    - يفلتر بـ Report Date: آخر يوم موجود للدمام والرياض وجدة.
+    - Used من عمود Utilized (Hybrid) (آخر 3 قيم = المناطق الثلاث).
+    - Available من عمود Empty (آخر 3 قيم).
+    - النسبة المئوية من عمود Percentage (آخر 3 قيم).
+    - يرجع: inventory_capacity_data (للشارت: مناطق مع used/available/percentage) و inventory_warehouse_table (جدول Warehouse).
+    """
+    if not excel_path or not os.path.exists(excel_path):
+        return None
+    try:
+        xls = pd.ExcelFile(excel_path, engine="openpyxl")
+    except Exception:
+        return None
+    sheet_name = None
+    for s in xls.sheet_names:
+        if (s or "").strip() == "ARAMCO_Utilization":
+            sheet_name = s
+            break
+    if not sheet_name:
+        for s in xls.sheet_names:
+            if "utilization" in (s or "").lower() and "aramco" in (s or "").lower():
+                sheet_name = s
+                break
+    if not sheet_name:
+        for s in xls.sheet_names:
+            if "utilization" in (s or "").lower():
+                sheet_name = s
+                break
+    if not sheet_name:
+        return None
+    try:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+    except Exception:
+        return None
+    if df.empty or len(df) < 1:
+        return None
+
+    df.columns = [str(c).strip() for c in df.columns]
+
+    def _find_col(names):
+        for n in names:
+            n_lower = n.lower().replace(" ", "").replace("_", "")
+            for c in df.columns:
+                if c and n_lower in c.lower().replace(" ", "").replace("_", ""):
+                    return c
+        return None
+
+    report_date_col = _find_col(["Report Date", "Report_Date", "ReportDate", "Date", "Report D&T"])
+    utilized_col = _find_col([
+        "Utilized (Hybrid)", "Utilized(Hybrid)", "Utilized_Hybrid", "Utilized Hybrid",
+        "Utilized", "Utilised (Hybrid)",
+    ])
+    empty_col = _find_col(["Empty", "Available", "Available_Space", "Available Space"])
+    percentage_col = _find_col(["Percentage", "Percentage_%", "Pct", "%", "Utilization"])
+    region_col = _find_col(["Region", "Facility", "Facility Code", "Site", "Location", "Area"])
+    capacity_col = _find_col(["Capacity", "Total Capacity", "Total_Capacity"])
+    pending_col = _find_col(["Pending", "Pending_Space", "Pending Space"])
+    location_col = _find_col(["Location", "Location Name", "LocationName"]) or region_col
+
+    if not report_date_col or not utilized_col:
+        return None
+
+    def _norm_region(r):
+        s = (r or "").strip()
+        if not s:
+            return ""
+        s_lower = s.lower()
+        if "jeddah" in s_lower or "jedda" in s_lower:
+            return "Jeddah"
+        if "riyadh" in s_lower or "riyad" in s_lower:
+            return "Riyadh"
+        if "dammam" in s_lower or "damam" in s_lower:
+            return "Dammam"
+        return ""
+
+    df["_report_dt"] = pd.to_datetime(df[report_date_col], errors="coerce")
+    df = df.dropna(subset=["_report_dt"])
+    if region_col:
+        df["_region_norm"] = df[region_col].astype(str).apply(_norm_region)
+    else:
+        df["_region_norm"] = ""
+    df = df[df["_region_norm"].isin(["Jeddah", "Riyadh", "Dammam"])]
+    if df.empty:
+        return None
+
+    last_date = df["_report_dt"].max()
+    sub = df[df["_report_dt"] == last_date].copy()
+    sub["_utilized"] = pd.to_numeric(sub[utilized_col], errors="coerce").fillna(0)
+    sub["_empty"] = pd.to_numeric(sub[empty_col], errors="coerce").fillna(0) if empty_col else (0)
+    if percentage_col:
+        sub["_pct"] = pd.to_numeric(sub[percentage_col], errors="coerce").fillna(0)
+    else:
+        sub["_pct"] = 0.0
+    if capacity_col:
+        sub["_capacity"] = pd.to_numeric(sub[capacity_col], errors="coerce").fillna(0)
+    else:
+        sub["_capacity"] = sub["_utilized"] + sub["_empty"]
+    if pending_col:
+        sub["_pending"] = pd.to_numeric(sub[pending_col], errors="coerce").fillna(0)
+    else:
+        sub["_pending"] = 0
+
+    regions_order = ["Jeddah", "Riyadh", "Dammam"]
+    last_three = []
+    for reg in regions_order:
+        row = sub[sub["_region_norm"] == reg]
+        if row.empty:
+            continue
+        row = row.iloc[-1]
+        last_three.append({
+            "region": reg,
+            "date": last_date.strftime("%Y-%m-%d") if hasattr(last_date, "strftime") else str(last_date),
+            "utilized": int(row["_utilized"]) if row["_utilized"] == int(row["_utilized"]) else round(float(row["_utilized"]), 2),
+            "empty": int(row["_empty"]) if row["_empty"] == int(row["_empty"]) else round(float(row["_empty"]), 2),
+            "percentage": round(float(row["_pct"]), 2) if row["_pct"] else 0,
+            "capacity": int(row["_capacity"]) if row["_capacity"] == int(row["_capacity"]) else round(float(row["_capacity"]), 2),
+            "pending": int(row["_pending"]) if row["_pending"] == int(row["_pending"]) else round(float(row["_pending"]), 2),
+            "location": str(row[location_col]).strip() if location_col and location_col in row.index and pd.notna(row.get(location_col)) else reg,
+        })
+
+    if not last_three:
+        return None
+
+    regions_for_chart = []
+    for r in last_three:
+        regions_for_chart.append({
+            "name": r["region"],
+            "used": r["utilized"],
+            "available": r["empty"],
+            "percentage": r["percentage"],
+        })
+
+    warehouse_table = []
+    for r in last_three:
+        warehouse_table.append({
+            "date": r["date"],
+            "facility": r["region"],
+            "capacity": r["capacity"],
+            "utilized": r["utilized"],
+            "utilization": r["utilized"],
+            "pending": r["pending"],
+            "empty": r["empty"],
+            "location": r["location"],
+            "percentage": r["percentage"],
+        })
+
+    used_total = sum(x["utilized"] for x in last_three)
+    avail_total = sum(x["empty"] for x in last_three)
+    total_cap = used_total + avail_total
+    used_pct = round(100.0 * used_total / total_cap, 1) if total_cap > 0 else 0
+    available_pct = round(100.0 * avail_total / total_cap, 1) if total_cap > 0 else 0
+
+    return {
+        "inventory_capacity_data": {
+            "used": used_pct,
+            "available": available_pct,
+            "regions": regions_for_chart,
+        },
+        "inventory_warehouse_table": warehouse_table,
+    }
+
+
 def _read_inventory_warehouse_table_from_excel(excel_path):
     """
     يقرأ من شيت Inventory_Snapshot جدول الـ Warehouse:
@@ -5472,6 +5636,8 @@ class UploadExcelViewRoche(View):
                 "Jeddah": "#538fe7",
             }
             chart_data = []
+            chart_data_on_time = []
+            chart_data_order_fulfilment = []
             if ordered_months_overall_ob:
                 for f in FACILITIES_OB:
                     stats_f = facility_stats.get(f, {})
@@ -5480,30 +5646,30 @@ class UploadExcelViewRoche(View):
                         {"label": m, "y": by_month.get(m, {}).get("hit_pct", 0)}
                         for m in ordered_months_overall_ob
                     ]
-                    chart_data.append(
-                        {
-                            "type": "column",
-                            "name": f"{f} On time 24h %",
-                            "color": facility_colors_ob.get(f, "#007fa3"),
-                            "valueSuffix": "%",
-                            "related_table": "sub-table-outbound-facilities-hit",
-                            "dataPoints": data_points,
-                        }
-                    )
+                    ds_on_time = {
+                        "type": "column",
+                        "name": f"{f} On time 24h %",
+                        "color": facility_colors_ob.get(f, "#007fa3"),
+                        "valueSuffix": "%",
+                        "related_table": "sub-table-outbound-facilities-hit",
+                        "dataPoints": data_points,
+                    }
+                    chart_data.append(ds_on_time)
+                    chart_data_on_time.append(ds_on_time)
                     data_points_ful = [
                         {"label": m, "y": by_month.get(m, {}).get("fulfilment_pct", 0)}
                         for m in ordered_months_overall_ob
                     ]
-                    chart_data.append(
-                        {
-                            "type": "column",
-                            "name": f"{f} Order Fulfilment %",
-                            "color": facility_colors_ob.get(f, "#28a745"),
-                            "valueSuffix": "%",
-                            "related_table": "sub-table-outbound-facilities-hit",
-                            "dataPoints": data_points_ful,
-                        }
-                    )
+                    ds_fulfilment = {
+                        "type": "column",
+                        "name": f"{f} Order Fulfilment %",
+                        "color": facility_colors_ob.get(f, "#28a745"),
+                        "valueSuffix": "%",
+                        "related_table": "sub-table-outbound-facilities-hit",
+                        "dataPoints": data_points_ful,
+                    }
+                    chart_data.append(ds_fulfilment)
+                    chart_data_order_fulfilment.append(ds_fulfilment)
 
             # جدول واحد موحّد: الصفوف = المناطق، الأعمدة = (Jan Hit / Jan Miss / Feb Hit / Feb Miss / ...)
             if ordered_months_overall_ob:
@@ -5616,7 +5782,26 @@ class UploadExcelViewRoche(View):
                 },
             }
 
-            outbound_sub_tables = [summary_table] + facility_tables + [detail_table]
+            # شارتان منفصلان: On Time ثم Order Fulfillment (كل منطقة وشهر)
+            outbound_chart_on_time_block = {
+                "id": "outbound-chart-on-time",
+                "title": "On Time Shipment",
+                "chart_data": chart_data_on_time,
+                "chart_only": True,
+            }
+            outbound_chart_fulfilment_block = {
+                "id": "outbound-chart-order-fulfilment",
+                "title": "Order Fulfillment",
+                "chart_data": chart_data_order_fulfilment,
+                "chart_only": True,
+            }
+            # ترتيب العرض: شارت On Time → جدول On time shipment 24 h (pivot فقط، بدون جدول الملخص) → شارت Order Fulfillment → جدول التفاصيل
+            outbound_sub_tables = (
+                [outbound_chart_on_time_block]
+                + facility_tables
+                + [outbound_chart_fulfilment_block]
+                + [detail_table]
+            )
 
             # جدول بيانات الشيت كاملة تحت Outbound Shipments Detail (حد 1000 صف لتجنب بطء الصفحة)
             if not df1.empty:
@@ -5641,7 +5826,7 @@ class UploadExcelViewRoche(View):
                     if "_FacilityNorm" in _ob_row and _ob_row.get("_FacilityNorm"):
                         _ob_d["Facility Code"] = str(_ob_row.get("_FacilityNorm"))
                     _ob_full_data.append(_ob_d)
-                _ob_full_title = "Outbound — Full sheet data"
+                _ob_full_title = "Outbound Report"
                 if len(df1) > _ob_max_full:
                     _ob_full_title += f" (First {_ob_max_full} rows of {len(df1)})"
                 outbound_full_sheet_table = {
@@ -6745,7 +6930,7 @@ class UploadExcelViewRoche(View):
             month_options = sorted(set(r.get("Month") for r in detail_rows if r.get("Month")))
             detail_table = {
                 "id": "sub-table-return-detail" if is_return_tab else "sub-table-inbound-detail",
-                "title": "Return Shipments Detail (250 only)" if is_return_tab else "Inbound Shipments Detail",
+                "title": "Return Shipments Detail" if is_return_tab else "Inbound Shipments Detail",
                 "columns": detail_columns,
                 "data": detail_rows,
                 "chart_data": [],
@@ -6794,9 +6979,7 @@ class UploadExcelViewRoche(View):
                         else:
                             _d[_safe_c] = _v
                     _full_data.append(_d)
-                _full_title = "Inbound — Full sheet data"
-                if len(df) > _max_full_rows:
-                    _full_title += f" (First {_max_full_rows} rows of {len(df)})"
+                _full_title = "Inbound Report"
                 full_sheet_table = {
                     "id": "sub-table-inbound-full-sheet",
                     "title": _full_title,
@@ -10311,7 +10494,20 @@ class UploadExcelViewRoche(View):
             except Exception:
                 pass
 
-        # Order Process Time (يُحسب من filter_outbound_shipments — يعتمد على request/كاش الشيتات)
+        # Order Process Time (يُحسب من filter_outbound_shipments — شارتان: On Time Shipment + Order Fulfillment)
+        def _outbound_chart_to_apex(chart_data):
+            if not chart_data or not isinstance(chart_data, list):
+                return {"categories": [], "series": []}
+            categories_ob = []
+            series_ob = []
+            for s in chart_data:
+                pts = s.get("dataPoints") or []
+                if pts and not categories_ob:
+                    categories_ob = [p.get("label", "") for p in pts]
+                data_vals = [float(p.get("y", 0)) for p in pts]
+                series_ob.append({"name": s.get("name") or "", "data": data_vals})
+            return {"categories": categories_ob, "series": series_ob}
+
         if excel_path:
             try:
                 outbound_result = self.filter_outbound_shipments(
@@ -10327,23 +10523,23 @@ class UploadExcelViewRoche(View):
                     "miss": ob_stats.get("miss", 0),
                     "total": ob_stats.get("total", 0),
                 }
+                # شارتان في الداشبورد: On Time Shipment و Order Fulfillment (نفس بيانات تاب Outbound)
+                sub_tables = outbound_result.get("sub_tables") or []
+                chart_on_time = []
+                chart_fulfilment = []
+                for sub in sub_tables:
+                    if not isinstance(sub, dict):
+                        continue
+                    if sub.get("id") == "outbound-chart-on-time":
+                        chart_on_time = sub.get("chart_data") or []
+                    elif sub.get("id") == "outbound-chart-order-fulfilment":
+                        chart_fulfilment = sub.get("chart_data") or []
+                context["order_process_chart_data_on_time"] = _outbound_chart_to_apex(chart_on_time)
+                context["order_process_chart_data_order_fulfilment"] = _outbound_chart_to_apex(chart_fulfilment)
+                # احتفظ بـ order_process_chart_data للمتوافقية (مثلاً إن لم يُستخدم في القالب)
                 ob_chart_data = outbound_result.get("chart_data") or []
                 if ob_chart_data and isinstance(ob_chart_data, list):
-                    categories_ob = []
-                    series_ob = []
-                    for s in ob_chart_data:
-                        pts = s.get("dataPoints") or []
-                        if pts and not categories_ob:
-                            categories_ob = [p.get("label", "") for p in pts]
-                        data_vals = [float(p.get("y", 0)) for p in pts]
-                        series_ob.append({
-                            "name": s.get("name") or "",
-                            "data": data_vals,
-                        })
-                    context["order_process_chart_data"] = {
-                        "categories": categories_ob,
-                        "series": series_ob,
-                    }
+                    context["order_process_chart_data"] = _outbound_chart_to_apex(ob_chart_data)
             except Exception:
                 pass
 
@@ -10399,8 +10595,18 @@ class UploadExcelViewRoche(View):
         context["returns_kpi"]["total_quantity"] = context["returns_kpi"].get("total_lpns", context["returns_kpi"]["total_lpns"])
         context.setdefault("returns_chart_data", _empty_pod_chart)
         context.setdefault("order_process_chart_data", _empty_pod_chart)
+        context.setdefault("order_process_chart_data_on_time", _empty_pod_chart)
+        context.setdefault("order_process_chart_data_order_fulfilment", _empty_pod_chart)
         context.setdefault("order_process_kpi", {"hit_pct": 0, "miss_pct": 0, "hit": 0, "miss": 0, "total": 0})
         context.setdefault("returns_region_table", [])
+
+        # Capacity Used vs Available + جدول Warehouse: من شيت ARAMCO_Utilization (آخر يوم، الدمام/الرياض/جدة)
+        if excel_path:
+            aramco_cap = _read_capacity_from_aramco_utilization(excel_path)
+            if aramco_cap:
+                context["inventory_capacity_data"] = aramco_cap.get("inventory_capacity_data") or aramco_cap
+                if aramco_cap.get("inventory_warehouse_table"):
+                    context["inventory_warehouse_table"] = aramco_cap["inventory_warehouse_table"]
 
         if "inventory_kpi" not in context:
             missing_by_section["Dashboard – Inventory"] = ["No of Location", "Total Qty", "Capacity chart", "Warehouse table"]

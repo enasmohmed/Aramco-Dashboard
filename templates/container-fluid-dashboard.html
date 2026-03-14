@@ -867,7 +867,7 @@
                 class="pending-shipments-card p-3 dashboard-card-elevated rounded-3"
               >
                 <h5 class="dashboard-section-title text-dark mb-3">
-                  Pending Shipments
+                  On Time Receiving
                 </h5>
 
                 {% if inbound_tab_chart_apex %}
@@ -951,6 +951,7 @@
     {{ pod_compliance_chart_data|json_script:"pod-compliance-chart-data" }}
     {{ returns_chart_data|json_script:"returns-chart-data" }}
     {{ order_process_chart_data|json_script:"order-process-chart-data" }}
+    {{ order_process_chart_data_on_time|json_script:"order-process-chart-data-on-time" }}
     <!-- Outbound card (right) - مثل الصورة بدون POD by Region -->
     <div class="col-12 col-lg-6 outbound-section">
       <div class="card border-0 shadow-sm h-100 dashboard-card-elevated">
@@ -1019,9 +1020,10 @@
                 {% endif %}
               </div>
             </div>
-            <div id="chart-returns-sla" class="returns-chart-container" style="height: 280px; min-height: 280px;"></div>
+            <h6 class="text-center mb-2 fw-bold" style="color: #9084ad;">On Time Shipment</h6>
+            <div id="chart-order-process-on-time" class="returns-chart-container" style="height: 280px; min-height: 280px;"></div>
             <div class="d-flex flex-wrap justify-content-center gap-3 gap-md-4 mt-2 pt-2 border-top border-light">
-              <span class="small text-muted">Order Process Time: Hit % by facility — data from Outbound tab (filter_outbound_shipments)</span>
+              <span class="small text-muted">Order Process Time: On Time by region/month — data from Outbound tab</span>
             </div>
           </div>
         </div>
@@ -1165,47 +1167,57 @@
               <table class="table table-sm table-bordered dashboard-data-table">
                 <thead>
                   <tr>
+                    <th>Date</th>
                     <th>Facility</th>
                     <th>Capacity</th>
-                    <th>Utilized</th>
+                    <th>Utilization</th>
                     <th>Pending</th>
                     <th>Empty</th>
+                    <th>Location</th>
                     <th>Percentage</th>
                   </tr>
                 </thead>
                 <tbody>
                   {% for row in inventory_warehouse_table %}
                   <tr>
+                    <td>{{ row.date|default:"" }}</td>
                     <td>{% if row.facility != None %}{{ row.facility }}{% else %}{{ row.warehouse|default:"" }}{% endif %}</td>
                     <td>{% if row.capacity != None %}{{ row.capacity }}{% else %}{{ row.skus|default:"" }}{% endif %}</td>
-                    <td>{{ row.utilized|default:"" }}</td>
+                    <td>{{ row.utilization|default:row.utilized|default:"" }}</td>
                     <td>{{ row.pending|default:0 }}</td>
                     <td>{% if row.empty != None %}{{ row.empty }}{% else %}{{ row.available_space|default:"" }}{% endif %}</td>
+                    <td>{{ row.location|default:"" }}</td>
                     <td>{% if row.percentage != None %}{{ row.percentage }}%{% else %}{{ row.utilization_pct|default:"" }}{% endif %}</td>
                   </tr>
                   {% empty %}
                   <tr>
+                    <td></td>
                     <td>Jeddah</td>
                     <td>1,800</td>
                     <td>0</td>
                     <td>0</td>
                     <td>1,800</td>
+                    <td></td>
                     <td>0%</td>
                   </tr>
                   <tr>
+                    <td></td>
                     <td>Dammam</td>
                     <td>1,575</td>
                     <td>0</td>
                     <td>0</td>
                     <td>1,575</td>
+                    <td></td>
                     <td>0%</td>
                   </tr>
                   <tr>
+                    <td></td>
                     <td>Riyadh</td>
                     <td>1,125</td>
                     <td>0</td>
                     <td>0</td>
                     <td>1,125</td>
+                    <td></td>
                     <td>0%</td>
                   </tr>
                   {% endfor %}
@@ -1510,7 +1522,7 @@
 
 <script>
   (function () {
-    // Order Process Time = نفس شارت Outbound Hit/Miss (Hit % بالمناطق)
+    // Order Process Time = شارتان: On Time Shipment + Order Fulfillment (نفس Outbound tab)
     window.RETURNS_CHART_CONFIG = {
       height: 280,
       columnWidth: "65%",
@@ -1518,8 +1530,8 @@
       colors: ["#9084ad", "#e8f1fb", "#538fe7"],
     };
 
-    function renderReturnsComplianceChart() {
-      var el = document.getElementById("chart-returns-sla");
+    function renderOrderProcessChart(elId, dataElId, chartStoreKey) {
+      var el = document.getElementById(elId);
       if (!el || typeof ApexCharts === "undefined") return;
       var cfg = window.RETURNS_CHART_CONFIG || {};
       var chartHeight =
@@ -1534,7 +1546,7 @@
           ? cfg.colors
           : ["#9084ad", "#e8f1fb", "#538fe7"];
 
-      var dataEl = document.getElementById("order-process-chart-data");
+      var dataEl = document.getElementById(dataElId);
       var categories = [];
       var series = [];
       if (dataEl && dataEl.textContent && dataEl.textContent.trim()) {
@@ -1543,22 +1555,22 @@
           categories = data.categories || [];
           series = data.series || [];
         } catch (e) {
-          console.warn("Order Process Time (Outbound Hit/Miss) chart data error", e);
+          console.warn("Order Process Time chart data error (" + dataElId + ")", e);
         }
       }
       if (!categories.length || !series.length) {
         categories = ["Jan", "Feb", "Mar"];
         series = [
-          { name: "Riyadh Hit %", data: [0, 0, 0] },
-          { name: "Dammam Hit %", data: [0, 0, 0] },
-          { name: "Jeddah Hit %", data: [0, 0, 0] },
+          { name: "Riyadh", data: [0, 0, 0] },
+          { name: "Dammam", data: [0, 0, 0] },
+          { name: "Jeddah", data: [0, 0, 0] },
         ];
       }
-      if (window._returnsComplianceChart) {
+      if (window[chartStoreKey]) {
         try {
-          window._returnsComplianceChart.destroy();
+          window[chartStoreKey].destroy();
         } catch (e) {}
-        window._returnsComplianceChart = null;
+        window[chartStoreKey] = null;
       }
       el.innerHTML = "";
       var options = {
@@ -1611,7 +1623,15 @@
       };
       var chart = new ApexCharts(el, options);
       chart.render();
-      window._returnsComplianceChart = chart;
+      window[chartStoreKey] = chart;
+    }
+
+    function renderReturnsComplianceChart() {
+      renderOrderProcessChart(
+        "chart-order-process-on-time",
+        "order-process-chart-data-on-time",
+        "_orderProcessOnTimeChart"
+      );
     }
     window.initReturnsComplianceChart = renderReturnsComplianceChart;
     if (document.readyState === "loading") {
@@ -1642,15 +1662,11 @@
       var usedColor = cfg.usedColor || "#7FB7A6";
       var availableColor = cfg.availableColor || "#C5E4DE";
 
-      var usedPct = 78;
-      var availablePct = 22;
+      var data = {};
       var dataEl = document.getElementById("inventory-capacity-data");
       if (dataEl && dataEl.textContent && dataEl.textContent.trim()) {
         try {
-          var data = JSON.parse(dataEl.textContent.trim());
-          usedPct = typeof data.used === "number" ? data.used : 78;
-          availablePct =
-            typeof data.available === "number" ? data.available : 22;
+          data = JSON.parse(dataEl.textContent.trim());
         } catch (e) {
           console.warn("Inventory capacity chart data error", e);
         }
@@ -1664,71 +1680,138 @@
       }
       el.innerHTML = "";
 
-      var options = {
-        chart: {
-          type: "bar",
-          height: chartHeight,
-          stacked: true,
-          zoom: { enabled: false },
-          toolbar: { show: false },
-          sparkline: { enabled: false },
-        },
-        plotOptions: {
-          bar: {
-            horizontal: true,
-            columnWidth: "70%",
-            borderRadius: 6,
-            borderRadiusApplication: "end",
-            barHeight: "60%",
-            dataLabels: { position: "top" },
+      var regions = data.regions && data.regions.length > 0 ? data.regions : null;
+      var options;
+
+      if (regions && regions.length > 0) {
+        var categories = regions.map(function (r) { return r.name; });
+        var usedData = regions.map(function (r) { return Number(r.used) || 0; });
+        var availableData = regions.map(function (r) { return Number(r.available) || 0; });
+        options = {
+          chart: {
+            type: "bar",
+            height: chartHeight,
+            stacked: true,
+            zoom: { enabled: false },
+            toolbar: { show: false },
+            sparkline: { enabled: false },
           },
-        },
-        colors: [usedColor, availableColor],
-        series: [
-          { name: "Used", data: [usedPct] },
-          { name: "Available", data: [availablePct] },
-        ],
-        xaxis: {
-          categories: [""],
-          min: 0,
-          max: 100,
-          tickAmount: 5,
-          labels: {
-            formatter: function (v) {
-              return v + "%";
+          plotOptions: {
+            bar: {
+              horizontal: true,
+              columnWidth: "70%",
+              borderRadius: 6,
+              borderRadiusApplication: "end",
+              barHeight: "60%",
+              dataLabels: { position: "top" },
             },
           },
-        },
-        yaxis: { show: false },
-        grid: {
-          borderColor: "#E1E5EA",
-          strokeDashArray: 4,
-          xaxis: { lines: { show: true } },
-          yaxis: { lines: { show: false } },
-        },
-        legend: {
-          show: true,
-          position: "bottom",
-          horizontalAlign: "left",
-          fontSize: "13px",
-          markers: { width: 12, height: 12, radius: 2 },
-          itemMargin: { horizontal: 12, vertical: 4 },
-          formatter: function (seriesName, opts) {
-            if (seriesName === "Available") {
-              return seriesName + ": " + availablePct + "%";
-            }
-            return seriesName;
+          colors: [usedColor, availableColor],
+          series: [
+            { name: "Used", data: usedData },
+            { name: "Available", data: availableData },
+          ],
+          xaxis: {
+            categories: categories,
+            labels: { trim: true },
           },
-        },
-        dataLabels: { enabled: false },
-        tooltip: {
-          y: {
-            formatter: function (v) {
-              return v + "%";
+          yaxis: { show: false },
+          grid: {
+            borderColor: "#E1E5EA",
+            strokeDashArray: 4,
+            xaxis: { lines: { show: true } },
+            yaxis: { lines: { show: false } },
+          },
+          legend: {
+            show: true,
+            position: "bottom",
+            horizontalAlign: "left",
+            fontSize: "13px",
+            markers: { width: 12, height: 12, radius: 2 },
+            itemMargin: { horizontal: 12, vertical: 4 },
+          },
+          dataLabels: { enabled: false },
+          tooltip: {
+            y: {
+              formatter: function (v, opts) {
+                var pct = regions[opts.dataPointIndex] && regions[opts.dataPointIndex].percentage != null
+                  ? regions[opts.dataPointIndex].percentage + "%"
+                  : "";
+                return v + (pct ? " (" + pct + ")" : "");
+              },
             },
           },
-        },
-      };
+        };
+      } else {
+        var usedPct = typeof data.used === "number" ? data.used : 78;
+        var availablePct = typeof data.available === "number" ? data.available : 22;
+        options = {
+          chart: {
+            type: "bar",
+            height: chartHeight,
+            stacked: true,
+            zoom: { enabled: false },
+            toolbar: { show: false },
+            sparkline: { enabled: false },
+          },
+          plotOptions: {
+            bar: {
+              horizontal: true,
+              columnWidth: "70%",
+              borderRadius: 6,
+              borderRadiusApplication: "end",
+              barHeight: "60%",
+              dataLabels: { position: "top" },
+            },
+          },
+          colors: [usedColor, availableColor],
+          series: [
+            { name: "Used", data: [usedPct] },
+            { name: "Available", data: [availablePct] },
+          ],
+          xaxis: {
+            categories: [""],
+            min: 0,
+            max: 100,
+            tickAmount: 5,
+            labels: {
+              formatter: function (v) {
+                return v + "%";
+              },
+            },
+          },
+          yaxis: { show: false },
+          grid: {
+            borderColor: "#E1E5EA",
+            strokeDashArray: 4,
+            xaxis: { lines: { show: true } },
+            yaxis: { lines: { show: false } },
+          },
+          legend: {
+            show: true,
+            position: "bottom",
+            horizontalAlign: "left",
+            fontSize: "13px",
+            markers: { width: 12, height: 12, radius: 2 },
+            itemMargin: { horizontal: 12, vertical: 4 },
+            formatter: function (seriesName, opts) {
+              if (seriesName === "Available") {
+                return seriesName + ": " + availablePct + "%";
+              }
+              return seriesName;
+            },
+          },
+          dataLabels: { enabled: false },
+          tooltip: {
+            y: {
+              formatter: function (v) {
+                return v + "%";
+              },
+            },
+          },
+        };
+      }
+
       var chart = new ApexCharts(el, options);
       chart.render();
       window._inventoryCapacityChart = chart;

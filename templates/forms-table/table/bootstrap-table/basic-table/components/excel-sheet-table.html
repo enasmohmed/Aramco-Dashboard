@@ -1079,20 +1079,19 @@
     </div>
     {% endif %}
 
-    {# ===== 1) الشارت في أول ديف ===== #}
-    {% if tab.chart_data %}
+    {# ===== 1) ترتيب حسب sub_tables: شارت On Time → جدول(ات) On time shipment 24 h → شارت Order Fulfillment → ثم جدول التفاصيل ===== #}
+    {% for sub in tab.sub_tables %}
+      {% if sub.chart_only and sub.chart_data %}
     <div class="row mb-4">
       <div class="col-12">
         <div class="table-card">
-          {% render_chart tab.name %}
+          <h5 class="text-center mb-3 fw-bold" style="color: #9084ad;">{{ sub.title }}</h5>
+          {% render_chart sub.id %}
         </div>
       </div>
     </div>
-    {% endif %}
-
-    {# ===== 2) جداول المناطق (الدمام / الرياض / جدة): كل جدول في صف كامل مع scroll أفقي ===== #}
-    {% for sub in tab.sub_tables %}
-      {% if sub.facility_name %}
+      {% elif not sub.chart_only and not sub.full_width %}
+    {# جدول تحت شارت On Time (On time shipment 24 h): ملخص أو pivot بالمناطق ===== #}
     <div class="row mb-4">
       <div class="col-12">
         <div class="table-card">
@@ -1147,7 +1146,7 @@
 
     {# ===== 3) جدول الإكسل بالتفاصيل (ARAMCO Outbound Report) مع الفلاتر والبادجات ===== #}
     {% for sub in tab.sub_tables %}
-      {% if sub.full_width %}
+      {% if not sub.chart_only and sub.full_width %}
     <div class="row mt-4">
       <div class="col-12">
         <div class="card" {% if sub.id == 'sub-table-outbound-detail' %}id="outbound-detail-card"{% elif sub.id == 'sub-table-outbound-full-sheet' %}id="outbound-full-sheet-card"{% endif %}>
