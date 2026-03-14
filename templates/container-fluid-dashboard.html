@@ -1,4 +1,4 @@
-{% load static %} {% load sass_tags %}
+{% load static %} {% load sass_tags %} {% load custom_tags %}
 
 <style>
   /* ═══ Aramco palette – تطبيق الألوان على الداشبورد ═══ */
@@ -870,6 +870,44 @@
                   Pending Shipments
                 </h5>
 
+                {% if inbound_tab_chart_apex and inbound_tab_sub_tables %}
+                {# نفس شارت وجداول تاب Inbound — نفس الأعمدة والمصدر #}
+                <div class="row">
+                  <div class="col-12 mb-3">
+                    <div id="dashboard-inbound-chart" style="min-height: 280px;"></div>
+                    {{ inbound_tab_chart_apex|json_script:"inbound-tab-chart-apex" }}
+                  </div>
+                  <div class="col-12">
+                    <div class="table-responsive custom-scrollbar">
+                      {% for sub in inbound_tab_sub_tables %}
+                      {% if sub.columns and sub.data is not None %}
+                      <h6 class="mb-2 mt-2">{{ sub.title|default:"" }}</h6>
+                      <table class="table table-sm table-bordered table-striped text-center align-middle mb-3">
+                        <thead class="table-light">
+                          <tr>
+                            {% for col in sub.columns %}
+                            <th class="text-nowrap">{{ col }}</th>
+                            {% endfor %}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {% for row in sub.data %}
+                          <tr>
+                            {% for col in sub.columns %}
+                            <td>{{ row|get_item:col }}</td>
+                            {% endfor %}
+                          </tr>
+                          {% empty %}
+                          <tr><td colspan="{{ sub.columns|length }}" class="text-muted">No data</td></tr>
+                          {% endfor %}
+                        </tbody>
+                      </table>
+                      {% endif %}
+                      {% endfor %}
+                    </div>
+                  </div>
+                </div>
+                {% else %}
                 <div class="row align-items-center">
                   <!-- LEFT: list -->
                   <div class="col-12 col-lg-6">
@@ -932,6 +970,7 @@
                     {{ pending_shipments|json_script:"pending-shipments-data" }}
                   </div>
                 </div>
+                {% endif %}
               </div>
             </div>
           </div>
@@ -976,7 +1015,7 @@
             </div>
             <div class="col-12 col-md-6">
               <div class="inbound-kpi-card p-3">
-                <div class="inbound-kpi-label mb-2">Picked Orders</div>
+                <div class="inbound-kpi-label mb-2">Packed Qty</div>
                 <div class="d-flex align-items-center justify-content-between">
                   <div class="inbound-kpi-value">
                     {{ outbound_kpi.picked_orders|default:0 }}
@@ -1331,6 +1370,53 @@
       document.addEventListener("DOMContentLoaded", applyPendingDonut);
     } else {
       setTimeout(applyPendingDonut, 0);
+    }
+  })();
+</script>
+
+<script>
+  (function () {
+    function initDashboardInboundChart() {
+      var el = document.getElementById("dashboard-inbound-chart");
+      if (!el || typeof ApexCharts === "undefined") return;
+      var dataEl = document.getElementById("inbound-tab-chart-apex");
+      if (!dataEl || !dataEl.textContent || !dataEl.textContent.trim()) return;
+      var data;
+      try {
+        data = JSON.parse(dataEl.textContent.trim());
+      } catch (e) {
+        return;
+      }
+      var categories = data.categories || [];
+      var series = data.series || [];
+      if (!categories.length || !series.length) return;
+      if (window._dashboardInboundChart) {
+        try { window._dashboardInboundChart.destroy(); } catch (e) {}
+        window._dashboardInboundChart = null;
+      }
+      el.innerHTML = "";
+      var options = {
+        chart: { type: "bar", height: 280, toolbar: { show: false }, stacked: false },
+        plotOptions: { bar: { horizontal: false, columnWidth: "60%", borderRadius: 4 } },
+        dataLabels: { enabled: true, formatter: function (v) { return (v != null ? Math.round(v) : 0) + "%"; } },
+        stroke: { show: true, width: 1, colors: ["#fff"] },
+        xaxis: { categories: categories },
+        yaxis: { labels: { formatter: function (v) { return (v != null ? Math.round(v) : 0) + "%"; } } },
+        colors: ["#9084ad", "#a4aeb8", "#538fe7"],
+        legend: { position: "top", horizontalAlign: "right" },
+        series: series,
+      };
+      var chart = new ApexCharts(el, options);
+      chart.render();
+      window._dashboardInboundChart = chart;
+    }
+    window.initDashboardInboundChart = initDashboardInboundChart;
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", function () {
+        setTimeout(initDashboardInboundChart, 100);
+      });
+    } else {
+      setTimeout(initDashboardInboundChart, 100);
     }
   })();
 </script>

@@ -1,0 +1,35 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
+  &rsaquo; <a href="{% url 'admin:dashboard_transportationkpi_changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; {% trans 'استيراد من إكسل' %}
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>استيراد بيانات Transportation KPI من ملف إكسل</h1>
+<p>ارفع ملف إكسل يحتوي على شيت باسم <strong>Transportation</strong> (أو Transport). سيتم البحث تلقائياً عن الأقسام Inbound / Outbound والأشهر January / February وعن الأعمدة (REGION, TOTAL, HIT, MISS, ACHIEVED، إلخ) وملء السجلات.</p>
+
+<form method="post" enctype="multipart/form-data" id="import-excel-form">
+  {% csrf_token %}
+  <fieldset class="module aligned">
+    {% for field in form %}
+    <div class="form-row">
+      {{ field.errors }}
+      <div>
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+        {% if field.help_text %}<p class="help">{{ field.help_text }}</p>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </fieldset>
+  <div class="submit-row">
+    <input type="submit" value="استيراد" class="default">
+    <a href="{% url 'admin:dashboard_transportationkpi_changelist' %}" class="button cancel-link">إلغاء</a>
+  </div>
+</form>
+{% endblock %}

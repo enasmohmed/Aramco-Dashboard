@@ -104,3 +104,44 @@ class DashboardDataCache(models.Model):
 
     def __str__(self):
         return f"Dashboard cache ({self.source_file_path})"
+
+
+class TransportationKPI(models.Model):
+    """بيانات Transportation (Inbound/Outbound) القابلة للتعديل من الأدمن — تظهر في الجدول والشارت."""
+    SECTION_CHOICES = [
+        ("Inbound", "Inbound"),
+        ("Outbound", "Outbound"),
+    ]
+    MONTH_CHOICES = [
+        ("January", "January"),
+        ("February", "February"),
+    ]
+    KPI_CHOICES = [
+        ("Delivery Fulfilment", "Delivery Fulfilment"),
+        ("On Time Delivery", "On Time Delivery"),
+        ("PODs submission", "PODs submission"),
+    ]
+    REGION_CHOICES = [
+        ("Fuchs-Yanbu", "Fuchs-Yanbu"),
+        ("Fuchs-Jeddah", "Fuchs-Jeddah"),
+    ]
+    section = models.CharField(max_length=20, choices=SECTION_CHOICES, db_index=True)
+    month = models.CharField(max_length=20, choices=MONTH_CHOICES, db_index=True)
+    kpi = models.CharField(max_length=50, choices=KPI_CHOICES, db_index=True)
+    region = models.CharField(max_length=30, choices=REGION_CHOICES, db_index=True)
+    total = models.CharField(max_length=30, blank=True, default="")
+    sum_value = models.CharField(max_length=30, blank=True, default="", help_text="SUM (يُعرض لـ On Time Delivery فقط)")
+    hit = models.CharField(max_length=30, blank=True, default="")
+    miss = models.CharField(max_length=30, blank=True, default="")
+    total_submitted = models.CharField(max_length=30, blank=True, default="", help_text="TOTAL SUBMITTED (يُستخدم مع KPI = PODs submission)")
+    achieved_percent = models.CharField(max_length=20, blank=True, default="", help_text="مثال: 90 أو 100 (نسبة ACHIEVED)")
+    target_percent = models.CharField(max_length=20, blank=True, default="98", help_text="مثال: 98")
+
+    class Meta:
+        verbose_name = "Transportation KPI"
+        verbose_name_plural = "Transportation KPIs"
+        unique_together = [["section", "month", "kpi", "region"]]
+        ordering = ["section", "month", "kpi", "region"]
+
+    def __str__(self):
+        return f"{self.section} / {self.month} / {self.kpi} / {self.region}"

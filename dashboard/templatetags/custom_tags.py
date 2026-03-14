@@ -22,6 +22,15 @@ def get_item(dictionary, key):
 
 
 @register.filter
+def get_rowspan(row, col):
+    """للجدول المدمج (From Factory to WH): يرجّع rowspan للعمود col (0 = لا تعرض الخلية، مُدمجة من فوق)."""
+    if not isinstance(row, dict) or not col:
+        return 1
+    rs = row.get("_rowspan") or {}
+    return rs.get(col, 1)
+
+
+@register.filter
 def get_failed_shipments_count(kpi_table):
     """من قائمة صفوف KPI يرجّع قيمة Failed Shipments (Miss أو Miss (>24h) أو Miss (>2d)) من عمود 2025، أو 0"""
     if not kpi_table:

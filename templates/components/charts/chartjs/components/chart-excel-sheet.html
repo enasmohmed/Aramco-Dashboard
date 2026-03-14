@@ -499,8 +499,10 @@
               chartType = "bar";  // ✅ Chart.js يستخدم "bar" للـ stacked charts
             }
 
+            const isUtilizationChart = kpi.is_utilization === true;
             const data = kpi.dataPoints.map((dp) => {
             const val = Number(dp.y);
+            if (isUtilizationChart) return val;
             return val < 1 ? val * 100 : val;
           });
 
@@ -755,6 +757,13 @@
         // ✅ إذا كان الشارت في Order General Information، لا نضيف خط التارجت
         if (isInOrderGeneral) {
           console.log(`⚠️ [Target Line] Skipping target line for Order General Information chart: ${canvasId}`);
+          return;
+        }
+
+        // ✅ تاب Utilization: لا خط تارجت ولا نسبة تارجت
+        const isUtilization = res.chart_data && res.chart_data[0] && res.chart_data[0].is_utilization === true;
+        if (isUtilization) {
+          console.log(`⚠️ [Target Line] Skipping target line for Utilization tab: ${canvasId}`);
           return;
         }
 

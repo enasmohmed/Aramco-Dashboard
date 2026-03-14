@@ -1,0 +1,9 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls %}
+
+{% block object-tools-items %}
+<li>
+  <a href="{% url 'admin:dashboard_transportationkpi_import_excel' %}" class="addlink">استيراد من إكسل</a>
+</li>
+{{ block.super }}
+{% endblock %}

@@ -669,7 +669,7 @@ def _read_outbound_data_from_excel(excel_path):
     """
     يقرأ بيانات Outbound للداشبورد من نفس ملف التابات (all_sheet.xlsx).
     - Released Orders: من شيت ARAMCO Outbound Report، عمود Order Nbr — عدد المميز (حذف المتكرر).
-    - Picked Orders: من شيت ARAMCO Outbound Report، عمود Order Nbr مع فلتر Order Status = Shipped — عدد المميز.
+    - Packed Qty: من شيت ARAMCO Outbound Report، عمود Packed Qty — مجموع كل القيم (نفس Total Quantity في Returns: جمع بالمتكرر).
     - Number of Pallets (LPNs): من شيت Outbound2، عمود LPN Nbr — عدد المميز (حذف المتكرر).
     """
     try:
@@ -742,22 +742,15 @@ def _read_outbound_data_from_excel(excel_path):
             df1.columns = [str(c).strip() for c in df1.columns]
 
             order_nbr_col = _find_col(df1, ["Order Nbr", "Order Nbr.", "Order Number", "Order No", "Order #", "Order_ID", "Order ID"])
-            status_col = _find_col(df1, ["Order Status", "Order_Status", "Status", "OrderStatus"])
+            packed_qty_col = _find_col(df1, ["Packed Qty", "Packed_Qty", "Packed Qty.", "Packed Quantity", "PackedQuantity"])
 
             if order_nbr_col:
                 order_series = df1[order_nbr_col].dropna().astype(str).str.strip()
                 order_series = order_series[order_series != ""]
                 released_orders = int(order_series.nunique())
 
-                if status_col:
-                    status_norm = df1[status_col].fillna("").astype(str).str.strip().str.lower()
-                    shipped_mask = status_norm == "shipped"
-                    if shipped_mask.any():
-                        picked_orders = int(df1.loc[shipped_mask, order_nbr_col].dropna().astype(str).str.strip().nunique())
-                    else:
-                        picked_orders = 0
-                else:
-                    picked_orders = 0
+            if packed_qty_col:
+                picked_orders = int(pd.to_numeric(df1[packed_qty_col], errors="coerce").fillna(0).sum())
         else:
             try:
                 df1 = pd.read_excel(excel_path, sheet_name=outbound1_name, engine="openpyxl", header=0)
@@ -766,16 +759,13 @@ def _read_outbound_data_from_excel(excel_path):
             if df1 is not None and not df1.empty:
                 df1.columns = [str(c).strip() for c in df1.columns]
                 order_nbr_col = _find_col(df1, ["Order Nbr", "Order Nbr.", "Order Number", "Order No", "Order #", "Order_ID", "Order ID"])
-                status_col = _find_col(df1, ["Order Status", "Order_Status", "Status"])
+                packed_qty_col = _find_col(df1, ["Packed Qty", "Packed_Qty", "Packed Qty.", "Packed Quantity", "PackedQuantity"])
                 if order_nbr_col:
                     order_series = df1[order_nbr_col].dropna().astype(str).str.strip()
                     order_series = order_series[order_series != ""]
                     released_orders = int(order_series.nunique())
-                    if status_col:
-                        status_norm = df1[status_col].fillna("").astype(str).str.strip().str.lower()
-                        shipped_mask = status_norm == "shipped"
-                        if shipped_mask.any():
-                            picked_orders = int(df1.loc[shipped_mask, order_nbr_col].dropna().astype(str).str.strip().nunique())
+                if packed_qty_col:
+                    picked_orders = int(pd.to_numeric(df1[packed_qty_col], errors="coerce").fillna(0).sum())
 
     # --- شيت Outbound2: Number of Pallets (LPNs) من عمود LPN Nbr (شيت مختلف عن ARAMCO Outbound Report) ---
     outbound2_name = None
@@ -2000,15 +1990,26 @@ class UploadExcelViewRoche(View):
                 return path
         return os.path.join(folder_path, "latest.xlsx")
 
+    def get_transportation_excel_path(self):
+        """ملف الإكسل المرفوع من أدمن Transportation (إن وُجد) — لقراءة From Factory to WH و Normal delivery وعرض الداتا."""
+        folder = os.path.join(settings.MEDIA_ROOT, "excel_uploads")
+        path = os.path.join(folder, "transportation_from_admin.xlsx")
+        if os.path.exists(path):
+            return path
+        return None
+
     def get_uploaded_file_path(self, request):
         folder = os.path.join(settings.MEDIA_ROOT, "excel_uploads")
         os.makedirs(folder, exist_ok=True)
 
-        # أولوية: ملف الجلسة ثم latest.xlsm ثم latest.xlsx ثم all sheet
+        # أولوية: ملف الجلسة (رفع من الموقع) ثم ملف الأدمن (Transportation) ثم latest.xlsm ثم latest.xlsx
         if request:
             saved_path = request.session.get("uploaded_excel_path")
             if saved_path and os.path.exists(saved_path):
                 return saved_path
+        admin_transport_path = self.get_transportation_excel_path()
+        if admin_transport_path:
+            return admin_transport_path
         priority_files = ["latest.xlsm", "latest.xlsx"] + self.DEFAULT_EXCEL_FILENAMES
         for name in priority_files:
             path = os.path.join(folder, name)
@@ -2741,6 +2742,8 @@ class UploadExcelViewRoche(View):
                 )
             elif "meeting points" in selected_tab:
                 return self.meeting_points_tab(request)
+            elif (selected_tab or "").strip().lower() == "utilization":
+                return JsonResponse(self.filter_utilization(request), safe=False)
             elif selected_tab:
                 raw_data = self.render_raw_sheet(request, selected_tab)
                 return JsonResponse(raw_data, safe=False)
@@ -2806,6 +2809,7 @@ class UploadExcelViewRoche(View):
                     "Transportation",
                     "Stock Count",
                     "Meeting Points & Action",
+                    "Utilization",
                 ]
                 if include_only:
                     include_set_v = {s.strip() for s in include_only}
@@ -2821,6 +2825,7 @@ class UploadExcelViewRoche(View):
                     "Transportation",
                     "Stock Count",
                     "Meeting Points & Action",
+                    "Utilization",
                 ]
 
                 filtered_tabs = [tab for tab in ordered_tabs if tab in filtered_tabs]
@@ -3587,6 +3592,7 @@ class UploadExcelViewRoche(View):
                 "airport clearance",
                 "seaport clearance",
                 "data logger measurement",
+                "transportation",
             ]
 
             clean_tabs = []
@@ -3628,12 +3634,11 @@ class UploadExcelViewRoche(View):
                     }
                 )
 
-            # ✅ ترتيب التابات حسب الأولوية
+            # ✅ ترتيب التابات حسب الأولوية (Transportation محذوف من All-in-One)
             desired_order = [
                 "Inbound",
                 "Outbound",
                 "Return & Refusal",
-                "Transportation",
                 "Stock Count",
             ]
             clean_tabs.sort(
@@ -4553,12 +4558,11 @@ class UploadExcelViewRoche(View):
         selected_order_nbr=None,
     ):
         """
-        🔹 يقرأ من شيت ARAMCO Outbound Report: Order Nbr, Create Order, Shipped date, Facility، إلخ.
-        🔹 ترتيب الفلترة: Facility → Create Order (شهر/تاريخ) → Order Nbr.
-        🔹 Hit/Miss: عدد الأسطر لكل Order Nbr؛ ≤50 سطر → مسموح يوم واحد؛ >50 سطر → مسموح يومين.
+        🔹 يقرأ من شيت ARAMCO Outbound Report. المفتاح: Order checked (أو Order Nbr للتوافق).
+        🔹 ترتيب الفلترة: Facility → Company (اختياري) → Order checked.
+        🔹 Hit/Miss (On time shipment 24 h): عدد الأسطر لكل Order checked؛ ≤50 سطر → مسموح يوم واحد؛ >50 سطر → مسموح يومين.
            الأيام المحسوبة = أيام عمل بين Create Order و Shipped date (يوم الجمعة لا يُحسب).
-           Hit لو الأيام المستخدمة ≤ المسموح، وإلا Miss.
-        🔹 جدول التفاصيل: صف واحد لكل طلب؛ فلتر Facility ثم Month ثم Order Nbr (واجهة + خادم).
+        🔹 Order Fulfilment: مقارنة Packed Qty و Allocated Qty لكل طلب؛ الشارت يعرض جدة/الدمام/الرياض: On time 24h % و Order Fulfilment %.
         """
         try:
             import os
@@ -4760,6 +4764,25 @@ class UploadExcelViewRoche(View):
             )
             if not facility_code_col:
                 facility_code_col = find_col_containing(df1, "facility")
+            # Order checked = المفتاح للفلترة والحساب (بديل Order Nbr)
+            order_checked_col = find_col(
+                df1, ["Order checked", "Order Checked", "Order_checked", "OrderChecked", "Order Check"]
+            )
+            if not order_checked_col:
+                order_checked_col = find_col_containing(df1, "order", "checked")
+            company_col = find_col(df1, ["Company", "Company Name", "Customer"])
+            if not company_col and customer_col:
+                company_col = customer_col  # قد يكون نفس عمود الـ Customer
+            packed_qty_col_ob = find_col(
+                df1, ["Packed Qty", "Packed_Qty", "Packed Qty.", "Packed Quantity", "PackedQuantity"]
+            )
+            if not packed_qty_col_ob:
+                packed_qty_col_ob = find_col_containing(df1, "packed", "qty")
+            allocated_qty_col = find_col(
+                df1, ["Allocated Qty", "Allocated_Qty", "Allocated Qty.", "Allocated Quantity", "AllocatedQuantity"]
+            )
+            if not allocated_qty_col:
+                allocated_qty_col = find_col_containing(df1, "allocated", "qty")
 
             required_ob1 = [
                 order_nbr_col,
@@ -4808,6 +4831,14 @@ class UploadExcelViewRoche(View):
                 rename_ob1[order_type_col] = "Order Type"
             if facility_code_col and facility_code_col in df1.columns:
                 rename_ob1[facility_code_col] = "Facility Code"
+            if order_checked_col and order_checked_col in df1.columns:
+                rename_ob1[order_checked_col] = "Order checked"
+            if company_col and company_col in df1.columns and company_col not in rename_ob1:
+                rename_ob1[company_col] = "Company"
+            if packed_qty_col_ob and packed_qty_col_ob in df1.columns and packed_qty_col_ob not in rename_ob1:
+                rename_ob1[packed_qty_col_ob] = "Packed Qty"
+            if allocated_qty_col and allocated_qty_col in df1.columns and allocated_qty_col not in rename_ob1:
+                rename_ob1[allocated_qty_col] = "Allocated Qty"
             df1 = df1.rename(columns=rename_ob1)
             if "Customer City" not in df1.columns:
                 df1["Customer City"] = ""
@@ -4815,6 +4846,20 @@ class UploadExcelViewRoche(View):
                 df1["Order Type"] = ""
             if "Facility Code" not in df1.columns:
                 df1["Facility Code"] = ""
+            if "Order checked" not in df1.columns:
+                df1["Order checked"] = df1["Order Nbr"].astype(str).str.strip()
+            if "Company" not in df1.columns:
+                df1["Company"] = df1["Customer Name"].astype(str) if "Customer Name" in df1.columns else ""
+            if "Packed Qty" not in df1.columns:
+                df1["Packed Qty"] = 0
+            if "Allocated Qty" not in df1.columns:
+                df1["Allocated Qty"] = 0
+            # مفتاح التجميع والفلترة: Order checked (إن وُجد) وإلا Order Nbr
+            order_key_col = "Order checked" if "Order checked" in df1.columns else "Order Nbr"
+            df1["_OrderKey"] = df1[order_key_col].astype(str).str.strip()
+            df1["Order Nbr"] = df1["Order Nbr"].astype(str).str.strip()
+            if order_key_col == "Order checked":
+                df1["Order checked"] = df1["Order checked"].astype(str).str.strip()
 
             # عمود Create Order و Ship Date: تحويل قوي لتاريخ (Excel serial، نصوص، صيغ متعددة)
             def _parse_outbound_date(val):
@@ -5012,19 +5057,19 @@ class UploadExcelViewRoche(View):
                     current += timedelta(days=1)
                 return days
 
-            line_count_per_order = df1.groupby("Order Nbr").size()
-            create_min = df1.groupby("Order Nbr")["Create Timestamp"].min()
-            ship_max = df1.groupby("Order Nbr")["Ship Date"].max()
+            line_count_per_order = df1.groupby("_OrderKey").size()
+            create_min = df1.groupby("_OrderKey")["Create Timestamp"].min()
+            ship_max = df1.groupby("_OrderKey")["Ship Date"].max()
             order_days_used = {}
             order_allowed_days = {}
             order_line_count = {}
             order_is_hit = {}
-            for o in df1["Order Nbr"].unique():
-                if not o or (isinstance(o, float) and pd.isna(o)):
+            for o in df1["_OrderKey"].unique():
+                if not o or (isinstance(o, str) and o.strip() == "") or (isinstance(o, float) and pd.isna(o)):
                     continue
                 line_count = int(line_count_per_order.get(o, 0))
-                # مسموح يومين للجميع: الطلبات اللي أخدت يوم أو يومين = Hit
-                allowed_days = 2
+                # قاعدة 50 سطر: أكثر من 50 = مسموح يومين؛ 50 أو أقل = مسموح يوم واحد (On time shipment 24 h)
+                allowed_days = 2 if line_count > 50 else 1
                 create_ts = create_min.get(o)
                 ship_ts = ship_max.get(o)
                 if pd.isna(create_ts) or pd.isna(ship_ts):
@@ -5037,13 +5082,13 @@ class UploadExcelViewRoche(View):
                 order_allowed_days[o] = allowed_days
                 order_line_count[o] = line_count
 
-            df1["_LineCount"] = df1["Order Nbr"].map(order_line_count)
-            df1["_AllowedDays"] = df1["Order Nbr"].map(order_allowed_days)
-            df1["_DaysUsed"] = df1["Order Nbr"].map(order_days_used)
+            df1["_LineCount"] = df1["_OrderKey"].map(order_line_count)
+            df1["_AllowedDays"] = df1["_OrderKey"].map(order_allowed_days)
+            df1["_DaysUsed"] = df1["_OrderKey"].map(order_days_used)
             df1["Cycle Days"] = df1["_DaysUsed"].replace(np.nan, 0)
             df1["Cycle Hours"] = df1["Cycle Days"] * 24
             df1["Days_Used"] = df1["_DaysUsed"]
-            df1["is_hit"] = df1["Order Nbr"].map(lambda o: order_is_hit.get(o, False))
+            df1["is_hit"] = df1["_OrderKey"].map(lambda o: order_is_hit.get(o, False))
             df1["HIT or MISS"] = np.where(df1["is_hit"], "Hit", "Miss")
             df1.loc[df1["Create Timestamp"].isna() | df1["Ship Date"].isna(), "HIT or MISS"] = "Miss"
 
@@ -5060,10 +5105,10 @@ class UploadExcelViewRoche(View):
                     "[Outbound] ⚠️ كل الطلبات Miss — تحقق من قراءة التواريخ: "
                     f"Create Timestamp صالح={_n_create_ok}, Ship Date صالح={_n_ship_ok}"
                 )
-            # تشخيص النتيجة النهائية
-            n_orders = df1["Order Nbr"].nunique()
+            # تشخيص النتيجة النهائية (باستخدام _OrderKey = Order checked أو Order Nbr)
+            n_orders = df1["_OrderKey"].nunique()
             n_orders_both_dates = sum(
-                1 for o in df1["Order Nbr"].unique()
+                1 for o in df1["_OrderKey"].unique()
                 if not (pd.isna(create_min.get(o)) or pd.isna(ship_max.get(o)))
             )
             print(
@@ -5127,14 +5172,18 @@ class UploadExcelViewRoche(View):
                     df1["Month"].fillna("").str.lower() == selected_month_norm.lower()
                 ]
 
-            # فلتر Order Nbr (اختياري — لعرض طلب معين)
-            _order_nbr = (selected_order_nbr or "").strip() if selected_order_nbr else ""
-            if not _order_nbr and request and getattr(request, "GET", None):
-                _order_nbr = (request.GET.get("outbound_order_nbr") or "").strip()
-            if _order_nbr:
+            # فلتر Order checked (أو Order Nbr للتوافق): لعرض طلب معين
+            _order_filter = (selected_order_nbr or "").strip() if selected_order_nbr else ""
+            if not _order_filter and request and getattr(request, "GET", None):
+                _order_filter = (request.GET.get("outbound_order_checked") or request.GET.get("outbound_order_nbr") or "").strip()
+            if _order_filter:
                 df1 = df1[
-                    df1["Order Nbr"].astype(str).str.strip().str.lower().str.contains(_order_nbr.lower(), na=False, regex=False)
+                    df1["_OrderKey"].astype(str).str.strip().str.lower().str.contains(_order_filter.lower(), na=False, regex=False)
                 ]
+            # فلتر Company (لحساب Order Fulfilment)
+            _company_filter = (request.GET.get("outbound_company") or "").strip() if request and getattr(request, "GET", None) else ""
+            if _company_filter and "Company" in df1.columns:
+                df1 = df1[df1["Company"].fillna("").astype(str).str.strip().str.lower().str.contains(_company_filter.lower(), na=False, regex=False)]
 
             if df1.empty:
                 return {
@@ -5166,13 +5215,13 @@ class UploadExcelViewRoche(View):
                 return 999
 
             total_per_month = (
-                df_summary.groupby("Month")["Order Nbr"]
+                df_summary.groupby("Month")["_OrderKey"]
                 .nunique()
                 .reset_index(name="Total_Shipments")
             )
             hits_df = (
                 df_summary[df_summary["is_hit"]]
-                .groupby("Month")["Order Nbr"]
+                .groupby("Month")["_OrderKey"]
                 .nunique()
                 .reset_index(name="Hits")
             )
@@ -5256,8 +5305,8 @@ class UploadExcelViewRoche(View):
             summary_columns = pivot_cols
             summary_data = summary_data_pivot
 
-            # إحصائيات على مستوى الشحنة (Order Nbr): Hit / Miss (Pending معروضة كـ Miss)
-            orders_df = df1.drop_duplicates(subset=["Order Nbr"], keep="first")
+            # إحصائيات على مستوى الشحنة (Order checked / _OrderKey): Hit / Miss
+            orders_df = df1.drop_duplicates(subset=["_OrderKey"], keep="first")
             overall_total = int(orders_df.shape[0])
             overall_hits = int((orders_df["HIT or MISS"] == "Hit").sum())
             overall_miss = int((orders_df["HIT or MISS"] == "Miss").sum())
@@ -5282,7 +5331,7 @@ class UploadExcelViewRoche(View):
             )
             summary_table = {
                 "id": "sub-table-outbound-hit-summary",
-                "title": "Outbound KPI ≤ 2d (working days excl. Friday)" + months_with_miss_label,
+                "title": "On time shipment 24 h" + months_with_miss_label,
                 "columns": summary_columns,
                 "data": summary_data,
                 "chart_data": chart_data,
@@ -5304,28 +5353,33 @@ class UploadExcelViewRoche(View):
                     }
                     continue
 
-                # صف واحد لكل Order Nbr (مثل Inbound)
-                f_orders = fdf.drop_duplicates(subset=["Order Nbr"], keep="first")
+                # صف واحد لكل Order (مفتاح = Order checked أو Order Nbr)
+                f_orders = fdf.drop_duplicates(subset=["_OrderKey"], keep="first")
+                packed_per_order = fdf.groupby("_OrderKey")["Packed Qty"].apply(lambda s: pd.to_numeric(s, errors="coerce").fillna(0).sum()).to_dict() if "Packed Qty" in fdf.columns else {}
+                allocated_per_order = fdf.groupby("_OrderKey")["Allocated Qty"].apply(lambda s: pd.to_numeric(s, errors="coerce").fillna(0).sum()).to_dict() if "Allocated Qty" in fdf.columns else {}
                 rows_f = []
                 for _, r in f_orders.iterrows():
-                    o = r.get("Order Nbr")
+                    o = r.get("_OrderKey")
                     rows_f.append({
                         "Facility Code": f,
-                        "Order Nbr": o,
+                        "Order checked": o,
+                        "Order Nbr": r.get("Order Nbr"),
                         "Line Count": int(r.get("_LineCount") or 0),
                         "Allowed Days": int(r.get("_AllowedDays") or 0),
                         "Days": int(r.get("_DaysUsed") or 0),
                         "HIT or MISS": r.get("HIT or MISS", "Miss"),
                         "Month": r.get("Month", ""),
+                        "Packed Qty": int(packed_per_order.get(o, 0)) if packed_per_order else "",
+                        "Allocated Qty": int(allocated_per_order.get(o, 0)) if allocated_per_order else "",
                     })
                 f_total_per_month = (
-                    fdf.groupby("Month")["Order Nbr"]
+                    fdf.groupby("Month")["_OrderKey"]
                     .nunique()
                     .reset_index(name="Total_Shipments")
                 )
                 f_hits_df = (
                     fdf[fdf["is_hit"]]
-                    .groupby("Month")["Order Nbr"]
+                    .groupby("Month")["_OrderKey"]
                     .nunique()
                     .reset_index(name="Hits")
                 )
@@ -5372,6 +5426,18 @@ class UploadExcelViewRoche(View):
                 hit_pct_all = (
                     round((hits_all / total_all) * 100, 2) if total_all else 0
                 )
+                # Order Fulfilment: عدد الطلبات التي Packed Qty >= Allocated Qty
+                fulfilment_count = sum(
+                    1 for r in rows_f
+                    if (pd.to_numeric(r.get("Packed Qty"), errors="coerce") or 0) >= (pd.to_numeric(r.get("Allocated Qty"), errors="coerce") or 0)
+                )
+                fulfilment_pct_all = round((fulfilment_count / total_all) * 100, 2) if total_all else 0
+                for m in by_month:
+                    r_m = [r for r in rows_f if r.get("Month") == m]
+                    t_m = len(r_m)
+                    ful_m = sum(1 for r in r_m if (pd.to_numeric(r.get("Packed Qty"), errors="coerce") or 0) >= (pd.to_numeric(r.get("Allocated Qty"), errors="coerce") or 0))
+                    by_month[m]["fulfilment"] = ful_m
+                    by_month[m]["fulfilment_pct"] = round((ful_m / t_m) * 100, 2) if t_m else 0
                 ordered_months = list(f_summary_df["Month"].tolist())
                 months_with_miss = [
                     m for m in ordered_months if by_month.get(m, {}).get("miss", 0) > 0
@@ -5382,6 +5448,8 @@ class UploadExcelViewRoche(View):
                     "hit": hits_all,
                     "miss": misses_all,
                     "hit_pct": hit_pct_all,
+                    "fulfilment": fulfilment_count,
+                    "fulfilment_pct": fulfilment_pct_all,
                     "by_month": by_month,
                     "ordered_months": ordered_months,
                     "months_with_miss": months_with_miss,
@@ -5409,20 +5477,31 @@ class UploadExcelViewRoche(View):
                     stats_f = facility_stats.get(f, {})
                     by_month = stats_f.get("by_month", {}) or {}
                     data_points = [
-                        {
-                            "label": m,
-                            "y": by_month.get(m, {}).get("hit_pct", 0),
-                        }
+                        {"label": m, "y": by_month.get(m, {}).get("hit_pct", 0)}
                         for m in ordered_months_overall_ob
                     ]
                     chart_data.append(
                         {
                             "type": "column",
-                            "name": f"{f} Hit %",
+                            "name": f"{f} On time 24h %",
                             "color": facility_colors_ob.get(f, "#007fa3"),
                             "valueSuffix": "%",
                             "related_table": "sub-table-outbound-facilities-hit",
                             "dataPoints": data_points,
+                        }
+                    )
+                    data_points_ful = [
+                        {"label": m, "y": by_month.get(m, {}).get("fulfilment_pct", 0)}
+                        for m in ordered_months_overall_ob
+                    ]
+                    chart_data.append(
+                        {
+                            "type": "column",
+                            "name": f"{f} Order Fulfilment %",
+                            "color": facility_colors_ob.get(f, "#28a745"),
+                            "valueSuffix": "%",
+                            "related_table": "sub-table-outbound-facilities-hit",
+                            "dataPoints": data_points_ful,
                         }
                     )
 
@@ -5447,7 +5526,7 @@ class UploadExcelViewRoche(View):
                 facility_tables.append(
                     {
                         "id": "sub-table-outbound-facilities-hit",
-                        "title": "Outbound KPI ≤ 2d (working days excl. Friday) — Hit by Facility",
+                        "title": "On time shipment 24 h",
                         "columns": pivot_cols,
                         "data": summary_rows,
                         "chart_data": [],
@@ -5456,30 +5535,33 @@ class UploadExcelViewRoche(View):
                     }
                 )
 
-            # جدول Outbound Shipments Detail: صف واحد لكل طلب (Order Nbr) — + عمود Remark قابل للتحرير من الأدمن
-            detail_columns_ob = ["Facility Code", "Order Nbr", "Line Count", "Allowed Days", "Days", "HIT or MISS", "Month", "Remark"]
+            # جدول Outbound Shipments Detail: صف واحد لكل طلب (Order checked) — + Remark
+            detail_columns_ob = ["Facility Code", "Order checked", "Line Count", "Allowed Days", "Days", "HIT or MISS", "Month", "Packed Qty", "Allocated Qty", "Remark"]
             detail_rows_ob = []
             for f in FACILITIES_OB:
                 for r in facility_stats.get(f, {}).get("rows", []):
                     detail_rows_ob.append({
                         "Facility Code": r.get("Facility Code", f),
+                        "Order checked": r.get("Order checked"),
                         "Order Nbr": r.get("Order Nbr"),
                         "Line Count": r.get("Line Count"),
                         "Allowed Days": r.get("Allowed Days"),
                         "Days": r.get("Days"),
                         "HIT or MISS": r.get("HIT or MISS", "Miss"),
                         "Month": r.get("Month", ""),
+                        "Packed Qty": r.get("Packed Qty"),
+                        "Allocated Qty": r.get("Allocated Qty"),
                         "Remark": "",
                     })
 
-            # ربط ملاحظات Outbound من الأدمن (OutboundOrderRemark) حسب Order Nbr + Facility
+            # ربط ملاحظات Outbound من الأدمن (OutboundOrderRemark) حسب Order checked/Order Nbr + Facility
             if detail_rows_ob:
                 unique_pairs_ob = list(
                     dict.fromkeys(
                         [
-                            (str(r.get("Order Nbr", "")).strip(), r.get("Facility Code"))
+                            (str(r.get("Order checked", r.get("Order Nbr", ""))).strip(), r.get("Facility Code"))
                             for r in detail_rows_ob
-                            if r.get("Order Nbr") and r.get("Facility Code")
+                            if (r.get("Order checked") or r.get("Order Nbr")) and r.get("Facility Code")
                         ]
                     )
                 )
@@ -5496,7 +5578,7 @@ class UploadExcelViewRoche(View):
                     remarks_map_ob = {}
 
                 for row in detail_rows_ob:
-                    on = str(row.get("Order Nbr", "")).strip()
+                    on = str(row.get("Order checked", row.get("Order Nbr", ""))).strip()
                     fc = row.get("Facility Code", "")
                     remark_and_status = remarks_map_ob.get((on, fc), ("", None)) if on and fc else ("", None)
                     if isinstance(remark_and_status, tuple):
@@ -6213,7 +6295,6 @@ class UploadExcelViewRoche(View):
                 "Receiving_Complete_Date", "Verified_Date",
             ])
             col_lpn = find_column(["LPN", "LPN Nbr", "LPN_nbr", "LPNs", "LPN Number", "LPN No"])
-
             # بحث ثاني: أي عمود اسمه يحتوي على الكلمات المفتاحية (لو الأسماء مختلفة جداً)
             def find_column_containing(*keywords):
                 k_norm = [normalize_name(k) for k in keywords]
@@ -6222,6 +6303,13 @@ class UploadExcelViewRoche(View):
                     if all(k in c for k in k_norm):
                         return col
                 return None
+
+            col_item_alt = find_column([
+                "Item Alternate Code", "Item Alternate Code.", "Item_Alternate_Code", "Item AlternateCode",
+                "Item Alt Code", "Alternate Code", "Item Code",
+            ])
+            if not col_item_alt:
+                col_item_alt = find_column_containing("item", "alternate") or find_column_containing("item", "alt") or find_column_containing("alternate", "code")
 
             if not col_facility:
                 col_facility = find_column_containing("facility")
@@ -6268,6 +6356,10 @@ class UploadExcelViewRoche(View):
                 df = df.rename(columns={col_lpn: "LPN"})
             else:
                 df["LPN"] = range(len(df))
+            if col_item_alt:
+                df = df.rename(columns={col_item_alt: "Item_Alternate_Code"})
+            else:
+                df["Item_Alternate_Code"] = ""
 
             df["Facility"] = df["Facility"].astype(str).str.strip()
             df["Shipment_nbr"] = df["Shipment_nbr"].astype(str).str.strip()
@@ -6417,8 +6509,14 @@ class UploadExcelViewRoche(View):
                 if fdf.empty:
                     return {"total": 0, "hit": 0, "miss": 0, "hit_pct": 0, "miss_pct": 0, "rows": [], "by_month": {}, "months_with_miss": [], "ordered_months": []}
 
-                # عدد الـ Lines (الصفوف) لكل Shipment_nbr: ≤50 سطر = مسموح يوم واحد للاستلام (Hit لو استلمت في يوم)، >50 سطر = مسموح يومين (Miss لو أخذت يومين أو أكثر)
+                # فلترة: Facility (تمت) → Shipment_nbr → عد Items (عمود Item Alternate Code بعد حذف المتكرر) وعد الـ Lines (الصفوف).
+                # Hit/Miss: Inbound = حسب الـ line (أكثر من 50 line → يومين، وإلا يوم واحد). Return = حسب الـ Item (نفس قاعدة 50 على item_count).
                 line_count_per_shipment = fdf.groupby("Shipment_nbr").size()
+                item_count_per_shipment = (
+                    fdf.groupby("Shipment_nbr")["Item_Alternate_Code"].apply(lambda s: s.astype(str).str.strip().replace("", pd.NA).dropna().nunique())
+                    if "Item_Alternate_Code" in fdf.columns and fdf["Item_Alternate_Code"].astype(str).str.strip().replace("", pd.NA).notna().any()
+                    else None
+                )
                 create_min = fdf.groupby("Shipment_nbr")["Create_shipment_DT"].min()
                 received_max = fdf.groupby("Shipment_nbr")["Received_LPN_DT"].max()
 
@@ -6430,14 +6528,17 @@ class UploadExcelViewRoche(View):
                     if not ship_id:
                         continue
                     line_count = int(line_count_per_shipment.get(ship_id, 0))
-                    # مسموح يومين للجميع (Inbound/Return): الإنشاء 21 والتسليم 23 = يومين → Hit
-                    allowed_days = 2
+                    item_count = int(item_count_per_shipment.get(ship_id, line_count)) if item_count_per_shipment is not None else line_count
+                    # Inbound: قاعدة 50 على الـ line. Return: قاعدة 50 على الـ Item (Item Alternate Code).
+                    if is_return_tab:
+                        allowed_days = 2 if item_count > 50 else 1
+                    else:
+                        allowed_days = 2 if line_count > 50 else 1
                     create_ts = create_min.get(ship_id)
                     received_ts = received_max.get(ship_id)
                     if pd.isna(create_ts) or pd.isna(received_ts):
                         continue
                     month = create_ts.strftime("%b") if pd.notna(create_ts) else ""
-                    # Inbound و Return: أيام عمل (استبعاد الجمعة). مثال: خميس 26 → سبت 28 = يوم عمل واحد (الجمعة 27 لا تُحسب).
                     days_used = working_days_between_exclude_friday(create_ts, received_ts)
                     is_hit = days_used <= allowed_days
                     if is_hit:
@@ -6450,6 +6551,7 @@ class UploadExcelViewRoche(View):
                         "Create_shipment_DT": create_ts,
                         "Received_LPN_DT": received_ts,
                         "Line Count": line_count,
+                        "Item Count": item_count,
                         "Allowed Days": allowed_days,
                         "Days": days_used,
                         "HIT or MISS": "Hit" if is_hit else "Miss",
@@ -6542,7 +6644,7 @@ class UploadExcelViewRoche(View):
                 facility_tables.append(
                     {
                         "id": "sub-table-inbound-facilities-hit",
-                        "title": "Return KPI ≤ 2d (working days excl. Friday) — Hit by Facility" if is_return_tab else "Inbound KPI (working days excl. Friday) — Hit % by Facility",
+                        "title": "Return KPI ≤ 2d (working days excl. Friday) — Hit by Facility" if is_return_tab else "On time inbound Receiving(1 day from offloading date)",
                         "columns": pivot_cols,
                         "data": summary_rows,
                         "chart_data": [],
@@ -6585,6 +6687,7 @@ class UploadExcelViewRoche(View):
                 _start_date_col_label,
                 "Received LPN D&T",
                 "Line Count",
+                "Item Count",
                 "Allowed Days",
                 "Days",
                 "HIT or MISS",
@@ -6600,6 +6703,7 @@ class UploadExcelViewRoche(View):
                         _start_date_col_label: r.get("Create_shipment_DT"),
                         "Received LPN D&T": r.get("Received_LPN_DT"),
                         "Line Count": r.get("Line Count"),
+                        "Item Count": r.get("Item Count"),
                         "Allowed Days": r.get("Allowed Days"),
                         "Days": r.get("Days"),
                         "HIT or MISS": r.get("HIT or MISS"),
@@ -6757,482 +6861,800 @@ class UploadExcelViewRoche(View):
     # Merge sheets from Excel
     def filter_pods_update(self, request, selected_month=None, selected_months=None):
         """
-        تاب PODs: قراءة من شيت PODs (الشيت الجديد).
-
-        المنطق الجديد (بدون الاعتماد على الشيت القديم):
-        - فلترة أولاً بعمود Actual GI Date & Time (بالتاريخ / الشهر).
-        - ثم فلترة بـ Delivery (من الدروب داون في الجدول).
-        - لكل صف (Delivery في يوم معين) نحسب الفرق بين Actual GI Date & Time و POD REC DATE.
-        - الفرق يُحسب بأيام عمل فقط (بدون يوم الجمعة).
-        - Hit = خلال 7 أيام عمل أو أقل، Miss = أكثر من 7 أيام عمل.
-        - لا توجد كروت KPI فوق التاب؛ فقط:
-          * جدول KPI (Hit % / Hit / Miss / Total Shipments) لكل شهر + صف إجمالي.
-          * شارت Hit % للشهور فقط (بدون مناطق).
-          * جدول تفاصيل يعرض Actual GI Date & Time / Delivery / POD REC DATE / Days / Hit or Miss / Month.
+        تاب Transportation:
+        - قراءة شيت Transportation كما هو (بدون حسابات أو تطبيع).
+        - أقسام: Inbound، Outbound. كل قسم: January (3 جداول KPI) + February (3 جداول KPI).
+        - الشارت: 3 سلاسل (Delivery Fulfilment، On Time Delivery، PODs submission) وقيم من عمود ACHIVED.
+        - الجداول: كما في الإكسل (نفس الأعمدة والصفوف).
         """
         import pandas as pd
         from django.template.loader import render_to_string
         import os
-        from datetime import datetime, timedelta
 
         try:
+            # مصدر الملف: رفع من الموقع (زر Upload) أو رفع من أدمن Transportation أو الملف الافتراضي
             excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
-            if not excel_path or not os.path.exists(excel_path):
-                return {"error": "⚠️ Excel file not found."}
-
+            excel_missing = not excel_path or not os.path.exists(excel_path)
+            if excel_missing:
+                # عرض Transportation من بيانات الأدمن (TransportationKPI) فقط إن وُجدت
+                from dashboard.models import TransportationKPI
+                def _build_unified_from_admin(section, month):
+                    qs = list(
+                        TransportationKPI.objects.filter(section=section, month=month).order_by("kpi", "region")
+                    )
+                    if len(qs) != 6:
+                        return None
+                    kpi_titles = ("Delivery Fulfilment", "On Time Delivery", "PODs submission")
+                    kpi_colors = ("#e8f5e9", "#e3f2fd", "#fff3e0")
+                    unified_rows = []
+                    for k, kpi_name in enumerate(kpi_titles):
+                        r0, r1 = qs[k * 2], qs[k * 2 + 1]
+                        hit0, hit1 = (r0.hit or "").strip(), (r1.hit or "").strip()
+                        try:
+                            total_hits = int(float(hit0 or 0)) + int(float(hit1 or 0))
+                        except (ValueError, TypeError):
+                            total_hits = ""
+                        achieved_raw = (r0.achieved_percent or r1.achieved_percent or "").strip()
+                        try:
+                            achieved = f"{int(round(float((achieved_raw or '').replace('%', '').replace(',', '.').strip()) or 0))}%"
+                        except (ValueError, TypeError):
+                            achieved = (achieved_raw or "0%").strip()
+                            if achieved and "%" not in achieved:
+                                achieved = f"{achieved}%"
+                        target = (r0.target_percent or "98").strip()
+                        if target and "%" not in target:
+                            target = f"{target}%"
+                        row_bg = kpi_colors[k % len(kpi_colors)]
+                        if kpi_name == "On Time Delivery":
+                            sum_val = (getattr(r0, "sum_value", None) or getattr(r1, "sum_value", None) or "").strip()
+                            if not sum_val:
+                                try:
+                                    sum_val = int(float(r0.total or 0)) + int(float(r1.total or 0))
+                                except (ValueError, TypeError):
+                                    sum_val = ""
+                        else:
+                            sum_val = ""
+                        for r, reg in [(r0, r0.region), (r1, r1.region)]:
+                            unified_rows.append({
+                                "kpi": kpi_name, "region": reg, "total": (r.total or "").strip(),
+                                "sum": sum_val, "hit": (r.hit or "").strip(), "miss": (r.miss or "").strip(),
+                                "total_submitted": getattr(r, "total_submitted", "") or "",
+                                "total_hits": total_hits, "achieved": achieved, "target": target, "row_bg": row_bg,
+                            })
+                    return unified_rows
+                def _achieved_from_rows(rows, ki):
+                    if not rows or ki < 0 or ki * 2 >= len(rows):
+                        return 0
+                    raw = (rows[ki * 2].get("achieved") or "").replace("%", "").replace(",", ".").strip()
+                    try:
+                        return int(round(float(raw))) if raw else 0
+                    except (ValueError, TypeError):
+                        return 0
+                sections_order = ["Inbound", "Outbound"]
+                chart_colors = ["#007fa3", "#28a745", "#ffc107"]
+                chart_kpi_names = ("Delivery Fulfilment", "On Time Delivery", "PODs submission")
+                sub_tables = []
+                for section in sections_order:
+                    uj = _build_unified_from_admin(section, "January")
+                    uf = _build_unified_from_admin(section, "February")
+                    if uj is None:
+                        uj = []
+                    if uf is None:
+                        uf = []
+                    chart_series = []
+                    for k in range(3):
+                        name = chart_kpi_names[k] if k < len(chart_kpi_names) else f"KPI {k+1}"
+                        jv = _achieved_from_rows(uj, k)
+                        fv = _achieved_from_rows(uf, k)
+                        chart_series.append({
+                            "type": "column",
+                            "name": name,
+                            "color": chart_colors[k % len(chart_colors)],
+                            "valueSuffix": "%",
+                            "dataPoints": [
+                                {"label": "January", "y": int(jv)},
+                                {"label": "February", "y": int(fv)},
+                            ],
+                        })
+                    sub_tables.append({
+                        "id": f"transportation-{section.lower()}",
+                        "title": section,
+                        "chart_data": chart_series,
+                        "unified_jan": uj,
+                        "unified_feb": uf,
+                        "use_unified_table": True,
+                    })
+                has_any = any(
+                    (st.get("unified_jan") or st.get("unified_feb"))
+                    for st in sub_tables
+                )
+                if not has_any:
+                    return {"error": "⚠️ Excel file not found. Add Transportation KPI data from Admin to display."}
+                tab_data = {
+                    "name": "Transportation",
+                    "sub_tables": sub_tables,
+                    "stats": {"number_of_track": 0},
+                    "chart_data": sub_tables[0].get("chart_data", []) if sub_tables else [],
+                }
+                html = render_to_string(
+                    "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
+                    {"tab": tab_data, "selected_month": None},
+                )
+                return {
+                    "detail_html": html,
+                    "chart_data": tab_data.get("chart_data", []),
+                    "chart_title": "Transportation",
+                    "count": 0,
+                    "tab_data": tab_data,
+                }
             xls = pd.ExcelFile(excel_path, engine="openpyxl")
-            sheet_name = next(
-                (s for s in xls.sheet_names if "pod" in (s or "").lower()),
-                None,
-            )
-            if not sheet_name:
-                return {"error": "⚠️ Sheet 'PODs' was not found."}
-
-            df = pd.read_excel(
-                excel_path,
-                sheet_name=sheet_name,
-                engine="openpyxl",
-                dtype=str,
-                header=0,
-            ).fillna("")
-            df.columns = df.columns.astype(str).str.strip()
 
             def _norm(val):
                 return re.sub(r"[^a-z0-9]", "", str(val).strip().lower())
 
-            def _find_col(dframe, names):
-                nmap = {_norm(c): c for c in dframe.columns}
-                for name in names:
-                    n = _norm(name)
-                    if n in nmap:
-                        return nmap[n]
-                for col in dframe.columns:
-                    if any(_norm(n) in _norm(col) for n in names):
-                        return col
-                return None
-
-            def _find_col_containing(dframe, *keywords):
-                """بحث إضافي: أي عمود يحتوي الكلمات المطلوبة بعد التطبيع."""
-                ks = [_norm(k) for k in keywords]
-                for col in dframe.columns:
-                    c = _norm(col)
-                    if all(k in c for k in ks):
-                        return col
-                return None
-
-            col_delivery = _find_col(
-                df,
-                ["Delivery", "Delivery Number", "Delivery No", "Delivery Nbr"],
+            # ----- 1) Number of track من شيت PODs -----
+            number_of_track = 0
+            pods_sheet = next(
+                (s for s in xls.sheet_names if "pod" in (s or "").lower()),
+                None,
             )
-            col_expected = _find_col(
-                df,
-                [
-                    "Expected Arrival Date & Time",
-                    "Expected Arrival Date and Time",
-                    "Expected Arrival D&T",
-                    "Expected Arrival",
-                ],
-            )
-            col_actual = _find_col(
-                df,
-                [
-                    "Actual Arrival Date & Time",
-                    "Actual Arrival Date and Time",
-                    "Actual Arrival D&T",
-                    "Actual Arrival",
-                ],
-            )
-            col_arrived_late = _find_col(df, ["Arrived Late?", "Arrived Late"])
-            if not col_arrived_late:
-                col_arrived_late = _find_col_containing(df, "arrived", "late")
-
-            use_arrived_late = col_arrived_late is not None and col_arrived_late in df.columns
-
-            if use_arrived_late:
-                # فقط Hit أو Miss (بدون Pending)
-                df["Hit or Miss"] = (
-                    df[col_arrived_late]
-                    .astype(str)
-                    .str.strip()
-                    .str.upper()
-                    .map(lambda x: "Hit" if x == "NO" else "Miss")
-                )
-                if col_expected:
-                    df["_exp_dt"] = pd.to_datetime(df[col_expected], errors="coerce")
-                    df["Month"] = df["_exp_dt"].dt.strftime("%b").fillna("")
+            if pods_sheet:
+                df_pods = pd.read_excel(
+                    excel_path,
+                    sheet_name=pods_sheet,
+                    engine="openpyxl",
+                    dtype=str,
+                    header=0,
+                ).fillna("")
+                df_pods.columns = df_pods.columns.astype(str).str.strip()
+                col_delivery = None
+                for c in df_pods.columns:
+                    if _norm(c) in ("delivery", "deliverynumber", "deliveryno", "deliverynbr") or "delivery" in _norm(c):
+                        col_delivery = c
+                        break
+                if col_delivery is not None:
+                    has_delivery = df_pods[col_delivery].astype(str).str.strip().fillna("") != ""
+                    number_of_track = int(has_delivery.sum())
                 else:
-                    df["Month"] = ""
-                col_gi = col_expected
-                col_pod_rec = col_actual
-            else:
-                col_gi = _find_col(
-                    df,
-                    [
-                        "Actual GI Date & Time",
-                        "Actual GI Date and Time",
-                        "Actual GI Date",
-                        "Actual GI D&T",
-                        "GI Date & Time",
-                        "GI Date Time",
-                    ],
-                )
-                col_pod_rec = _find_col(
-                    df,
-                    ["POD REC DATE", "POD Rec Date", "POD Date", "POD REC D&T", "POD Date & Time"],
-                )
-                if not col_gi:
-                    col_gi = _find_col_containing(df, "actual", "gi", "date")
-                if not col_pod_rec:
-                    col_pod_rec = _find_col_containing(df, "pod", "rec", "date")
-                if not col_gi or not col_pod_rec:
-                    return {"error": "⚠️ Required: 'Arrived Late?' or 'Actual GI Date & Time' + 'POD REC DATE' in sheet."}
+                    number_of_track = len(df_pods)
 
-                df["_gi_dt"] = pd.to_datetime(df[col_gi], errors="coerce")
-                df["_pod_dt"] = pd.to_datetime(df[col_pod_rec], errors="coerce")
+            # ----- 2) قراءة شيت Transportation بدون تطبيع -----
+            transport_sheet = next(
+                (s for s in xls.sheet_names if (s or "").lower().strip() and ("transportation" in (s or "").lower() or "transport" in (s or "").lower())),
+                None,
+            )
 
-                def business_days_between(start, end):
-                    if pd.isna(start) or pd.isna(end):
+            sub_tables = []
+
+            if transport_sheet:
+                raw = pd.read_excel(
+                    excel_path,
+                    sheet_name=transport_sheet,
+                    engine="openpyxl",
+                    header=None,
+                    dtype=str,
+                ).fillna("")
+
+                nrows = raw.shape[0]
+                ncols = raw.shape[1]
+
+                kpi_titles_norm = (_norm("Delivery Fulfilment"), _norm("On Time Delivery"), _norm("PODs submission"))
+                month_jan_norm = _norm("January")
+                month_feb_norm = _norm("February")
+                section_in_norm = _norm("Inbound")
+                section_out_norm = _norm("Outbound")
+
+                # البحث في أول عدة أعمدة (الإكسل قد يضع العناوين في عمود غير الأول)
+                def _row_key(row, max_cols=8):
+                    parts = []
+                    for c in range(min(max_cols, ncols)):
+                        if c < len(row):
+                            parts.append(str(row.iloc[c]).strip())
+                    return _norm(" ".join(parts))
+
+                def _first_cell(row):
+                    return _norm(str(row.iloc[0]) if 0 < len(row) else "")
+
+                def _row_matches(row, *options):
+                    rk = _row_key(row)
+                    fc = _first_cell(row)
+                    return any(
+                        _norm(opt) in rk or _norm(opt) in fc or fc == _norm(opt)
+                        for opt in options
+                    )
+
+                # [section][month] = list of 3 tables: { "title", "columns", "data" }
+                sections_order = ["Inbound", "Outbound"]
+                by_section = {sec: {"January": [], "February": []} for sec in sections_order}
+
+                current_section = None
+                current_month = None
+                i = 0
+
+                while i < nrows:
+                    row = raw.iloc[i]
+                    fc = _first_cell(row)
+                    rk = _row_key(row)
+
+                    if section_out_norm in rk or section_out_norm in fc:
+                        current_section = "Outbound"
+                        i += 1
+                        continue
+                    if section_in_norm in rk or section_in_norm in fc:
+                        current_section = "Inbound"
+                        i += 1
+                        continue
+                    if "january" in rk or "january" in fc or fc == month_jan_norm:
+                        current_month = "January"
+                        i += 1
+                        continue
+                    if "february" in rk or "february" in fc or fc == month_feb_norm:
+                        current_month = "February"
+                        i += 1
+                        continue
+
+                    is_kpi_row = False
+                    kpi_title = None
+                    for kpi in ("Delivery Fulfilment", "On Time Delivery", "PODs submission"):
+                        kn = _norm(kpi)
+                        if kn in rk or kn in fc or fc == kn:
+                            is_kpi_row = True
+                            kpi_title = kpi
+                            break
+                    if not is_kpi_row and ("delivery" in rk or "delivery" in fc) and ("fulfilment" in rk or "fulfilment" in fc or "fulfillment" in rk or "fulfillment" in fc):
+                        is_kpi_row = True
+                        kpi_title = "Delivery Fulfilment"
+
+                    if is_kpi_row and kpi_title and current_section and current_month:
+                        header_idx = i + 1
+                        while header_idx < nrows:
+                            header_row = raw.iloc[header_idx]
+                            if any(str(header_row.iloc[c]).strip() for c in range(min(ncols, 10))):
+                                break
+                            header_idx += 1
+                        if header_idx >= nrows:
+                            i += 1
+                            continue
+                        header_row = raw.iloc[header_idx]
+                        headers = [str(header_row.iloc[c]).strip() or "" for c in range(ncols)]
+                        while headers and not headers[-1]:
+                            headers.pop()
+                        if not headers:
+                            headers = [str(header_row.iloc[c]).strip() or f"Col_{c}" for c in range(min(15, ncols))]
+                        col_count = len(headers)
+                        data_rows = []
+                        j = header_idx + 1
+                        while j < nrows:
+                            data_row = raw.iloc[j]
+                            first = _first_cell(data_row)
+                            drk = _row_key(data_row)
+                            if _row_matches(data_row, "January", "February", "Inbound", "Outbound"):
+                                break
+                            if any(k in drk or k in first for k in kpi_titles_norm):
+                                break
+                            cells = [str(data_row.iloc[c]).strip() if c < len(data_row) else "" for c in range(col_count)]
+                            if not any(cells):
+                                j += 1
+                                continue
+                            data_rows.append(dict(zip(headers, cells)))
+                            j += 1
+                        by_section[current_section][current_month].append({
+                            "title": kpi_title,
+                            "columns": headers,
+                            "data": data_rows,
+                        })
+                        i = j
+                        continue
+                    i += 1
+
+                def _achived_value_from_table(tbl):
+                    """قراءة أول قيمة من عمود ACHIVED/ACHIEVED بدون أي حساب."""
+                    cols = tbl.get("columns") or []
+                    data = tbl.get("data") or []
+                    for c in cols:
+                        if _norm(c).startswith("achiv") or _norm(c) == "achieved":
+                            if data:
+                                val = str(data[0].get(c, "") or "").strip().replace("%", "").replace(",", ".")
+                                try:
+                                    return int(round(float(val))) if val else 0
+                                except (ValueError, TypeError):
+                                    return 0
+                            return 0
+                    return 0
+
+                def _find_col(tbl, *names):
+                    """أول عمود يطابق أي من الأسماء (بعد تطبيع)."""
+                    cols = tbl.get("columns") or []
+                    for c in cols:
+                        cn = _norm(c)
+                        for n in names:
+                            if cn == _norm(n) or _norm(n) in cn or cn in _norm(n):
+                                return c
+                    return None
+
+                def _val(row, col):
+                    if not col:
+                        return ""
+                    return str(row.get(col, "") or "").strip()
+
+                def _build_unified_table(tables_list):
+                    """بناء جدول واحد: KPI | REGION | TOTAL | SUM | HIT | MISS | TOTAL SUBMITTED | TOTAL HITS | ACHIEVED | TARGET من 3 جداول KPI."""
+                    unified_rows = []
+                    kpi_titles = ("Delivery Fulfilment", "On Time Delivery", "PODs submission")
+                    kpi_colors = ("#e8f5e9", "#e3f2fd", "#fff3e0")
+                    for k, kpi_name in enumerate(kpi_titles):
+                        tbl = tables_list[k] if k < len(tables_list) else None
+                        data = (tbl.get("data") or []) if tbl else []
+                        if len(data) < 2:
+                            data = data + [{}] * (2 - len(data))
+                        row0, row1 = data[0], data[1] if len(data) > 1 else {}
+                        c_region = _find_col(tbl, "region", "REGION") if tbl else None
+                        c_total = _find_col(tbl, "total", "TOTAL") if tbl else None
+                        c_hit = _find_col(tbl, "hit", "HIT") if tbl else None
+                        c_miss = _find_col(tbl, "miss", "MISS") if tbl else None
+                        c_achieved = _find_col(tbl, "achieved", "achived", "ACHIEVED", "ACHIVED") if tbl else None
+                         # for PODs submission
+                        c_total_sub = _find_col(tbl, "total submitted", "totalsubmitted", "total submitted pods", "total submitted pod", "total submitted", "total submitted pod's", "total submitted pods submission") if tbl else None
+                        total0 = _val(row0, c_total)
+                        total1 = _val(row1, c_total)
+                        hit0 = _val(row0, c_hit)
+                        hit1 = _val(row1, c_hit)
+                        try:
+                            h0, h1 = int(float(hit0 or 0)), int(float(hit1 or 0))
+                            total_hits = h0 + h1
+                        except (ValueError, TypeError):
+                            total_hits = ""
+                        achieved_raw = _val(row0, c_achieved) or _val(row1, c_achieved)
+                        try:
+                            achieved = f"{int(round(float((achieved_raw or '').replace('%', '').replace(',', '.').strip()) or 0))}%"
+                        except (ValueError, TypeError):
+                            achieved = (achieved_raw or "0%").strip()
+                            if achieved and "%" not in achieved:
+                                achieved = f"{achieved}%"
+                        target = "98%"
+                        r0_region = _val(row0, c_region) or "Fuchs-Yanbu"
+                        r1_region = _val(row1, c_region) or "Fuchs-Jeddah"
+                        row_bg = kpi_colors[k % len(kpi_colors)]
+                        total_sub0 = _val(row0, c_total_sub)
+                        total_sub1 = _val(row1, c_total_sub)
+                        try:
+                            sum_val = (int(float(total0 or 0)) + int(float(total1 or 0))) if kpi_name == "On Time Delivery" else ""
+                        except (ValueError, TypeError):
+                            sum_val = ""
+                        unified_rows.append({
+                            "kpi": kpi_name, "region": r0_region, "total": total0, "sum": sum_val, "hit": hit0, "miss": _val(row0, c_miss),
+                            "total_submitted": total_sub0,
+                            "total_hits": total_hits, "achieved": achieved, "target": target, "row_bg": row_bg,
+                        })
+                        unified_rows.append({
+                            "kpi": kpi_name, "region": r1_region, "total": total1, "sum": sum_val, "hit": hit1, "miss": _val(row1, c_miss),
+                            "total_submitted": total_sub1,
+                            "total_hits": total_hits, "achieved": achieved, "target": target, "row_bg": row_bg,
+                        })
+                    return unified_rows
+
+                def _build_unified_from_admin(section, month):
+                    """بناء نفس الجدول من موديل TransportationKPI (الأدمن). ترجع None لو مفيش 6 صفوف."""
+                    from dashboard.models import TransportationKPI
+                    qs = list(
+                        TransportationKPI.objects.filter(section=section, month=month).order_by("kpi", "region")
+                    )
+                    if len(qs) != 6:
                         return None
+                    kpi_titles = ("Delivery Fulfilment", "On Time Delivery", "PODs submission")
+                    kpi_colors = ("#e8f5e9", "#e3f2fd", "#fff3e0")
+                    unified_rows = []
+                    for k, kpi_name in enumerate(kpi_titles):
+                        r0, r1 = qs[k * 2], qs[k * 2 + 1]
+                        hit0 = (r0.hit or "").strip()
+                        hit1 = (r1.hit or "").strip()
+                        try:
+                            total_hits = int(float(hit0 or 0)) + int(float(hit1 or 0))
+                        except (ValueError, TypeError):
+                            total_hits = ""
+                        achieved_raw = (r0.achieved_percent or r1.achieved_percent or "").strip()
+                        try:
+                            achieved = f"{int(round(float((achieved_raw or '').replace('%', '').replace(',', '.').strip()) or 0))}%"
+                        except (ValueError, TypeError):
+                            achieved = (achieved_raw or "0%").strip()
+                            if achieved and "%" not in achieved:
+                                achieved = f"{achieved}%"
+                        target = (r0.target_percent or "98").strip()
+                        if target and "%" not in target:
+                            target = f"{target}%"
+                        row_bg = kpi_colors[k % len(kpi_colors)]
+                        if kpi_name == "On Time Delivery":
+                            sum_val = (getattr(r0, "sum_value", None) or getattr(r1, "sum_value", None) or "").strip()
+                            if not sum_val:
+                                try:
+                                    sum_val = int(float(r0.total or 0)) + int(float(r1.total or 0))
+                                except (ValueError, TypeError):
+                                    sum_val = ""
+                        else:
+                            sum_val = ""
+                        unified_rows.append({
+                            "kpi": kpi_name, "region": r0.region, "total": (r0.total or "").strip(),
+                            "sum": sum_val, "hit": (r0.hit or "").strip(), "miss": (r0.miss or "").strip(),
+                            "total_submitted": getattr(r0, "total_submitted", "") or "",
+                            "total_hits": total_hits, "achieved": achieved, "target": target, "row_bg": row_bg,
+                        })
+                        unified_rows.append({
+                            "kpi": kpi_name, "region": r1.region, "total": (r1.total or "").strip(),
+                            "sum": sum_val, "hit": (r1.hit or "").strip(), "miss": (r1.miss or "").strip(),
+                            "total_submitted": getattr(r1, "total_submitted", "") or "",
+                            "total_hits": total_hits, "achieved": achieved, "target": target, "row_bg": row_bg,
+                        })
+                    return unified_rows
+
+                def _achieved_from_unified_rows(unified_rows, kpi_index):
+                    """استخراج قيمة ACHIEVED (رقم) من unified rows للـ KPI المطلوب — للشارت."""
+                    if not unified_rows or kpi_index < 0:
+                        return 0
+                    idx = kpi_index * 2
+                    if idx >= len(unified_rows):
+                        return 0
+                    raw = (unified_rows[idx].get("achieved") or "").replace("%", "").replace(",", ".").strip()
                     try:
-                        s = pd.Timestamp(start).date()
-                        e = pd.Timestamp(end).date()
-                    except Exception:
-                        return None
-                    if s > e:
-                        return None
-                    days = 0
-                    current = s
-                    while current < e:
-                        if current.weekday() != 4:
-                            days += 1
-                        current += timedelta(days=1)
-                    return days
+                        return int(round(float(raw))) if raw else 0
+                    except (ValueError, TypeError):
+                        return 0
 
-                df["_work_days"] = df.apply(
-                    lambda row: business_days_between(row["_gi_dt"], row["_pod_dt"]),
-                    axis=1,
-                )
-                df["Days"] = df["_work_days"].apply(
-                    lambda d: str(int(float(d))) if d is not None and not (isinstance(d, float) and pd.isna(d)) else ""
-                )
-                df["Hit or Miss"] = df["_work_days"].apply(
-                    lambda d: "Hit" if d is not None and not (isinstance(d, float) and pd.isna(d)) and float(d) <= 7 else "Miss"
-                )
-                df["Month"] = df["_gi_dt"].dt.strftime("%b").fillna("")
+                chart_colors = ["#007fa3", "#28a745", "#ffc107"]
+                chart_kpi_names = ("Delivery Fulfilment", "On Time Delivery", "PODs submission")
 
-            # Number of track = عدد الـ lines (صفوف) في عمود Delivery — كل line = track
-            number_of_track = len(df) if col_delivery is not None else len(df)
+                for section in sections_order:
+                    jan_tables = by_section[section]["January"]
+                    feb_tables = by_section[section]["February"]
+                    unified_jan = _build_unified_from_admin(section, "January")
+                    unified_feb = _build_unified_from_admin(section, "February")
+                    if unified_jan is None:
+                        unified_jan = _build_unified_table(jan_tables)
+                    if unified_feb is None:
+                        unified_feb = _build_unified_table(feb_tables)
+                    chart_series = []
+                    for k in range(3):
+                        name = chart_kpi_names[k] if k < len(chart_kpi_names) else f"KPI {k+1}"
+                        jan_val = _achieved_from_unified_rows(unified_jan, k)
+                        feb_val = _achieved_from_unified_rows(unified_feb, k)
+                        if jan_val == 0 and feb_val == 0:
+                            jan_val = _achived_value_from_table(jan_tables[k]) if k < len(jan_tables) else 0
+                            feb_val = _achived_value_from_table(feb_tables[k]) if k < len(feb_tables) else 0
+                        chart_series.append({
+                            "type": "column",
+                            "name": name,
+                            "color": chart_colors[k % len(chart_colors)],
+                            "valueSuffix": "%",
+                            "dataPoints": [
+                                {"label": "January", "y": int(jan_val)},
+                                {"label": "February", "y": int(feb_val)},
+                            ],
+                        })
+                    sub_tables.append({
+                        "id": f"transportation-{section.lower()}",
+                        "title": section,
+                        "chart_data": chart_series,
+                        "unified_jan": unified_jan,
+                        "unified_feb": unified_feb,
+                        "use_unified_table": True,
+                    })
 
-            # فلترة أولاً بـ الشهر
-            selected_months_norm = []
-            if selected_months:
-                if isinstance(selected_months, str):
-                    selected_months = [selected_months]
-                seen = set()
-                for m in selected_months:
-                    norm = self.normalize_month_label(m)
-                    if norm and norm.lower() not in seen:
-                        seen.add(norm.lower())
-                        selected_months_norm.append(norm)
-
-            if selected_months_norm:
-                df = df[
-                    df["Month"]
-                    .str.lower()
-                    .isin([m.lower() for m in selected_months_norm])
-                ]
-            elif selected_month:
-                month_norm = self.normalize_month_label(selected_month)
-                if month_norm:
-                    df = df[df["Month"].str.lower() == month_norm.lower()]
-
-            # فلترة بـ OBD Number (اختياري: نعرض كل الصفوف، الفلتر في الواجهة)
-            # لا نستبعد أي صف هنا؛ OBD Number يكون متاحاً كفلتر في جدول التفاصيل
-
-            if df.empty:
-                return {
-                    "detail_html": "<p class='text-warning text-center p-4'>⚠️ No data available for selected period.</p>",
-                    "count": 0,
-                    "hit_pct": 0,
-                }
-
-            month_order = [
-                "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-            ]
-            months_raw = df["Month"].dropna().unique().tolist()
-            # استبعاد القيم الفارغة أو غير المعرّفة (حتى لا يظهر عمود بدون اسم وقيم أصفار)
-            months = [
-                str(m).strip() for m in months_raw
-                if m is not None and str(m).strip() and str(m).strip() in month_order
-            ]
-            months = sorted(months, key=lambda m: month_order.index(m)) if months else []
-            if not months and len(df) > 0:
-                months = ["All"]
-                df["Month"] = "All"
-
-            # إحصائيات عامة
-            hit_count = len(df[df["Hit or Miss"] == "Hit"])
-            miss_count = len(df[df["Hit or Miss"] == "Miss"])
-            total_shipments = hit_count + miss_count
-            hit_pct = (
-                round((hit_count / total_shipments * 100), 2)
-                if total_shipments > 0
-                else 0
-            )
-            miss_pct = (
-                round((miss_count / total_shipments * 100), 2)
-                if total_shipments > 0
-                else 0
-            )
-
-            # جدول KPI: Hit %, Hit, Miss, Total — أعمدة الشهور + 2025 (إجمالي السنة لكل صف)
-            hit_by_month = []
-            miss_by_month = []
-            total_by_month = []
-            hit_pct_by_month = []
-            for month in months:
-                df_m = df[df["Month"] == month]
-                h = len(df_m[df_m["Hit or Miss"] == "Hit"])
-                m = len(df_m[df_m["Hit or Miss"] == "Miss"])
-                t = h + m
-                hit_by_month.append(h)
-                miss_by_month.append(m)
-                total_by_month.append(t)
-                hit_pct_by_month.append(
-                    int(round((h / t * 100))) if t > 0 else 0
-                )
-
-            ytd_hit = sum(hit_by_month)
-            ytd_miss = sum(miss_by_month)
-            ytd_total = ytd_hit + ytd_miss
-            ytd_hit_pct = int(round((ytd_hit / ytd_total * 100))) if ytd_total > 0 else 0
-
-            # الأعمدة: KPI + الشهور (Jan / Feb / Mar ...) + عمود إجمالي 2025
-            kpi_columns = ["KPI"] + months + ["2025"]
-            kpi_rows = [
-                {
-                    "KPI": "Hit %",
-                    **{m: hit_pct_by_month[i] for i, m in enumerate(months)},
-                    "2025": ytd_hit_pct,
-                },
-                {
-                    "KPI": "Hit",
-                    **{m: hit_by_month[i] for i, m in enumerate(months)},
-                    "2025": ytd_hit,
-                },
-                {
-                    "KPI": "Miss",
-                    **{m: miss_by_month[i] for i, m in enumerate(months)},
-                    "2025": ytd_miss,
-                },
-                {
-                    "KPI": "Total Shipments",
-                    **{m: total_by_month[i] for i, m in enumerate(months)},
-                    "2025": ytd_total,
-                },
-            ]
-
-            # شارت: Hit % لكل شهر
-            chart_data = [
-                {
-                    "type": "column",
-                    "name": "Hit %",
-                    "color": "#007fa3",
-                    "valueSuffix": "%",
-                    "related_table": "sub-table-pods-kpi",
-                    "dataPoints": [
-                        {"label": m, "y": hit_pct_by_month[i]}
-                        for i, m in enumerate(months)
-                    ],
-                },
-            ]
-
-            sub_tables = [
-                {
-                    "id": "sub-table-pods-kpi",
-                    "title": "PODs KPI",
-                    "columns": kpi_columns,
-                    "data": kpi_rows,
-                    "chart_data": chart_data,
-                }
-            ]
-
-            # جدول On Time Receiving: Expected Arrival / Actual Arrival / Arrived Late? (أو Hit or Miss) / Delivery
-            detail_df = df.copy()
-
-            def _fmt_date(x):
-                if pd.isna(x) or x is pd.NaT:
-                    return ""
+            # ----- 3) From Factory to WH و Normal delivery: شارت (Achieved % / Achieved) + جدول بكل شهر بلونين -----
+            def _achieved_to_pct_val(v):
+                """إذا القيمة بين 0 و 1.5 تعتبر كسر (مثلاً 1 = 100%) وإلا نسبة جاهزة."""
                 try:
-                    return pd.Timestamp(x).strftime("%Y-%m-%d %H:%M")
+                    x = float(v)
+                    if x != x:
+                        return 0
+                    if 0 <= x <= 1.5:
+                        return int(round(x * 100))
+                    return int(round(x))
+                except (ValueError, TypeError):
+                    return 0
+
+            def _read_transport_sheet_for_chart_table(sheet_name, achieved_col_names, excel_path, xls):
+                """يقرأ شيت ويرجع chart_data (أعمدة من عمود Achieved % أو Achieved) وجدول مع row_bg لكل شهر بلونين.
+                لشيت From Factory to WH: إن وُجد عمود KPI (Delivery Fulfilment, On Time Delivery, PODs submission)
+                يُعرض شهر يناير بثلاثة أعمدة جنب بعض، والقيم تُعامل كـ 100% إذا كانت 1 (كسر)."""
+                sh = next((s for s in xls.sheet_names if (s or "").strip() == sheet_name), None)
+                if not sh:
+                    return None
+                try:
+                    df = pd.read_excel(excel_path, sheet_name=sh, engine="openpyxl", header=0)
                 except Exception:
-                    return ""
-
-            if use_arrived_late and col_expected:
-                detail_df[col_expected] = detail_df["_exp_dt"].apply(_fmt_date) if "_exp_dt" in detail_df.columns else detail_df[col_expected]
-            if col_actual and col_actual in detail_df.columns:
-                if "_exp_dt" in detail_df.columns and col_actual == col_expected:
-                    pass
+                    return None
+                if df.empty or len(df) < 1:
+                    return None
+                df.columns = [str(c).strip() for c in df.columns]
+                # البحث عن عمود Achieved % أو Achieved
+                achieved_col = None
+                for ac in achieved_col_names:
+                    for c in df.columns:
+                        if ac.lower() in c.lower().replace(" ", "").replace("_", "").replace("%", ""):
+                            achieved_col = c
+                            break
+                    if achieved_col:
+                        break
+                if not achieved_col:
+                    return None
+                # عمود شهر (إن وُجد) للشارت والجدول
+                month_col = None
+                for m in ("Month", "month", "MONTH", "Period", "Date"):
+                    if m in df.columns:
+                        month_col = m
+                        break
+                if not month_col:
+                    for c in df.columns:
+                        if "month" in c.lower() or "period" in c.lower() or "date" in c.lower():
+                            month_col = c
+                            break
+                # تحويل Achieved إلى أرقام (خام)
+                df["_achieved_raw"] = pd.to_numeric(
+                    df[achieved_col].astype(str).str.replace("%", "").str.replace(",", "."),
+                    errors="coerce",
+                ).fillna(0)
+                # للعرض: تحويل كسر (0–1) إلى نسبة (100%)
+                df["_achieved_num"] = df["_achieved_raw"].apply(lambda v: _achieved_to_pct_val(v))
+                # عمود KPI (لشيت From Factory to WH و Normal delivery: ثلاثة أعمدة لكل شهر)
+                kpi_col = None
+                if (sheet_name or "").strip() in ("From Factory to WH", "Normal delivery"):
+                    for c in df.columns:
+                        if (c or "").strip().lower() == "kpi" or "kpi" in (c or "").lower():
+                            kpi_col = c
+                            break
+                kpi_order = ("Delivery Fulfilment", "On Time Delivery", "PODs submission")
+                # ألوان أعمدة مثل Inbound و Outbound (Riyadh / Dammam / Jeddah)
+                chart_colors = ["#9084ad", "#a4aeb8", "#538fe7"]
+                if month_col and month_col in df.columns:
+                    df["_month_str"] = df[month_col].astype(str).str.strip().fillna("")
                 else:
-                    detail_df["_act_dt"] = pd.to_datetime(detail_df[col_actual], errors="coerce")
-                    detail_df[col_actual] = detail_df["_act_dt"].apply(_fmt_date)
-            if col_gi and not use_arrived_late:
-                detail_df[col_gi] = detail_df["_gi_dt"].apply(_fmt_date)
-            if col_pod_rec and col_pod_rec in detail_df.columns and not use_arrived_late:
-                detail_df[col_pod_rec] = detail_df["_pod_dt"].apply(_fmt_date)
+                    df["_month_str"] = pd.Series([""] * len(df))
+                # في الإكسل الخلايا المدمجة تعطي القيمة في الصف الأول فقط — نملأ الشهر والـ KPI فقط
+                # شيت From Factory to WH: عمود Achieved % فيه قيمة لكل صف (90%، 94%، 100%) فلا نملأه
+                if (sheet_name or "").strip() in ("From Factory to WH", "Normal delivery"):
+                    if month_col and month_col in df.columns:
+                        df[month_col] = df[month_col].ffill()
+                        df["_month_str"] = df[month_col].astype(str).str.strip().replace("nan", "", regex=False).fillna("")
+                    if kpi_col and kpi_col in df.columns:
+                        df[kpi_col] = df[kpi_col].ffill()
+                    if achieved_col and achieved_col in df.columns:
+                        df[achieved_col] = df[achieved_col].ffill()
+                        df["_achieved_raw"] = pd.to_numeric(
+                            df[achieved_col].astype(str).str.replace("%", "").str.replace(",", "."),
+                            errors="coerce",
+                        ).fillna(0)
+                        df["_achieved_num"] = df["_achieved_raw"].apply(lambda v: _achieved_to_pct_val(v))
+                def _chart_label(s):
+                    """إزالة nan من التسميات على الشارت."""
+                    if s is None or (isinstance(s, float) and pd.isna(s)):
+                        return "—"
+                    t = str(s).strip()
+                    if t.lower() == "nan" or not t:
+                        return "—"
+                    return t
 
-            detail_df = detail_df.drop(
-                columns=[c for c in ["_gi_dt", "_pod_dt", "_work_days", "_exp_dt", "_act_dt"] if c in detail_df.columns],
-                errors="ignore",
+                if kpi_col and kpi_col in df.columns and month_col:
+                    # شيت فيه KPI + شهر: 3 سلاسل (عمود لكل KPI)، كل شهر يظهر فيه 3 أعمدة
+                    uniq_months = []
+                    seen_m = set()
+                    for m in df["_month_str"]:
+                        if m is None or (isinstance(m, float) and pd.isna(m)):
+                            continue
+                        ms = str(m).strip()
+                        if ms and ms.lower() != "nan" and ms not in seen_m:
+                            seen_m.add(ms)
+                            uniq_months.append(ms)
+                    if not uniq_months:
+                        uniq_months = [str(i + 1) for i in range(len(df))]
+                    chart_series = []
+                    for ki, kpi_name in enumerate(kpi_order):
+                        kpi_df = df[df[kpi_col].astype(str).str.strip().str.lower() == kpi_name.lower()]
+                        if kpi_df.empty:
+                            # اسم مختلف في الإكسل: بحث مرن (مثلاً "Delivery Fulfilment" أو "PODs")
+                            for part in (kpi_name, kpi_name.replace(" ", ""), "delivery" if "Delivery" in kpi_name else "", "fulfilment", "pods", "on time", "submission"):
+                                if not part:
+                                    continue
+                                kpi_df = df[df[kpi_col].astype(str).str.strip().str.lower().str.contains(part.lower(), na=False)]
+                                if not kpi_df.empty:
+                                    break
+                        month_vals = []
+                        for mon in uniq_months:
+                            row = kpi_df[kpi_df["_month_str"] == mon] if not kpi_df.empty else pd.DataFrame()
+                            if len(row) > 0:
+                                month_vals.append(_achieved_to_pct_val(row["_achieved_raw"].iloc[0]))
+                            else:
+                                month_vals.append(0)
+                        chart_series.append({
+                            "type": "column",
+                            "name": kpi_name,
+                            "color": chart_colors[ki % len(chart_colors)],
+                            "valueSuffix": "%",
+                            "dataPoints": [{"label": _chart_label(mon), "y": int(v) if v == v else 0} for mon, v in zip(uniq_months, month_vals)],
+                        })
+                    chart_data = chart_series if chart_series else [{
+                        "type": "column",
+                        "name": achieved_col,
+                        "color": chart_colors[0],
+                        "valueSuffix": "%" if "%" in achieved_col else "",
+                        "dataPoints": [{"label": _chart_label(m), "y": 0} for m in uniq_months],
+                    }]
+                else:
+                    # سلوك قديم: سلسلة واحدة (متوسط حسب الشهر)
+                    categories = []
+                    values = []
+                    if month_col and "_month_str" in df.columns:
+                        by_month = df.groupby("_month_str")["_achieved_num"].mean()
+                        categories = by_month.index.tolist()
+                        values = [int(round(float(x))) if x == x else 0 for x in by_month.values]
+                    else:
+                        categories = [str(i + 1) for i in range(len(df))]
+                        values = [int(round(float(x))) if x == x else 0 for x in df["_achieved_num"].tolist()]
+                    # إزالة نقاط التسمية nan من الشارت (لا نعرضها أصلاً)
+                    def _is_nan_label(c):
+                        if c is None: return True
+                        if isinstance(c, float) and pd.isna(c): return True
+                        return str(c).strip().lower() == "nan"
+                    points = [{"label": _chart_label(cat), "y": v} for cat, v in zip(categories, values) if not _is_nan_label(cat)]
+                    chart_data = [{
+                        "type": "column",
+                        "name": achieved_col,
+                        "color": chart_colors[0],
+                        "valueSuffix": "%" if "%" in achieved_col else "",
+                        "dataPoints": points,
+                    }]
+                # جدول: كل الأعمدة، صفوف مع row_bg (كل شهر بلون من لونين) + Achieved % كعدد صحيح (100% لا 1%)
+                colors_by_month = ("#e8f5e9", "#e3f2fd")
+                unique_months_ordered = []
+                seen = set()
+                for m in (df["_month_str"] if month_col and "_month_str" in df.columns else pd.Series([""] * len(df))):
+                    if m not in seen and m:
+                        seen.add(m)
+                        unique_months_ordered.append(m)
+                month_to_bg = {m: colors_by_month[i % 2] for i, m in enumerate(unique_months_ordered)}
+                if not month_to_bg:
+                    month_to_bg = {"": colors_by_month[0]}
+                def _cell_display(val):
+                    """لا نعرض nan في الجدول."""
+                    if val is None or (isinstance(val, float) and pd.isna(val)):
+                        return ""
+                    s = str(val).strip()
+                    return "" if s.lower() == "nan" else s
+
+                table_rows = []
+                for idx, r in df.iterrows():
+                    month_val = str(r.get(month_col, "")).strip() if month_col else ""
+                    if month_col and "_month_str" in df.columns:
+                        month_val = str(r.get("_month_str", "")).strip()
+                    if month_val.lower() == "nan":
+                        month_val = ""
+                    row_bg = month_to_bg.get(month_val, colors_by_month[idx % 2])
+                    row_dict = {}
+                    for c in df.columns:
+                        if c in ("_achieved_num", "_month_str", "_achieved_raw"):
+                            continue
+                        if c == achieved_col:
+                            try:
+                                num = r.get("_achieved_num", 0)
+                                row_dict[c] = f"{int(round(float(num)))}%"
+                            except (ValueError, TypeError):
+                                row_dict[c] = _cell_display(r.get(c))
+                        else:
+                            row_dict[c] = _cell_display(r.get(c))
+                    row_dict["row_bg"] = row_bg
+                    table_rows.append(row_dict)
+                # دمج خلايا الشهر و KPI و Achieved % لكل مجموعة (كما كان في الأول)
+                merge_columns = []
+                if (sheet_name or "").strip() in ("From Factory to WH", "Normal delivery") and month_col and month_col in df.columns and kpi_col and kpi_col in df.columns:
+                    merge_columns = [month_col, kpi_col, achieved_col]
+                    prev_key = None
+                    group_start = 0
+
+                    def _norm_group_key(m, k):
+                        return (str(m or "").strip().lower(), str(k or "").strip().lower())
+
+                    def _fill_group_achieved(start, end):
+                        """نوحّد Achieved % للمجموعة: نأخذ أول قيمة من الشيت ونطبقها على كل الصفوف المدمجة."""
+                        group_val = None
+                        for j in range(start, end):
+                            val = table_rows[j].get(achieved_col, "")
+                            s = (val or "").strip() if isinstance(val, str) else str(val or "").strip()
+                            if s:
+                                group_val = table_rows[j].get(achieved_col)
+                                break
+                        if group_val is not None:
+                            for j in range(start, end):
+                                table_rows[j][achieved_col] = group_val
+
+                    for i, row in enumerate(table_rows):
+                        month_val = row.get(month_col, "")
+                        kpi_val = row.get(kpi_col, "")
+                        key = _norm_group_key(month_val, kpi_val)
+                        if key != prev_key:
+                            if prev_key is not None:
+                                span = i - group_start
+                                _fill_group_achieved(group_start, i)
+                                for j in range(group_start, i):
+                                    table_rows[j]["_rowspan"] = table_rows[j].get("_rowspan", {})
+                                    for col in merge_columns:
+                                        table_rows[j]["_rowspan"][col] = span if j == group_start else 0
+                            group_start = i
+                            prev_key = key
+                    if prev_key is not None and group_start < len(table_rows):
+                        span = len(table_rows) - group_start
+                        _fill_group_achieved(group_start, len(table_rows))
+                        for j in range(group_start, len(table_rows)):
+                            table_rows[j]["_rowspan"] = table_rows[j].get("_rowspan", {})
+                            for col in merge_columns:
+                                table_rows[j]["_rowspan"][col] = span if j == group_start else 0
+                display_columns = [c for c in df.columns if c not in ("_achieved_num", "_month_str", "_achieved_raw")]
+                return {
+                    "chart_data": chart_data,
+                    "columns": display_columns,
+                    "data": table_rows,
+                    "achieved_col": achieved_col,
+                    "merge_columns": merge_columns,
+                }
+
+            from_factory_sheet = "From Factory to WH"
+            normal_delivery_sheet = "Normal delivery"
+            from_factory_data = _read_transport_sheet_for_chart_table(
+                from_factory_sheet,
+                ["Achieved %", "Achieved%", "ACHIEVED %", "Achieved"],
+                excel_path,
+                xls,
             )
-
-            if use_arrived_late:
-                base_cols = []
-                if col_delivery:
-                    base_cols.append(col_delivery)
-                if col_expected:
-                    base_cols.append(col_expected)
-                if col_actual and col_actual != col_expected:
-                    base_cols.append(col_actual)
-                # لا نعرض عمود Arrived Late في الجدول التفصيلي
-                # بدلاً منه نعرض عمود Late Shipment Reason إن وُجد في البيانات
-                if "Late Shipment Reason" in detail_df.columns:
-                    base_cols.append("Late Shipment Reason")
-                base_cols.append("Hit or Miss")
-                if "Month" in detail_df.columns:
-                    base_cols.append("Month")
-            else:
-                base_cols = [col_gi]
-                if col_delivery:
-                    base_cols.append(col_delivery)
-                base_cols.append(col_pod_rec)
-                for add in ["Days", "Hit or Miss", "Month"]:
-                    if add not in base_cols:
-                        base_cols.append(add)
-
-            # تأكد أن الأعمدة موجودة في الداتا
-            detail_columns = [c for c in base_cols if c in detail_df.columns]
-            if not detail_columns:
-                detail_columns = list(detail_df.columns)
-
-            # ترتيب حسب Actual GI Date
-            sort_col = col_gi if col_gi in detail_df.columns else detail_columns[0]
-            detail_df = detail_df.sort_values(sort_col, ascending=False)
-            detail_rows_raw = detail_df.head(500)[detail_columns].to_dict(orient="records")
-
-            def _to_blank(val):
-                if val is None:
-                    return ""
-                if isinstance(val, float) and (pd.isna(val) or (val != val)):
-                    return ""
-                s = str(val).strip()
-                if s.lower() in ("nan", "nat", "none", "<nat>"):
-                    return ""
-                return s
-
-            detail_rows = [
-                {k: _to_blank(v) for k, v in row.items()} for row in detail_rows_raw
-            ]
-
-            delivery_options = (
-                sorted(
-                    detail_df[col_delivery]
-                    .fillna("")
-                    .astype(str)
-                    .str.strip()
-                    .replace("", None)
-                    .dropna()
-                    .unique()
-                    .tolist()
-                )
-                if col_delivery and col_delivery in detail_df.columns
-                else []
+            if from_factory_data:
+                sub_tables.append({
+                    "id": "transportation-from-factory-wh",
+                    "title": from_factory_sheet,
+                    "chart_data": from_factory_data["chart_data"],
+                    "columns": from_factory_data["columns"],
+                    "data": from_factory_data["data"],
+                    "merge_columns": from_factory_data.get("merge_columns", []),
+                    "use_unified_table": False,
+                    "transport_sheet_chart_table": True,
+                    "chart_full_width": True,
+                })
+            normal_delivery_data = _read_transport_sheet_for_chart_table(
+                normal_delivery_sheet,
+                ["Achieved", "Achieved %", "ACHIEVED", "Achieved%"],
+                excel_path,
+                xls,
             )
-            status_options = (
-                sorted(
-                    detail_df["Hit or Miss"]
-                    .fillna("")
-                    .astype(str)
-                    .str.strip()
-                    .replace("", None)
-                    .dropna()
-                    .unique()
-                    .tolist()
-                )
-                if "Hit or Miss" in detail_df.columns
-                else []
-            )
-            month_options = (
-                sorted(
-                    detail_df["Month"]
-                    .fillna("")
-                    .astype(str)
-                    .str.strip()
-                    .replace("", None)
-                    .dropna()
-                    .unique()
-                    .tolist()
-                )
-                if "Month" in detail_df.columns
-                else []
-            )
-
-            detail_table = {
-                "id": "sub-table-pods-detail",
-                "title": "On Time Receiving",
-                "columns": detail_columns,
-                "data": detail_rows,
-                "chart_data": [],
-                "full_width": True,
-                "filter_options": {
-                    "deliveries": delivery_options,
-                    "delivery_column": col_delivery or "Delivery",
-                    "statuses": status_options,
-                    "months": month_options,
-                },
-            }
-            sub_tables.append(detail_table)
-
-            stats = {
-                "total_shipments": total_shipments,
-                "hit_pct": hit_pct,
-                "miss_pct": miss_pct,
-                "target": 100,
-                "number_of_track": number_of_track,
-            }
+            if normal_delivery_data:
+                sub_tables.append({
+                    "id": "transportation-normal-delivery",
+                    "title": normal_delivery_sheet,
+                    "chart_data": normal_delivery_data["chart_data"],
+                    "columns": normal_delivery_data["columns"],
+                    "data": normal_delivery_data["data"],
+                    "merge_columns": normal_delivery_data.get("merge_columns", []),
+                    "use_unified_table": False,
+                    "transport_sheet_chart_table": True,
+                    "chart_full_width": True,
+                })
 
             tab_data = {
                 "name": "Transportation",
                 "sub_tables": sub_tables,
+                "stats": {"number_of_track": number_of_track},
                 "chart_data": sub_tables[0].get("chart_data", []) if sub_tables else [],
-                "chart_title": "Transportation Hit % by Month",
-                "hit_pct": hit_pct,
-                "target_pct": 100,
-                "stats": stats,
             }
 
-            month_norm_tab = self.apply_month_filter_to_tab(
-                tab_data, selected_month, selected_months_norm or None
-            )
             html = render_to_string(
                 "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
-                {"tab": tab_data, "selected_month": month_norm_tab},
+                {"tab": tab_data, "selected_month": None},
             )
 
             return {
                 "detail_html": html,
-                "chart_data": chart_data,
-                "chart_title": "Transportation Hit %",
-                "hit_pct": hit_pct,
-                "target_pct": 100,
-                "count": total_shipments,
+                "chart_data": tab_data.get("chart_data", []),
+                "chart_title": "Transportation",
+                "count": number_of_track,
                 "tab_data": tab_data,
             }
 
         except Exception as e:
             import traceback
-
             print(traceback.format_exc())
             return {"error": f"⚠️ Error processing Transportation: {e}"}
 
@@ -8301,13 +8723,14 @@ class UploadExcelViewRoche(View):
 
             # Outbound Shipments (Outbound1 + Outbound2, Hit/Miss) — نفس فكرة Inbound
             outbound_facility = (request.GET.get("outbound_facility") or "").strip()
-            outbound_order_nbr = (request.GET.get("outbound_order_nbr") or "").strip()
+            outbound_order_checked = (request.GET.get("outbound_order_checked") or request.GET.get("outbound_order_nbr") or "").strip()
+            outbound_company = (request.GET.get("outbound_company") or "").strip()
             outbound_result = self.filter_outbound_shipments(
                 request,
                 selected_month if not selected_months_norm else None,
                 selected_months_norm if selected_months_norm else None,
                 selected_facility=outbound_facility or None,
-                selected_order_nbr=outbound_order_nbr or None,
+                selected_order_nbr=outbound_order_checked or None,
             )
             # ✅ جلب نسبة الـ Hit من Outbound (هي اللي هنستخدمها كـ KPI للتاب ده)
             outbound_stats = outbound_result.get("stats", {}) or {}
@@ -8417,6 +8840,247 @@ class UploadExcelViewRoche(View):
                 "chart_data": [],
                 "count": 0,
                 "hit_pct": 0,  # ✅ إضافة hit_pct في حالة الخطأ
+            }
+
+    def filter_utilization(self, request):
+        """
+        تاب Utilization: يقرأ من شيت ARAMCO_Utilization.
+        - فلترة يوم بيوم من عمود Report Date.
+        - الأرقام من عمود Utilized (Hybrid).
+        - شارت بحجم الديف قبل الجدول: الأيام على المحور، وقيمة Utilized (Hybrid). كل منطقة بلون.
+        """
+        try:
+            import os
+            from django.template.loader import render_to_string
+
+            excel_path = self.get_uploaded_file_path(request) or self.get_excel_path()
+            if not excel_path or not os.path.exists(excel_path):
+                return {
+                    "detail_html": "<p class='text-danger'>⚠️ Excel file not found.</p>",
+                    "sub_tables": [],
+                    "chart_data": [],
+                }
+
+            xls = pd.ExcelFile(excel_path, engine="openpyxl")
+            sheet_name = None
+            for s in xls.sheet_names:
+                if (s or "").strip() == "ARAMCO_Utilization":
+                    sheet_name = s
+                    break
+            if not sheet_name:
+                for s in xls.sheet_names:
+                    if "utilization" in (s or "").lower() and "aramco" in (s or "").lower():
+                        sheet_name = s
+                        break
+            if not sheet_name:
+                for s in xls.sheet_names:
+                    if "utilization" in (s or "").lower():
+                        sheet_name = s
+                        break
+            if not sheet_name:
+                return {
+                    "detail_html": "<p class='text-warning'>⚠️ Sheet 'ARAMCO_Utilization' not found.</p>",
+                    "sub_tables": [],
+                    "chart_data": [],
+                }
+
+            df = pd.read_excel(excel_path, sheet_name=sheet_name, engine="openpyxl", header=0)
+            if df.empty or len(df) < 1:
+                return {
+                    "detail_html": "<p class='text-warning'>⚠️ Sheet is empty.</p>",
+                    "sub_tables": [],
+                    "chart_data": [],
+                }
+
+            df.columns = [str(c).strip() for c in df.columns]
+
+            def _find_col(names):
+                for n in names:
+                    n_lower = n.lower().replace(" ", "").replace("_", "")
+                    for c in df.columns:
+                        if c and n_lower in c.lower().replace(" ", "").replace("_", ""):
+                            return c
+                return None
+
+            report_date_col = _find_col([
+                "Report Date", "Report_Date", "ReportDate", "Date", "Report D&T",
+            ])
+            utilized_col = _find_col([
+                "Utilized (Hybrid)", "Utilized(Hybrid)", "Utilized_Hybrid", "Utilized Hybrid",
+                "Utilized", "Utilised (Hybrid)",
+            ])
+            region_col = _find_col([
+                "Region", "Facility", "Facility Code", "Site", "Location", "Area",
+            ])
+
+            if not report_date_col or not utilized_col:
+                missing = []
+                if not report_date_col:
+                    missing.append("Report Date")
+                if not utilized_col:
+                    missing.append("Utilized (Hybrid)")
+                return {
+                    "detail_html": f"<p class='text-danger'>⚠️ Missing columns: {', '.join(missing)}</p>",
+                    "sub_tables": [],
+                    "chart_data": [],
+                }
+
+            # جدول الإكسل الخام: أعمدة من Report Date إلى Percentage (قبل أي rename أو dropna)
+            percentage_col = _find_col(["Percentage", "Percentage_%", "Pct", "%"])
+            all_cols = [str(c).strip() for c in df.columns]
+            try:
+                idx_start = all_cols.index(report_date_col) if report_date_col in all_cols else 0
+            except (ValueError, TypeError):
+                idx_start = 0
+            if percentage_col and percentage_col in all_cols:
+                try:
+                    idx_end = all_cols.index(percentage_col)
+                except (ValueError, TypeError):
+                    idx_end = len(all_cols) - 1
+            else:
+                idx_end = len(all_cols) - 1
+            if idx_end < idx_start or idx_start >= len(all_cols):
+                idx_start = 0
+                idx_end = max(0, len(all_cols) - 1)
+            raw_columns = list(all_cols[idx_start : idx_end + 1])
+            if not raw_columns:
+                raw_columns = list(all_cols)
+
+            def _fmt_cell(v):
+                if v is None or (hasattr(v, "__len__") and hasattr(v, "size") and getattr(v, "size", 0) == 0):
+                    return ""
+                try:
+                    if pd.isna(v):
+                        return ""
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    if hasattr(v, "strftime"):
+                        return str(v.strftime("%Y-%m-%d"))
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    if isinstance(v, (int, float)):
+                        return int(v) if isinstance(v, float) and v == int(v) else (round(float(v), 2) if isinstance(v, float) else int(v))
+                except (TypeError, ValueError):
+                    pass
+                return str(v)
+
+            raw_data_rows = []
+            for _, row in df.iterrows():
+                try:
+                    raw_data_rows.append({str(c): _fmt_cell(row[c] if c in row else "") for c in raw_columns})
+                except Exception:
+                    raw_data_rows.append({str(c): "" for c in raw_columns})
+
+            df = df.rename(columns={
+                report_date_col: "Report_Date",
+                utilized_col: "Utilized_Hybrid",
+            })
+            if region_col:
+                df = df.rename(columns={region_col: "Region"})
+            else:
+                df["Region"] = "All"
+
+            df["Report_Date"] = pd.to_datetime(df["Report_Date"], errors="coerce")
+            df = df.dropna(subset=["Report_Date"])
+            df["Utilized_Hybrid"] = pd.to_numeric(df["Utilized_Hybrid"], errors="coerce").fillna(0)
+            df = df.sort_values("Report_Date")
+            df["Report_Date_Str"] = df["Report_Date"].dt.strftime("%Y-%m-%d")
+            days_ordered = sorted(df["Report_Date_Str"].unique().tolist())
+
+            # ألوان الموقع لكل يوم (نفس ألوان باقي الشارتات)
+            day_colors_site = ["#9084ad", "#a4aeb8", "#538fe7", "#28a745", "#6c757d"]
+            regions_order = ["Jeddah", "Riyadh", "Dammam"]
+
+            def _norm_region(r):
+                s = (r or "").strip()
+                if not s:
+                    return ""
+                s_lower = s.lower()
+                if "jeddah" in s_lower or "jedda" in s_lower:
+                    return "Jeddah"
+                if "riyadh" in s_lower or "riyad" in s_lower:
+                    return "Riyadh"
+                if "dammam" in s_lower or "damam" in s_lower:
+                    return "Dammam"
+                return s
+
+            df["Region_Norm"] = df["Region"].astype(str).apply(_norm_region)
+            has_regions = df["Region_Norm"].notna() & (df["Region_Norm"] != "")
+            table_columns = ["Report Date", "Utilized (Hybrid)"]
+
+            sub_tables = []
+            chart_data_first = []
+            for idx_reg, reg_display in enumerate(regions_order):
+                if has_regions.any():
+                    sub_df = df[df["Region_Norm"] == reg_display]
+                else:
+                    sub_df = df.copy()
+                if sub_df.empty:
+                    sub_df = df.copy()
+                # شارت يوم بيوم: فقط الأيام اللي فيها قيمة > 0، لون واحد (أو 3 ألوان للمناطق)، أرقام بدون %
+                vals_by_day = sub_df.groupby("Report_Date_Str")["Utilized_Hybrid"].sum().reindex(days_ordered).fillna(0)
+                data_points = []
+                for d in days_ordered:
+                    val = float(vals_by_day.get(d, 0))
+                    if val == 0:
+                        continue
+                    data_points.append({"label": str(d), "y": val})
+                region_color = ["#9084ad", "#a4aeb8", "#538fe7"][idx_reg % 3]
+                chart_data_region = [{
+                    "type": "column",
+                    "name": reg_display,
+                    "color": region_color,
+                    "valueSuffix": "",
+                    "is_utilization": True,
+                    "dataPoints": data_points,
+                }] if data_points else [{"type": "column", "name": reg_display, "color": region_color, "valueSuffix": "", "is_utilization": True, "dataPoints": []}]
+                if not chart_data_first:
+                    chart_data_first = chart_data_region
+                table_rows_region = []
+                for _, r in sub_df.iterrows():
+                    v = float(r["Utilized_Hybrid"])
+                    table_rows_region.append({
+                        "Report Date": r["Report_Date_Str"],
+                        "Utilized (Hybrid)": int(v) if v == int(v) else round(v, 2),
+                    })
+                sub_tables.append({
+                    "id": f"sub-table-utilization-{reg_display.lower()}",
+                    "title": reg_display,
+                    "columns": table_columns,
+                    "data": table_rows_region,
+                    "chart_data": chart_data_region,
+                    "full_width": True,
+                    "chart_full_width": idx_reg == 0,
+                })
+
+            tab_data = {
+                "name": "Utilization",
+                "sub_tables": sub_tables,
+                "chart_data": chart_data_first,
+                "raw_excel_table": {"columns": raw_columns, "data": raw_data_rows},
+            }
+
+            html = render_to_string(
+                "forms-table/table/bootstrap-table/basic-table/components/excel-sheet-table.html",
+                {"tab": tab_data, "selected_month": None},
+            )
+
+            result = {
+                "detail_html": html,
+                "sub_tables": sub_tables,
+                "chart_data": chart_data_first,
+                "tab_data": tab_data,
+            }
+            return _sanitize_for_json(result)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {
+                "detail_html": f"<p class='text-danger'>⚠️ Error: {e}</p>",
+                "sub_tables": [],
+                "chart_data": [],
             }
 
     def filter_dock_to_stock_combined(
@@ -9478,6 +10142,20 @@ class UploadExcelViewRoche(View):
                 if returns_region:
                     context["returns_region_table"] = returns_region.get("returns_region_table", [])
 
+        # Pending Shipments = نفس شارت تاب Inbound ونفس الأعمدة (نفس المصدر)
+        if request:
+            try:
+                inbound_result = self.filter_inbound(request, None, None)
+                if inbound_result and isinstance(inbound_result.get("detail_html"), str) and "Error while processing" not in (inbound_result.get("detail_html") or ""):
+                    chart_data = inbound_result.get("chart_data") or []
+                    sub_tables = inbound_result.get("sub_tables") or []
+                    if chart_data:
+                        context["inbound_tab_chart_apex"] = _canvas_chart_to_apex_payload(chart_data)
+                    if sub_tables:
+                        context["inbound_tab_sub_tables"] = sub_tables
+            except Exception:
+                pass
+
         # PODs Compliance في Dashboard لازم يطابق شارت Transportation (PODs KPI) تماماً
         # لذلك نعيد بناؤه من filter_pods_update حسب month/quarter الحاليين (حتى لو الداشبورد محمّل من كاش)
         if request and excel_path:
@@ -9500,7 +10178,7 @@ class UploadExcelViewRoche(View):
                 outbound_result = self.filter_outbound_shipments(
                     request,
                     selected_facility=(request.GET.get("outbound_facility") or "").strip() or None,
-                    selected_order_nbr=(request.GET.get("outbound_order_nbr") or "").strip() or None,
+                    selected_order_nbr=(request.GET.get("outbound_order_checked") or request.GET.get("outbound_order_nbr") or "").strip() or None,
                 )
                 ob_stats = outbound_result.get("stats") or {}
                 context["order_process_kpi"] = {
@@ -9557,9 +10235,9 @@ class UploadExcelViewRoche(View):
         context.setdefault("inbound_kpi", _empty_inbound_kpi)
         context.setdefault("pending_shipments", [])
 
-        _outbound_card_names = {"released_orders": "Released Orders", "picked_orders": "Picked Orders", "number_of_pallets": "Number of Pallets (LPNs)"}
+        _outbound_card_names = {"released_orders": "Released Orders", "picked_orders": "Packed Qty", "number_of_pallets": "Number of Pallets (LPNs)"}
         if "outbound_kpi" not in context:
-            missing_by_section.setdefault("Dashboard – Outbound", []).extend(["Released Orders", "Picked Orders", "Number of Pallets (LPNs)"])
+            missing_by_section.setdefault("Dashboard – Outbound", []).extend(["Released Orders", "Packed Qty", "Number of Pallets (LPNs)"])
         else:
             keys_from_sheet = context.get("outbound_kpi_keys_from_sheet") or []
             for key, card_name in _outbound_card_names.items():

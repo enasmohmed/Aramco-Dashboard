@@ -128,7 +128,7 @@
 </style>
 
 
-{% if not tab.outbound_html and not tab.inbound_html and tab.name|lower != 'return & refusal' and tab.name|lower != 'expiry' and tab.name|lower != 'transportation' and tab.name|lower != 'outbound shipments' and tab.name|lower != 'inventory' and tab.name|lower != 'stock count' %}
+{% if not tab.outbound_html and not tab.inbound_html and tab.name|lower != 'return & refusal' and tab.name|lower != 'expiry' and tab.name|lower != 'transportation' and tab.name|lower != 'outbound shipments' and tab.name|lower != 'inventory' and tab.name|lower != 'stock count' and tab.name|lower != 'utilization' %}
 {% with kpi_table=tab.sub_tables.0.data %}
 <div class="container-fluid px-0">
   <div class="row g-4 mx-0">
@@ -419,6 +419,101 @@
     </div>
       {% endif %}
     {% endfor %}
+  </div>
+
+  {# ================= Utilization: ثلاثة شارتات (جدة، الرياض، الدمام) كل شارت يوم بيوم، الأول بعرض كامل ================= #}
+  {% elif tab_name_lower == 'utilization' %}
+  <div class="col-12">
+    {% for sub in tab.sub_tables %}
+    <div class="row mb-4">
+      <div class="col-12">
+        <div class="table-card">
+          <h5 class="text-center mb-3 fw-bold" style="color: #9084ad;">{{ sub.title }}</h5>
+          {% if sub.chart_data %}
+          <div class="mb-3" style="min-height: {% if sub.chart_full_width or forloop.first %}420px{% else %}280px{% endif %};">
+            {% if sub.id %}{% render_chart sub.id %}{% else %}{% render_chart sub.title %}{% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="row mb-4">
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header pb-0 card-no-border text-center">
+            <h6 class="mb-2">{{ sub.title }} — Daily details</h6>
+          </div>
+          <div class="card-body">
+            <div class="table-responsive custom-scrollbar">
+              <table class="table table-striped table-bordered text-center align-middle">
+                <thead class="table-light">
+                  <tr>
+                    {% for col in sub.columns %}
+                    <th class="text-nowrap">{{ col }}</th>
+                    {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in sub.data %}
+                  <tr>
+                    {% for col in sub.columns %}
+                    <td>{{ row|get_item:col }}</td>
+                    {% endfor %}
+                  </tr>
+                  {% empty %}
+                  <tr>
+                    <td colspan="{{ sub.columns|length }}" class="text-muted text-center">No data available.</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+
+    {# جدول الإكسل الخام: من Report Date إلى Percentage — يظهر دائماً في آخر صفحة Utilization #}
+    <div class="row mt-4">
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header pb-0 card-no-border text-center">
+            <h4 class="mb-2">Raw Excel Table (Report Date — Percentage)</h4>
+          </div>
+          <div class="card-body text-center">
+            {% if tab.raw_excel_table and tab.raw_excel_table.columns %}
+            <div class="table-responsive custom-scrollbar">
+              <table class="table table-bordered table-striped text-center align-middle">
+                <thead class="table-primary">
+                  <tr>
+                    {% for col in tab.raw_excel_table.columns %}
+                    <th class="text-nowrap fw-semibold">{{ col }}</th>
+                    {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in tab.raw_excel_table.data %}
+                  <tr>
+                    {% for col in tab.raw_excel_table.columns %}
+                    <td>{{ row|get_item:col }}</td>
+                    {% endfor %}
+                  </tr>
+                  {% empty %}
+                  <tr>
+                    <td colspan="{{ tab.raw_excel_table.columns|length }}" class="text-muted">No data</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+            <p class="text-muted mb-0">لا توجد بيانات خام متاحة.</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   {# ================= EXPIRY: كروت 1–3 / 3–6 / 6–9 + فلاتر + جدول ================= #}
@@ -1374,7 +1469,7 @@
       {% endfor %}
     </div>
   </div>
-  {# ================= Transportation: كارت Number of track + جدول PODs KPI + شارت + جدول On Time Receiving ================= #}
+  {# ================= Transportation: كارت Number of track + شارت Inbound + جدول Inbound + شارت Outbound + جدول Outbound ================= #}
   {% elif tab_name_lower == 'transportation' %}
   <div class="col-12">
     {% if tab.stats.number_of_track is not None %}
@@ -1389,32 +1484,210 @@
       </div>
     </div>
     {% endif %}
-    {# جدول PODs KPI + شارت Hit % #}
-    {% if tab.sub_tables %}
-    {% with sub=tab.sub_tables.0 %}
+
+    {% for sub in tab.sub_tables %}
+    {# From Factory to WH / Normal delivery: شارت بعرض الديف ثم جدول بكل شهر بلونين #}
+    {% if sub.transport_sheet_chart_table %}
     <div class="row mb-4">
-      <div class="col-md-7">
+      <div class="col-12">
         <div class="table-card">
-          <h5 class="text-center mt-3 mb-3 fw-bold" style="color: #9084ad">{{ sub.title }}</h5>
-          <div class="table-responsive custom-scrollbar table-top">
-            <table class="table table-striped table-bordered text-center align-middle">
-              <thead class="table-light">
-                <tr>
+          <h5 class="text-center mt-2 mb-2 fw-bold" style="color: #9084ad">{{ sub.title }}</h5>
+          {% if sub.chart_data %}
+          <div class="mb-3" style="min-height: 320px;">
+            {% if sub.id %}{% render_chart sub.id %}{% else %}{% render_chart sub.title %}{% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="row mb-4">
+      <div class="col-12">
+        <div class="table-card">
+          <div class="table-responsive custom-scrollbar">
+            <table class="table table-bordered text-center align-middle mb-0" style="border-color: #dee2e6;">
+              <thead>
+                <tr style="background: #c8e6c9;">
                   {% for col in sub.columns %}
-                  <th>{{ col }}</th>
+                  <th class="px-2 py-2 fw-semibold">{{ col }}</th>
                   {% endfor %}
                 </tr>
               </thead>
               <tbody>
                 {% for row in sub.data %}
-                <tr>
+                <tr style="background: {{ row.row_bg|default:'#e8f5e9' }};">
                   {% for col in sub.columns %}
-                  <td>{{ row|get_item:col }}</td>
+                  {% with rs=row|get_rowspan:col %}
+                  {% if rs == 0 %}
+                  {% else %}
+                  <td class="px-2 py-2" {% if rs > 1 %}rowspan="{{ rs }}" style="vertical-align: middle;"{% endif %}>{{ row|get_item:col }}</td>
+                  {% endif %}
+                  {% endwith %}
+                  {% endfor %}
+                </tr>
+                {% empty %}
+                <tr><td colspan="{{ sub.columns|length }}" class="text-muted">No data available.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    {# لكل قسم (Inbound / Outbound): شارت ثم جدول واحد موحد ليناير وجدول واحد لشهر فبراير #}
+    {% else %}
+    <div class="row mb-4">
+      <div class="col-12">
+        <div class="table-card">
+          <h5 class="text-center mt-2 mb-2 fw-bold" style="color: #9084ad">{{ sub.title }}</h5>
+          {% if sub.chart_data %}
+          <div class="mb-3" style="min-height: 320px;">
+            {% if sub.id %}{% render_chart sub.id %}{% else %}{% render_chart sub.title %}{% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% if sub.use_unified_table and sub.unified_jan %}
+    {# January: جدول واحد كبير — أعمدة: KPI | REGION | TOTAL | SUM | HIT | MISS | TOTAL SUBMITTED | TOTAL HITS | ACHIEVED | TARGET #}
+    <div class="col-12 mb-4 p-3 rounded-3" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+      <h6 class="fw-bold mb-3" style="color: #6c757d;">January</h6>
+      <div class="table-card">
+        <div class="table-responsive custom-scrollbar">
+          <table class="table table-bordered text-center align-middle mb-0" style="border-color: #dee2e6;">
+            <thead>
+              <tr>
+                <th colspan="10" class="text-center px-3 py-2 fw-bold" style="background: #2e7d32; color: #fff;">{{ sub.title }}</th>
+              </tr>
+              <tr style="background: #c8e6c9;">
+                <th class="px-2 py-2 fw-semibold">KPI</th>
+                <th class="px-2 py-2 fw-semibold">REGION</th>
+                <th class="px-2 py-2 fw-semibold">TOTAL</th>
+                <th class="px-2 py-2 fw-semibold">SUM</th>
+                <th class="px-2 py-2 fw-semibold">HIT</th>
+                <th class="px-2 py-2 fw-semibold">MISS</th>
+                <th class="px-2 py-2 fw-semibold">TOTAL SUBMITTED</th>
+                <th class="px-2 py-2 fw-semibold">TOTAL HITS</th>
+                <th class="px-2 py-2 fw-semibold" style="background: #fff59d !important;">ACHIEVED</th>
+                <th class="px-2 py-2 fw-semibold">TARGET</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in sub.unified_jan %}
+              <tr style="background: {{ row.row_bg|default:'#e8f5e9' }};">
+                {% if forloop.counter0|divisibleby:2 %}
+                <td class="px-2 py-2 fw-semibold" rowspan="2" style="vertical-align: middle;">{{ row.kpi }}</td>
+                {% endif %}
+                <td class="px-2 py-2">{{ row.region }}</td>
+                <td class="px-2 py-2">{{ row.total }}</td>
+                {# SUM: مدموجة لصفّي KPI = On Time Delivery فقط #}
+                {% if row.kpi == "On Time Delivery" %}
+                  {% if forloop.counter0|divisibleby:2 %}
+                  <td class="px-2 py-2 fw-semibold" rowspan="2" style="vertical-align: middle;">{{ row.sum|default:"" }}</td>
+                  {% endif %}
+                {% else %}
+                  <td class="px-2 py-2">{{ row.sum|default:"" }}</td>
+                {% endif %}
+                <td class="px-2 py-2">{{ row.hit }}</td>
+                <td class="px-2 py-2">{{ row.miss }}</td>
+                <td class="px-2 py-2">{{ row.total_submitted|default:"" }}</td>
+                {% if forloop.counter0|divisibleby:2 %}
+                <td class="px-2 py-2" rowspan="2" style="vertical-align: middle;">{{ row.total_hits }}</td>
+                <td class="px-2 py-2" rowspan="2" style="vertical-align: middle; background: #fff9c4;">{{ row.achieved }}</td>
+                <td class="px-2 py-2" rowspan="2" style="vertical-align: middle;">{{ row.target }}</td>
+                {% endif %}
+              </tr>
+              {% empty %}
+              <tr><td colspan="10" class="text-muted">No data available.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {# February: نفس الجدول الموحد #}
+    <div class="col-12 mb-4 p-3 rounded-3" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+      <h6 class="fw-bold mb-3" style="color: #6c757d;">February</h6>
+      <div class="table-card">
+        <div class="table-responsive custom-scrollbar">
+          <table class="table table-bordered text-center align-middle mb-0" style="border-color: #dee2e6;">
+            <thead>
+              <tr>
+                <th colspan="10" class="text-center px-3 py-2 fw-bold" style="background: #2e7d32; color: #fff;">{{ sub.title }}</th>
+              </tr>
+              <tr style="background: #c8e6c9;">
+                <th class="px-2 py-2 fw-semibold">KPI</th>
+                <th class="px-2 py-2 fw-semibold">REGION</th>
+                <th class="px-2 py-2 fw-semibold">TOTAL</th>
+                <th class="px-2 py-2 fw-semibold">SUM</th>
+                <th class="px-2 py-2 fw-semibold">HIT</th>
+                <th class="px-2 py-2 fw-semibold">MISS</th>
+                <th class="px-2 py-2 fw-semibold">TOTAL SUBMITTED</th>
+                <th class="px-2 py-2 fw-semibold">TOTAL HITS</th>
+                <th class="px-2 py-2 fw-semibold" style="background: #fff59d !important;">ACHIEVED</th>
+                <th class="px-2 py-2 fw-semibold">TARGET</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in sub.unified_feb %}
+              <tr style="background: {{ row.row_bg|default:'#e8f5e9' }};">
+                {% if forloop.counter0|divisibleby:2 %}
+                <td class="px-2 py-2 fw-semibold" rowspan="2" style="vertical-align: middle;">{{ row.kpi }}</td>
+                {% endif %}
+                <td class="px-2 py-2">{{ row.region }}</td>
+                <td class="px-2 py-2">{{ row.total }}</td>
+                {% if row.kpi == "On Time Delivery" %}
+                  {% if forloop.counter0|divisibleby:2 %}
+                  <td class="px-2 py-2 fw-semibold" rowspan="2" style="vertical-align: middle;">{{ row.sum|default:"" }}</td>
+                  {% endif %}
+                {% else %}
+                  <td class="px-2 py-2">{{ row.sum|default:"" }}</td>
+                {% endif %}
+                <td class="px-2 py-2">{{ row.hit }}</td>
+                <td class="px-2 py-2">{{ row.miss }}</td>
+                <td class="px-2 py-2">{{ row.total_submitted|default:"" }}</td>
+                {% if forloop.counter0|divisibleby:2 %}
+                <td class="px-2 py-2" rowspan="2" style="vertical-align: middle;">{{ row.total_hits }}</td>
+                <td class="px-2 py-2" rowspan="2" style="vertical-align: middle; background: #fff9c4;">{{ row.achieved }}</td>
+                <td class="px-2 py-2" rowspan="2" style="vertical-align: middle;">{{ row.target }}</td>
+                {% endif %}
+              </tr>
+              {% empty %}
+              <tr><td colspan="10" class="text-muted">No data available.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% else %}
+    {# Fallback: لو مفيش unified نعرض 3 جداول قديمة #}
+    <div class="col-12 mb-4 p-3 rounded-3" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+      <h6 class="fw-bold mb-3" style="color: #6c757d;">January</h6>
+      {% for tbl in sub.tables_jan|default:"" %}
+      <div class="mb-4">
+        <div class="table-card">
+          <div class="table-responsive custom-scrollbar">
+            <table class="table table-bordered text-center align-middle mb-0" style="border-color: #dee2e6;">
+              <thead>
+                <tr>
+                  <th colspan="{{ tbl.columns|length }}" class="text-start px-3 py-2 fw-bold" style="background: #2e7d32; color: #000;">{{ tbl.title }}</th>
+                </tr>
+                <tr style="background: #c8e6c9;">
+                  {% for col in tbl.columns %}
+                  <th class="px-2 py-2 fw-semibold" style="{% if 'achiev' in col|lower %}background: #fff59d !important;{% else %}background: #c8e6c9 !important;{% endif %}">{{ col }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in tbl.data %}
+                <tr>
+                  {% for col in tbl.columns %}
+                  <td class="px-2 py-2">{{ row|get_item:col }}</td>
                   {% endfor %}
                 </tr>
                 {% empty %}
                 <tr>
-                  <td colspan="{{ sub.columns|length }}" class="text-muted">No data available.</td>
+                  <td colspan="{{ tbl.columns|length }}" class="text-muted">No data available.</td>
                 </tr>
                 {% endfor %}
               </tbody>
@@ -1422,117 +1695,47 @@
           </div>
         </div>
       </div>
-      <div class="col-md-5">
+      {% endfor %}
+    </div>
+    <div class="col-12 mb-4 p-3 rounded-3" style="background: #f8f9fa; border: 1px solid #dee2e6;">
+      <h6 class="fw-bold mb-3" style="color: #6c757d;">February</h6>
+      {% for tbl in sub.tables_feb|default:"" %}
+      <div class="mb-4">
         <div class="table-card">
-          {% if sub.id %}{% render_chart sub.id %}{% else %}{% render_chart sub.title %}{% endif %}
-        </div>
-      </div>
-    </div>
-    {% endwith %}
-    {% endif %}
-
-    {# جدول التفاصيل الكامل مع الفلاتر والبادجات #}
-    {% for sub in tab.sub_tables %}
-    {% if sub.full_width %}
-    <div class="card mb-4">
-      <div class="card-header pb-0 card-no-border">
-        <h4 class="mb-2">{{ sub.title }}</h4>
-      </div>
-      {% if sub.filter_options %}
-      <div class="card-body py-2 px-3 border-0">
-        <div class="row g-3 align-items-end filter-row">
-          {% if sub.filter_options.deliveries %}
-          <div class="col-12 col-sm-6 col-md-4">
-            <label class="form-label small fw-semibold mb-1">Delivery</label>
-            <select class="form-select pods-detail-filter w-100" data-filter="delivery">
-              <option value="">All</option>
-              {% for opt in sub.filter_options.deliveries %}
-              <option value="{{ opt }}">{{ opt }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          {% endif %}
-          {% if sub.filter_options.statuses %}
-          <div class="col-12 col-sm-6 col-md-4">
-            <label class="form-label small fw-semibold mb-1">Hit or Miss</label>
-            <select class="form-select pods-detail-filter w-100" data-filter="status">
-              <option value="">All</option>
-              {% for opt in sub.filter_options.statuses %}
-              <option value="{{ opt }}">{{ opt }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          {% endif %}
-          {% if sub.filter_options.months %}
-          <div class="col-12 col-sm-6 col-md-4">
-            <label class="form-label small fw-semibold mb-1">Month</label>
-            <select class="form-select pods-detail-filter w-100" data-filter="month">
-              <option value="">All</option>
-              {% for opt in sub.filter_options.months %}
-              <option value="{{ opt }}">{{ opt }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          {% endif %}
-        </div>
-      </div>
-      {% endif %}
-      <div class="card-body">
-        <div class="table-responsive custom-scrollbar">
-          <table class="table table-striped table-bordered text-center align-middle" id="pods-detail-table">
-            <thead class="table-light">
-              <tr>
-                {% for col in sub.columns %}
-                <th class="text-nowrap">{{ col }}</th>
+          <div class="table-responsive custom-scrollbar">
+            <table class="table table-bordered text-center align-middle mb-0" style="border-color: #dee2e6;">
+              <thead>
+                <tr>
+                  <th colspan="{{ tbl.columns|length }}" class="text-start px-3 py-2 fw-bold" style="background: #2e7d32; color: #fff;">{{ tbl.title }}</th>
+                </tr>
+                <tr style="background: #c8e6c9;">
+                  {% for col in tbl.columns %}
+                  <th class="px-2 py-2 fw-semibold" style="{% if 'achiev' in col|lower %}background: #fff59d !important;{% else %}background: #c8e6c9 !important;{% endif %}">{{ col }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in tbl.data %}
+                <tr>
+                  {% for col in tbl.columns %}
+                  <td class="px-2 py-2">{{ row|get_item:col }}</td>
+                  {% endfor %}
+                </tr>
+                {% empty %}
+                <tr>
+                  <td colspan="{{ tbl.columns|length }}" class="text-muted">No data available.</td>
+                </tr>
                 {% endfor %}
-              </tr>
-            </thead>
-            <tbody>
-              {% for row in sub.data %}
-              <tr data-delivery="{{ row|get_item:sub.filter_options.delivery_column|default:'Delivery'|default:'' }}"
-                  data-status="{{ row|get_item:'Hit or Miss'|default:'' }}"
-                  data-month="{{ row|get_item:'Month'|default:'' }}">
-                {% for col in sub.columns %}
-                {% with value=row|get_item:col %}
-                {% if col|lower == "hit or miss" %}
-                <td class="text-center">
-                  {% if value|default_if_none:""|trim|lower == "hit" %}
-                  <span class="badge bg-success rounded-pill">Hit</span>
-                  {% elif value|default_if_none:""|trim|lower == "miss" %}
-                  <span class="badge bg-danger rounded-pill">Miss</span>
-                  {% elif value|default_if_none:""|trim|lower == "pending" %}
-                  <span class="badge bg-warning text-dark rounded-pill">Pending</span>
-                  {% else %}
-                  <span class="badge bg-secondary rounded-pill">{{ value|default:"N/A" }}</span>
-                  {% endif %}
-                </td>
-                {% elif col|lower == "w.hname" or col|lower == "whname" %}
-                <td>
-                  <span class="badge bg-info text-dark rounded-pill">{{ value|default:"—" }}</span>
-                </td>
-                {% elif col|lower in "created on" or col|lower == "pgi date" %}
-                <td class="text-nowrap text-muted small">
-                  <i class="bi bi-clock"></i>
-                  {% if value %} {{ value }} {% else %} — {% endif %}
-                </td>
-                {% else %}
-                <td>{{ value }}</td>
-                {% endif %}
-                {% endwith %}
-                {% endfor %}
-              </tr>
-              {% empty %}
-              <tr>
-                <td colspan="{{ sub.columns|length }}" class="text-muted text-center">No data available.</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
+      {% endfor %}
     </div>
     {% endif %}
-    {% endfor %}
+    {% endif %}
+  {% endfor %}
   </div>
 
   {# ================= LESS THAN 4 (OTHER TABS) ================= #}
@@ -1908,6 +2111,45 @@
     </div>
     {% endif %}
     {% endfor %}
+
+    {# جدول الإكسل الخام لتاب Utilization: من Report Date إلى Percentage #}
+    {% if tab.name|lower == 'utilization' and tab.raw_excel_table and tab.raw_excel_table.columns %}
+    <div class="row mt-4">
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header pb-0 card-no-border text-center">
+            <h4 class="mb-2">جدول الإكسل الخام (Report Date — Percentage)</h4>
+          </div>
+          <div class="card-body text-center">
+            <div class="table-responsive custom-scrollbar">
+              <table class="table table-bordered table-striped text-center align-middle">
+                <thead class="table-primary">
+                  <tr>
+                    {% for col in tab.raw_excel_table.columns %}
+                    <th class="text-nowrap fw-semibold">{{ col }}</th>
+                    {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in tab.raw_excel_table.data %}
+                  <tr>
+                    {% for col in tab.raw_excel_table.columns %}
+                    <td>{{ row|get_item:col }}</td>
+                    {% endfor %}
+                  </tr>
+                  {% empty %}
+                  <tr>
+                    <td colspan="{{ tab.raw_excel_table.columns|length }}" class="text-muted">No data</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
   </div>
   {% endif %}
   {% elif tab.data %}
