@@ -10,8 +10,8 @@
     },
     "pending_shipments": [],
     "outbound_kpi": {
-      "released_orders": 132,
-      "picked_orders": 10456,
+      "released_orders": 85,
+      "picked_orders": 5884,
       "number_of_pallets": 0
     },
     "outbound_kpi_keys_from_sheet": [
@@ -33,6 +33,6 @@
       "total_lpns": 0,
       "utilization_pct": ""
     },
-    "_file_mtime": 1773518837.1495287
+    "_file_mtime": 1773628385.9975934
   }
 }

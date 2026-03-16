@@ -1187,7 +1187,7 @@
                     <td>{{ row.pending|default:0 }}</td>
                     <td>{% if row.empty != None %}{{ row.empty }}{% else %}{{ row.available_space|default:"" }}{% endif %}</td>
                     <td>{{ row.location|default:"" }}</td>
-                    <td>{% if row.percentage != None %}{{ row.percentage }}%{% else %}{{ row.utilization_pct|default:"" }}{% endif %}</td>
+                    <td>{% if row.percentage != None %}{{ row.percentage|floatformat:0 }}%{% else %}{{ row.utilization_pct|default:"" }}{% endif %}</td>
                   </tr>
                   {% empty %}
                   <tr>

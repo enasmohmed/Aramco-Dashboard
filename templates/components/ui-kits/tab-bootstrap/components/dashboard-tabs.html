@@ -396,12 +396,9 @@
             id="dashboard-tabs"
             role="tablist"
           >
-            <li class="nav-item" role="presentation">
-              <button class="nav-link active" data-tab="all">All-in-One</button>
-            </li>
             {% for tab in excel_tabs %} {% if tab.display|lower != "all" %}
             <li class="nav-item" role="presentation">
-              <button class="nav-link" data-tab="{{ tab.original }}">
+              <button class="nav-link{% if forloop.first %} active{% endif %}" data-tab="{{ tab.original }}">
                 {{ tab.display }}
               </button>
             </li>
@@ -538,7 +535,7 @@
     const csrftoken = document.querySelector(
       "[name=csrfmiddlewaretoken]",
     ).value;
-    let selectedTab = "all";
+    let selectedTab = $("#dashboard-tabs button.nav-link.active").first().data("tab") || "dashboard";
     let selectedQuarter = "";
     const TAB_CACHE_PREFIX = "dashboard_tab_cache";
     const TAB_CACHE_VERSION = "v7_table_style"; // زيدي الرقم عند تحديث شكل الجداول
@@ -597,8 +594,7 @@
       }
     }
 
-    $("#dashboard-tabs button[data-tab='all']").addClass("active");
-    $("#cards-section").show();
+    $("#cards-section").hide();
 
     // 🔹 دالة عرض الكروت (Overview)
     function renderCardsHTML(tabCards) {

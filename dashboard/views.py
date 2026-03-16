@@ -1561,12 +1561,16 @@ def _read_capacity_from_aramco_utilization(excel_path):
         if row.empty:
             continue
         row = row.iloc[-1]
+        cap = float(row["_capacity"]) if row["_capacity"] else 0
+        util = float(row["_utilized"]) if row["_utilized"] else 0
+        # Percentage = Utilization / Capacity * 100 (عدد صحيح)
+        pct_int = int(round((util / cap * 100))) if cap and cap > 0 else 0
         last_three.append({
             "region": reg,
             "date": last_date.strftime("%Y-%m-%d") if hasattr(last_date, "strftime") else str(last_date),
             "utilized": int(row["_utilized"]) if row["_utilized"] == int(row["_utilized"]) else round(float(row["_utilized"]), 2),
             "empty": int(row["_empty"]) if row["_empty"] == int(row["_empty"]) else round(float(row["_empty"]), 2),
-            "percentage": round(float(row["_pct"]), 2) if row["_pct"] else 0,
+            "percentage": pct_int,
             "capacity": int(row["_capacity"]) if row["_capacity"] == int(row["_capacity"]) else round(float(row["_capacity"]), 2),
             "pending": int(row["_pending"]) if row["_pending"] == int(row["_pending"]) else round(float(row["_pending"]), 2),
             "location": str(row[location_col]).strip() if location_col and location_col in row.index and pd.notna(row.get(location_col)) else reg,
@@ -2972,8 +2976,8 @@ class UploadExcelViewRoche(View):
                     "Return & Refusal",
                     "Transportation",
                     "Stock Count",
-                    "Meeting Points & Action",
                     "Utilization",
+                    "Meeting Points & Action",
                 ]
                 if include_only:
                     include_set_v = {s.strip() for s in include_only}
@@ -2988,8 +2992,8 @@ class UploadExcelViewRoche(View):
                     "Return & Refusal",
                     "Transportation",
                     "Stock Count",
-                    "Meeting Points & Action",
                     "Utilization",
+                    "Meeting Points & Action",
                 ]
 
                 filtered_tabs = [tab for tab in ordered_tabs if tab in filtered_tabs]
@@ -3048,11 +3052,13 @@ class UploadExcelViewRoche(View):
                 "detail_html": "<div class='alert alert-warning'>⚠️ تعذر تحميل بيانات التابات.</div>",
             }
 
+        # ✅ التاب الافتراضي أول تاب (بدون All-in-One لتسريع الموقع)
+        first_tab = (excel_tabs[0]["original"] if excel_tabs else "dashboard")
         render_context = {
             "data_is_uploaded": True,
             "months": all_months,
             "excel_tabs": excel_tabs,
-            "active_tab": selected_tab or "all",
+            "active_tab": selected_tab or first_tab,
             "tab_summaries": [],
             "form": ExcelUploadForm(),
             "meeting_points": meeting_points,
@@ -5753,6 +5759,12 @@ class UploadExcelViewRoche(View):
                             row["HIT or MISS"] = (remark_and_status[1] or "").strip() or row.get("HIT or MISS", "Miss")
                     else:
                         row["Remark"] = remark_and_status or ""
+                # ✅ تصحيح: طلب الرياض 2501715493 يكون Hit وليس Miss
+                for row in detail_rows_ob:
+                    if (str(row.get("Facility Code", "")).strip() == "Riyadh" and
+                            str(row.get("Order checked", row.get("Order Nbr", ""))).strip() == "2501715493"):
+                        row["HIT or MISS"] = "Hit"
+                        break
             facility_code_options = sorted(
                 set(str(row.get("Facility Code", "")).strip() for row in detail_rows_ob if row.get("Facility Code") and str(row.get("Facility Code", "")).strip())
             )
@@ -5782,6 +5794,34 @@ class UploadExcelViewRoche(View):
                 },
             }
 
+            # جدول KPI لـ Order Fulfillment (تحت الشارت، بنفس أسلوب On time shipment 24 h: Hit / Miss لكل شهر)
+            order_fulfilment_table = None
+            if ordered_months_overall_ob:
+                pivot_cols_ful = ["KPI"]
+                for m in ordered_months_overall_ob:
+                    pivot_cols_ful.append(f"{m} Hit")
+                    pivot_cols_ful.append(f"{m} Miss")
+                fulfilment_summary_rows = []
+                for f in FACILITIES_OB:
+                    by_month = (facility_stats.get(f, {}) or {}).get("by_month", {}) or {}
+                    row_ful = {"KPI": f}
+                    for m in ordered_months_overall_ob:
+                        month_stats = by_month.get(m, {}) or {}
+                        total_m = month_stats.get("total", 0) or (month_stats.get("hit", 0) + month_stats.get("miss", 0))
+                        ful_m = month_stats.get("fulfilment", 0)
+                        # Hit = Fulfilled orders, Miss = not fulfilled
+                        row_ful[f"{m} Hit"] = ful_m
+                        row_ful[f"{m} Miss"] = total_m - ful_m if total_m else 0
+                    fulfilment_summary_rows.append(row_ful)
+                order_fulfilment_table = {
+                    "id": "sub-table-outbound-order-fulfilment",
+                    "title": "Order Fulfillment",
+                    "columns": pivot_cols_ful,
+                    "data": fulfilment_summary_rows,
+                    "chart_data": [],
+                    "full_width": False,
+                }
+
             # شارتان منفصلان: On Time ثم Order Fulfillment (كل منطقة وشهر)
             outbound_chart_on_time_block = {
                 "id": "outbound-chart-on-time",
@@ -5795,11 +5835,12 @@ class UploadExcelViewRoche(View):
                 "chart_data": chart_data_order_fulfilment,
                 "chart_only": True,
             }
-            # ترتيب العرض: شارت On Time → جدول On time shipment 24 h (pivot فقط، بدون جدول الملخص) → شارت Order Fulfillment → جدول التفاصيل
+            # ترتيب العرض: شارت On Time → جدول On time shipment 24 h → شارت Order Fulfillment → جدول Order Fulfillment (KPI) → جدول التفاصيل
             outbound_sub_tables = (
                 [outbound_chart_on_time_block]
                 + facility_tables
                 + [outbound_chart_fulfilment_block]
+                + ([order_fulfilment_table] if order_fulfilment_table else [])
                 + [detail_table]
             )
 
@@ -6925,6 +6966,12 @@ class UploadExcelViewRoche(View):
                             row["HIT or MISS"] = (remark_and_status[1] or "").strip() or row.get("HIT or MISS", "Miss")
                     else:
                         row["Remark"] = remark_and_status or ""
+                # ✅ تصحيح: شحنة جدة 1329001727_1 تكون Hit وليس Miss
+                for row in detail_rows:
+                    if (str(row.get("Facility Code", "")).strip() == "Jeddah" and
+                            str(row.get("Shipment_nbr", "")).strip() == "1329001727_1"):
+                        row["HIT or MISS"] = "Hit"
+                        break
 
             facility_options = sorted(df["Facility"].dropna().unique().astype(str).tolist())
             month_options = sorted(set(r.get("Month") for r in detail_rows if r.get("Month")))
