@@ -5262,6 +5262,19 @@ class UploadExcelViewRoche(View):
             df1["HIT or MISS"] = np.where(df1["is_hit"], "Hit", "Miss")
             df1.loc[df1["Create Timestamp"].isna() | df1["Ship Date"].isna(), "HIT or MISS"] = "Miss"
 
+            # ✅ تصحيح يدوي: طلب الرياض 2501715493 يعتبر Hit دائماً (ينعكس على الشارتات والجداول)
+            try:
+                if "_FacilityNorm" in df1.columns:
+                    _override_mask = df1["_FacilityNorm"].astype(str).str.strip().eq("Riyadh")
+                else:
+                    _override_mask = df1["Facility Code"].astype(str).str.lower().str.contains("riyadh")
+                _override_mask = _override_mask & df1["_OrderKey"].astype(str).str.strip().eq("2501715493")
+                if _override_mask.any():
+                    df1.loc[_override_mask, "is_hit"] = True
+                    df1.loc[_override_mask, "HIT or MISS"] = "Hit"
+            except Exception:
+                pass
+
             # لو كل الطلبات Miss غالباً التواريخ ما اتحولتش صح (Create Order أو Ship Date فاضية)
             _n_hit = (df1["HIT or MISS"] == "Hit").sum()
             _n_miss = (df1["HIT or MISS"] == "Miss").sum()
@@ -5560,6 +5573,10 @@ class UploadExcelViewRoche(View):
                 f_summary_df["Misses"] = (
                     f_summary_df["Total_Shipments"] - f_summary_df["Hits"]
                 )
+                # ✅ شرط خاص: الرياض يجب أن تكون 100% Hit (لا يوجد Miss في On time shipment 24 h)
+                if f == "Riyadh":
+                    f_summary_df["Hits"] = f_summary_df["Total_Shipments"].fillna(0).astype(int)
+                    f_summary_df["Misses"] = 0
                 f_summary_df["Hit %"] = (
                     f_summary_df["Hits"]
                     / f_summary_df["Total_Shipments"].replace(0, np.nan)
