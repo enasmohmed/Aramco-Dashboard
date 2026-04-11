@@ -114,6 +114,44 @@ def _sanitize_for_json(obj):
     return obj
 
 
+def _yyyy_mm_filter_choice_rows(sorted_yyyy_mm):
+    """
+    Month filter options: value is YYYY-MM for data-attribute matching;
+    label is short English text e.g. Jan 2026, Feb 2026.
+    """
+    _en_mo = (
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+    )
+    rows = []
+    if not sorted_yyyy_mm:
+        return rows
+    for x in sorted(sorted_yyyy_mm):
+        s = str(x).strip()[:7] if x is not None else ""
+        if len(s) < 7 or s[4] != "-":
+            continue
+        try:
+            y = int(s[0:4])
+            m = int(s[5:7])
+            if not (1 <= m <= 12):
+                raise ValueError
+            label = f"{_en_mo[m - 1]} {y}"
+        except (ValueError, TypeError):
+            label = s
+        rows.append({"value": s, "label": label})
+    return rows
+
+
 def _get_excel_path_for_request(request):
     """يرجع مسار ملف الإكسل المرفوع من الجلسة أو المجلد الافتراضي."""
     if not request:
@@ -2793,7 +2831,17 @@ class UploadExcelViewRoche(View):
                 norm = os.path.normpath(os.path.abspath(excel_path or ""))
                 mtime = _get_file_mtime(excel_path) or 0
                 q = ",".join(sorted(quarter_months)) if quarter_months else ""
-                return f"tab_resp:{norm}:{mtime}:{selected_tab}:{effective_month or ''}:{q}"
+                ts = ""
+                if "transportation" in (selected_tab or "").lower():
+                    ts = "|".join(
+                        [
+                            (request.GET.get("transport_primary_months") or "").strip(),
+                            (request.GET.get("transport_primary_region") or "").strip(),
+                            (request.GET.get("transport_normal_months") or "").strip(),
+                            (request.GET.get("transport_normal_region") or "").strip(),
+                        ]
+                    )
+                return f"tab_resp:{norm}:{mtime}:{selected_tab}:{effective_month or ''}:{q}:{ts}"
 
             for key, func in tab_filter_map.items():
                 if key in selected_tab:
@@ -6990,6 +7038,127 @@ class UploadExcelViewRoche(View):
                         row["HIT or MISS"] = "Hit"
                         break
 
+                # Pivot "On time inbound Receiving…" كان يُبنى من الحساب قبل Remark/status_override،
+                # فيظهر Miss في شهر معيّن بينما الجدول التفصيلي Hit. نُعيد التجميع من detail_rows النهائي.
+                by_f_m = {f: {} for f in FACILITIES}
+                for r in detail_rows:
+                    fac = r.get("Facility Code")
+                    if fac not in by_f_m:
+                        continue
+                    m = (r.get("Month") or "").strip()
+                    if not m:
+                        continue
+                    hm = (r.get("HIT or MISS") or "").strip().lower()
+                    if m not in by_f_m[fac]:
+                        by_f_m[fac][m] = {"total": 0, "hit": 0, "miss": 0}
+                    if hm == "hit":
+                        by_f_m[fac][m]["total"] += 1
+                        by_f_m[fac][m]["hit"] += 1
+                    elif hm == "miss":
+                        by_f_m[fac][m]["total"] += 1
+                        by_f_m[fac][m]["miss"] += 1
+                hm_map = {
+                    (r.get("Facility Code"), str(r.get("Shipment_nbr", "")).strip()): r.get("HIT or MISS")
+                    for r in detail_rows
+                    if r.get("Shipment_nbr")
+                }
+                for fac in FACILITIES:
+                    by_month = by_f_m.get(fac, {})
+                    for m in by_month:
+                        t = by_month[m]["total"]
+                        by_month[m]["hit_pct"] = round((by_month[m]["hit"] / t) * 100, 2) if t else 0
+                        by_month[m]["miss_pct"] = round((by_month[m]["miss"] / t) * 100, 2) if t else 0
+                    ordered_m = sorted(by_month.keys(), key=lambda x: month_order_value(x))
+                    months_wm = [mx for mx in ordered_m if by_month[mx]["miss"] > 0]
+                    hits_f = sum(by_month[m]["hit"] for m in by_month)
+                    misses_f = sum(by_month[m]["miss"] for m in by_month)
+                    total_f = hits_f + misses_f
+                    facility_stats[fac]["by_month"] = by_month
+                    facility_stats[fac]["ordered_months"] = ordered_m
+                    facility_stats[fac]["months_with_miss"] = months_wm
+                    facility_stats[fac]["hit"] = hits_f
+                    facility_stats[fac]["miss"] = misses_f
+                    facility_stats[fac]["total"] = total_f
+                    facility_stats[fac]["hit_pct"] = round((hits_f / total_f) * 100, 2) if total_f else 0
+                    facility_stats[fac]["miss_pct"] = round((misses_f / total_f) * 100, 2) if total_f else 0
+                    for row in facility_stats[fac].get("rows", []):
+                        k = (fac, str(row.get("Shipment_nbr", "")).strip())
+                        if k in hm_map and hm_map[k]:
+                            row["HIT or MISS"] = hm_map[k]
+
+                all_months = set()
+                for s in facility_stats.values():
+                    all_months.update((s.get("by_month") or {}).keys())
+                ordered_months_overall = sorted(all_months, key=lambda x: month_order_value(x))
+                facility_colors = {
+                    "Riyadh": "#9084ad",
+                    "Dammam": "#a4aeb8",
+                    "Jeddah": "#538fe7",
+                }
+                chart_data = []
+                if ordered_months_overall:
+                    for f in FACILITIES:
+                        stats_f = facility_stats.get(f, {})
+                        by_month = stats_f.get("by_month", {}) or {}
+                        data_points_hit = [
+                            {"label": m, "y": by_month.get(m, {}).get("hit_pct", 0)}
+                            for m in ordered_months_overall
+                        ]
+                        chart_data.append(
+                            {
+                                "type": "column",
+                                "name": f"{f} Hit %",
+                                "color": facility_colors.get(f, "#74c0fc"),
+                                "valueSuffix": "%",
+                                "related_table": "sub-table-inbound-facilities-hit",
+                                "dataPoints": data_points_hit,
+                            }
+                        )
+                facility_tables = []
+                if ordered_months_overall:
+                    pivot_cols = ["KPI"]
+                    for m in ordered_months_overall:
+                        pivot_cols.append(f"{m} Hit")
+                        pivot_cols.append(f"{m} Miss")
+                    summary_rows = []
+                    for f in FACILITIES:
+                        s = facility_stats[f]
+                        by_month = s.get("by_month", {}) or {}
+                        row = {"KPI": f}
+                        for m in ordered_months_overall:
+                            b = by_month.get(m, {}) or {}
+                            row[f"{m} Hit"] = b.get("hit", 0)
+                            row[f"{m} Miss"] = b.get("miss", 0)
+                        summary_rows.append(row)
+                    facility_tables.append(
+                        {
+                            "id": "sub-table-inbound-facilities-hit",
+                            "title": (
+                                "Return KPI ≤ 2d (working days excl. Friday) — Hit by Facility"
+                                if is_return_tab
+                                else "On time inbound Receiving(1 day from offloading date)"
+                            ),
+                            "columns": pivot_cols,
+                            "data": summary_rows,
+                            "chart_data": [],
+                            "full_width": False,
+                            "facility_name": "All Facilities",
+                            "is_first_facility": True,
+                        }
+                    )
+                overall_total = sum(facility_stats[f]["total"] for f in FACILITIES)
+                overall_hits = sum(facility_stats[f]["hit"] for f in FACILITIES)
+                overall_miss = sum(facility_stats[f]["miss"] for f in FACILITIES)
+                overall_hit_pct = round((overall_hits / overall_total) * 100, 2) if overall_total else 0
+                overall_miss_pct = round((overall_miss / overall_total) * 100, 2) if overall_total else 0
+                aggregated_kpi_table["data"] = [
+                    {"KPI": "Hit %", "2025": round(overall_hit_pct, 2)},
+                    {"KPI": "Miss %", "2025": round(overall_miss_pct, 2)},
+                    {"KPI": "Hit (≤2d)", "2025": overall_hits},
+                    {"KPI": "Miss (>2d)", "2025": overall_miss},
+                    {"KPI": "Total Shipments", "2025": overall_total},
+                ]
+
             facility_options = sorted(df["Facility"].dropna().unique().astype(str).tolist())
             month_options = sorted(set(r.get("Month") for r in detail_rows if r.get("Month")))
             detail_table = {
@@ -7027,6 +7196,13 @@ class UploadExcelViewRoche(View):
                         _seen[_safe] = 0
                     _full_columns.append(_safe)
                     _safe_to_orig[_safe] = _c
+                hm_by_ship_fac = {}
+                for r in detail_rows:
+                    _sn = str(r.get("Shipment_nbr", "")).strip()
+                    _fc = str(r.get("Facility Code", "")).strip()
+                    if _sn:
+                        hm_by_ship_fac[(_sn, _fc)] = (r.get("HIT or MISS") or "").strip()
+
                 _full_data = []
                 for _, _row in _full_df.iterrows():
                     _d = {}
@@ -7042,6 +7218,24 @@ class UploadExcelViewRoche(View):
                                 _d[_safe_c] = str(_v)
                         else:
                             _d[_safe_c] = _v
+                    _fnorm = ""
+                    if "_FacilityNorm" in _row.index and pd.notna(_row.get("_FacilityNorm")):
+                        _fnorm = str(_row["_FacilityNorm"]).strip()
+                    _sn = ""
+                    if "Shipment_nbr" in _row.index and pd.notna(_row.get("Shipment_nbr")):
+                        _sn = str(_row["Shipment_nbr"]).strip()
+                    _mv = ""
+                    if "Month" in _row.index and pd.notna(_row.get("Month")):
+                        _mv = str(_row["Month"]).strip()
+                    if not _mv or _mv.lower() == "nan":
+                        _cdt = _row.get("Create_shipment_DT")
+                        if _cdt is not None and pd.notna(_cdt) and hasattr(_cdt, "strftime"):
+                            _mv = _cdt.strftime("%b")
+                    _hm = hm_by_ship_fac.get((_sn, _fnorm), "")
+                    # نفس مفاتيح Inbound Shipments Detail للفلاتر (غير معروضة كأعمدة — فقط في الصف)
+                    _d["Facility Code"] = _fnorm
+                    _d["Month"] = _mv
+                    _d["HIT or MISS"] = _hm
                     _full_data.append(_d)
                 _full_title = "Inbound Report"
                 full_sheet_table = {
@@ -7051,7 +7245,12 @@ class UploadExcelViewRoche(View):
                     "data": _full_data,
                     "chart_data": [],
                     "full_width": True,
-                    "filter_options": None,
+                    "filter_options": {
+                        "facility_codes": list(detail_table["filter_options"]["facility_codes"]),
+                        "months": list(detail_table["filter_options"]["months"]),
+                        "statuses": list(detail_table["filter_options"]["statuses"]),
+                        "hit_miss": list(detail_table["filter_options"]["hit_miss"]),
+                    },
                     "full_sheet_scroll": True,
                 }
                 sub_tables.append(full_sheet_table)
@@ -7595,7 +7794,29 @@ class UploadExcelViewRoche(View):
                         "use_unified_table": True,
                     })
 
-            # ----- 3) From Factory to WH و Normal delivery: شارت (Achieved % / Achieved) + جدول بكل شهر بلونين -----
+            # ----- 3) Primary transportation (شيت From Factory to WH أو Primary transportation) و Normal delivery -----
+            def _sheet_uses_kpi_month_merge(nm):
+                s = (nm or "").strip().lower()
+                return s in ("from factory to wh", "primary transportation") or s == "normal delivery"
+
+            def _resolve_transport_sheet(xls, candidate_names):
+                for name in candidate_names:
+                    for s in xls.sheet_names:
+                        if (s or "").strip() == name:
+                            return (s or "").strip()
+                return None
+
+            tp_m_raw = (request.GET.get("transport_primary_months") or "").strip()
+            transport_primary_months = (
+                [x.strip() for x in tp_m_raw.split(",") if x.strip()][:2] if tp_m_raw else []
+            )
+            transport_primary_region = (request.GET.get("transport_primary_region") or "").strip()
+            tn_m_raw = (request.GET.get("transport_normal_months") or "").strip()
+            transport_normal_months = (
+                [x.strip() for x in tn_m_raw.split(",") if x.strip()][:2] if tn_m_raw else []
+            )
+            transport_normal_region = (request.GET.get("transport_normal_region") or "").strip()
+
             def _achieved_to_pct_val(v):
                 """إذا القيمة بين 0 و 1.5 تعتبر كسر (مثلاً 1 = 100%) وإلا نسبة جاهزة."""
                 try:
@@ -7608,9 +7829,16 @@ class UploadExcelViewRoche(View):
                 except (ValueError, TypeError):
                     return 0
 
-            def _read_transport_sheet_for_chart_table(sheet_name, achieved_col_names, excel_path, xls):
+            def _read_transport_sheet_for_chart_table(
+                sheet_name,
+                achieved_col_names,
+                excel_path,
+                xls,
+                filter_months=None,
+                filter_region=None,
+            ):
                 """يقرأ شيت ويرجع chart_data (أعمدة من عمود Achieved % أو Achieved) وجدول مع row_bg لكل شهر بلونين.
-                لشيت From Factory to WH: إن وُجد عمود KPI (Delivery Fulfilment, On Time Delivery, PODs submission)
+                لشيت Primary transportation / From Factory to WH: إن وُجد عمود KPI (Delivery Fulfilment, On Time Delivery, PODs submission)
                 يُعرض شهر يناير بثلاثة أعمدة جنب بعض، والقيم تُعامل كـ 100% إذا كانت 1 (كسر)."""
                 sh = next((s for s in xls.sheet_names if (s or "").strip() == sheet_name), None)
                 if not sh:
@@ -7651,9 +7879,21 @@ class UploadExcelViewRoche(View):
                 ).fillna(0)
                 # للعرض: تحويل كسر (0–1) إلى نسبة (100%)
                 df["_achieved_num"] = df["_achieved_raw"].apply(lambda v: _achieved_to_pct_val(v))
-                # عمود KPI (لشيت From Factory to WH و Normal delivery: ثلاثة أعمدة لكل شهر)
+                region_col = None
+                for c in df.columns:
+                    if str(c).strip().upper() == "REGION":
+                        region_col = c
+                        break
+                if region_col is None:
+                    for c in df.columns:
+                        if str(c).strip().startswith("_"):
+                            continue
+                        if "region" in str(c).lower():
+                            region_col = c
+                            break
+                # عمود KPI (لشيت Primary transportation / From Factory to WH و Normal delivery: ثلاثة أعمدة لكل شهر)
                 kpi_col = None
-                if (sheet_name or "").strip() in ("From Factory to WH", "Normal delivery"):
+                if _sheet_uses_kpi_month_merge(sheet_name):
                     for c in df.columns:
                         if (c or "").strip().lower() == "kpi" or "kpi" in (c or "").lower():
                             kpi_col = c
@@ -7666,8 +7906,8 @@ class UploadExcelViewRoche(View):
                 else:
                     df["_month_str"] = pd.Series([""] * len(df))
                 # في الإكسل الخلايا المدمجة تعطي القيمة في الصف الأول فقط — نملأ الشهر والـ KPI فقط
-                # شيت From Factory to WH: عمود Achieved % فيه قيمة لكل صف (90%، 94%، 100%) فلا نملأه
-                if (sheet_name or "").strip() in ("From Factory to WH", "Normal delivery"):
+                # شيت Primary transportation / From Factory to WH: عمود Achieved % فيه قيمة لكل صف (90%، 94%، 100%) فلا نملأه
+                if _sheet_uses_kpi_month_merge(sheet_name):
                     if month_col and month_col in df.columns:
                         df[month_col] = df[month_col].ffill()
                         df["_month_str"] = df[month_col].astype(str).str.strip().replace("nan", "", regex=False).fillna("")
@@ -7680,6 +7920,51 @@ class UploadExcelViewRoche(View):
                             errors="coerce",
                         ).fillna(0)
                         df["_achieved_num"] = df["_achieved_raw"].apply(lambda v: _achieved_to_pct_val(v))
+                month_filter_options = []
+                if "_month_str" in df.columns:
+                    for m in df["_month_str"]:
+                        ms = str(m).strip()
+                        if ms and ms.lower() != "nan" and ms not in month_filter_options:
+                            month_filter_options.append(ms)
+                region_filter_options = []
+                if region_col and region_col in df.columns:
+                    for rv in df[region_col].astype(str).str.strip().unique():
+                        if rv and rv.lower() != "nan" and rv not in region_filter_options:
+                            region_filter_options.append(rv)
+                    region_filter_options.sort(key=lambda x: str(x).lower())
+                fm_list = [x for x in (filter_months or []) if (str(x).strip())][:2]
+                if fm_list and "_month_str" in df.columns:
+                    def _row_matches_month(r):
+                        raw = str(r.get("_month_str", "")).strip()
+                        if not raw or raw.lower() == "nan":
+                            return False
+                        for fm in fm_list:
+                            nm = self.normalize_month_label(fm)
+                            nr = self.normalize_month_label(raw)
+                            if nm and nr and str(nm).lower() == str(nr).lower():
+                                return True
+                            if str(fm).strip().lower() == raw.lower():
+                                return True
+                        return False
+
+                    df = df[df.apply(_row_matches_month, axis=1)].copy()
+                if filter_region and region_col and region_col in df.columns:
+                    needle = str(filter_region).strip().lower()
+                    df = df[df[region_col].astype(str).str.strip().str.lower() == needle].copy()
+                display_columns_base = [
+                    c for c in df.columns if c not in ("_achieved_num", "_month_str", "_achieved_raw")
+                ]
+                if df.empty:
+                    return {
+                        "chart_data": [],
+                        "columns": display_columns_base,
+                        "data": [],
+                        "achieved_col": achieved_col,
+                        "merge_columns": [],
+                        "filter_month_options": month_filter_options,
+                        "filter_region_options": region_filter_options,
+                    }
+
                 def _chart_label(s):
                     """إزالة nan من التسميات على الشارت."""
                     if s is None or (isinstance(s, float) and pd.isna(s)):
@@ -7800,7 +8085,7 @@ class UploadExcelViewRoche(View):
                     table_rows.append(row_dict)
                 # دمج خلايا الشهر و KPI و Achieved % لكل مجموعة (كما كان في الأول)
                 merge_columns = []
-                if (sheet_name or "").strip() in ("From Factory to WH", "Normal delivery") and month_col and month_col in df.columns and kpi_col and kpi_col in df.columns:
+                if _sheet_uses_kpi_month_merge(sheet_name) and month_col and month_col in df.columns and kpi_col and kpi_col in df.columns:
                     merge_columns = [month_col, kpi_col, achieved_col]
                     prev_key = None
                     group_start = 0
@@ -7849,20 +8134,29 @@ class UploadExcelViewRoche(View):
                     "data": table_rows,
                     "achieved_col": achieved_col,
                     "merge_columns": merge_columns,
+                    "filter_month_options": month_filter_options,
+                    "filter_region_options": region_filter_options,
                 }
 
-            from_factory_sheet = "From Factory to WH"
-            normal_delivery_sheet = "Normal delivery"
-            from_factory_data = _read_transport_sheet_for_chart_table(
-                from_factory_sheet,
-                ["Achieved %", "Achieved%", "ACHIEVED %", "Achieved"],
-                excel_path,
+            primary_sheet_resolved = _resolve_transport_sheet(
                 xls,
+                ("From Factory to WH", "Primary transportation", "Primary Transportation"),
             )
+            normal_delivery_sheet = "Normal delivery"
+            from_factory_data = None
+            if primary_sheet_resolved:
+                from_factory_data = _read_transport_sheet_for_chart_table(
+                    primary_sheet_resolved,
+                    ["Achieved %", "Achieved%", "ACHIEVED %", "Achieved"],
+                    excel_path,
+                    xls,
+                    filter_months=transport_primary_months or None,
+                    filter_region=transport_primary_region or None,
+                )
             if from_factory_data:
                 sub_tables.append({
                     "id": "transportation-from-factory-wh",
-                    "title": from_factory_sheet,
+                    "title": "Primary transportation",
                     "chart_data": from_factory_data["chart_data"],
                     "columns": from_factory_data["columns"],
                     "data": from_factory_data["data"],
@@ -7870,12 +8164,20 @@ class UploadExcelViewRoche(View):
                     "use_unified_table": False,
                     "transport_sheet_chart_table": True,
                     "chart_full_width": True,
+                    "filter_param_months": "transport_primary_months",
+                    "filter_param_region": "transport_primary_region",
+                    "filter_month_options": from_factory_data.get("filter_month_options", []),
+                    "filter_region_options": from_factory_data.get("filter_region_options", []),
+                    "filter_month_selected": transport_primary_months,
+                    "filter_region_selected": transport_primary_region,
                 })
             normal_delivery_data = _read_transport_sheet_for_chart_table(
                 normal_delivery_sheet,
                 ["Achieved", "Achieved %", "ACHIEVED", "Achieved%"],
                 excel_path,
                 xls,
+                filter_months=transport_normal_months or None,
+                filter_region=transport_normal_region or None,
             )
             if normal_delivery_data:
                 sub_tables.append({
@@ -7888,6 +8190,12 @@ class UploadExcelViewRoche(View):
                     "use_unified_table": False,
                     "transport_sheet_chart_table": True,
                     "chart_full_width": True,
+                    "filter_param_months": "transport_normal_months",
+                    "filter_param_region": "transport_normal_region",
+                    "filter_month_options": normal_delivery_data.get("filter_month_options", []),
+                    "filter_region_options": normal_delivery_data.get("filter_region_options", []),
+                    "filter_month_selected": transport_normal_months,
+                    "filter_region_selected": transport_normal_region,
                 })
 
             tab_data = {
@@ -9230,6 +9538,15 @@ class UploadExcelViewRoche(View):
                 except Exception:
                     raw_data_rows.append({str(c): "" for c in raw_columns})
 
+            raw_excel_report_date_key = str(raw_columns[0]) if raw_columns else ""
+            raw_excel_month_options_set = set()
+            if raw_excel_report_date_key:
+                for _r in raw_data_rows:
+                    s = str(_r.get(raw_excel_report_date_key) or "").strip()
+                    if len(s) >= 7:
+                        raw_excel_month_options_set.add(s[:7])
+            raw_excel_month_options = _yyyy_mm_filter_choice_rows(raw_excel_month_options_set)
+
             df = df.rename(columns={
                 report_date_col: "Report_Date",
                 utilized_col: "Utilized_Hybrid",
@@ -9296,8 +9613,13 @@ class UploadExcelViewRoche(View):
                 if not chart_data_first:
                     chart_data_first = chart_data_region
                 table_rows_region = []
+                month_set_region = set()
                 for _, r in sub_df.iterrows():
                     v = float(r["Utilized_Hybrid"])
+                    ds = r["Report_Date_Str"]
+                    ds_str = str(ds) if ds is not None else ""
+                    if len(ds_str) >= 7:
+                        month_set_region.add(ds_str[:7])
                     table_rows_region.append({
                         "Report Date": r["Report_Date_Str"],
                         "Utilized (Hybrid)": int(v) if v == int(v) else round(v, 2),
@@ -9308,13 +9630,24 @@ class UploadExcelViewRoche(View):
                     "columns": table_columns,
                     "data": table_rows_region,
                     "chart_data": chart_data_region,
+                    "chart_data_json": json.dumps(chart_data_region, default=str),
+                    "month_options": _yyyy_mm_filter_choice_rows(month_set_region),
                     "full_width": True,
                     "chart_full_width": idx_reg == 0,
                 })
 
             # ─── ARAMCO SOH: Number Of Damages (فلترة بـ Facility ثم Lock Code غير الفارغ)، 4 كروت + جدول ───
             soh_damages_cards = []
-            soh_damages_table = {"columns": [], "data": []}
+            soh_damages_table = {
+                "columns": [],
+                "data": [],
+                "filter_options": {
+                    "facilities": [],
+                    "create_months": [],
+                    "batch_numbers": [],
+                    "lock_codes": [],
+                },
+            }
             soh_sheet_name = None
             for s in xls.sheet_names:
                 if (s or "").strip() == "ARAMCO SOH":
@@ -9426,6 +9759,10 @@ class UploadExcelViewRoche(View):
                                 return str(v).strip()
 
                             table_rows_soh = []
+                            fac_opts = set()
+                            create_month_opts = set()
+                            batch_opts = set()
+                            lock_opts = set()
                             for _, r in soh_filtered.iterrows():
                                 row_dict = {}
                                 for col, label in display_cols:
@@ -9434,7 +9771,25 @@ class UploadExcelViewRoche(View):
                                     else:
                                         row_dict[label] = ""
                                 table_rows_soh.append(row_dict)
+                                fv = (row_dict.get("Facility") or "").strip()
+                                if fv:
+                                    fac_opts.add(fv)
+                                cd = (row_dict.get("Create Date") or "").strip()
+                                if len(cd) >= 7:
+                                    create_month_opts.add(cd[:7])
+                                bv = (row_dict.get("Batch number") or "").strip()
+                                if bv:
+                                    batch_opts.add(bv)
+                                lv = (row_dict.get("Lock Code") or "").strip()
+                                if lv:
+                                    lock_opts.add(lv)
                             soh_damages_table["data"] = table_rows_soh
+                            soh_damages_table["filter_options"] = {
+                                "facilities": sorted(fac_opts),
+                                "create_months": _yyyy_mm_filter_choice_rows(create_month_opts),
+                                "batch_numbers": sorted(batch_opts),
+                                "lock_codes": sorted(lock_opts),
+                            }
                 except Exception as soh_err:
                     import traceback
                     traceback.print_exc()
@@ -9443,7 +9798,12 @@ class UploadExcelViewRoche(View):
                 "name": "Utilization",
                 "sub_tables": sub_tables,
                 "chart_data": chart_data_first,
-                "raw_excel_table": {"columns": raw_columns, "data": raw_data_rows},
+                "raw_excel_table": {
+                    "columns": raw_columns,
+                    "data": raw_data_rows,
+                    "report_date_col": raw_excel_report_date_key,
+                    "month_options": raw_excel_month_options,
+                },
                 "soh_damages_cards": soh_damages_cards,
                 "soh_damages_table": soh_damages_table,
             }
@@ -10850,26 +11210,10 @@ class MeetingPointListCreateView(View):
     template_name = "meeting_points.html"
 
     def get(self, request, *args, **kwargs):
-        status_filter = request.GET.get("status")  # "done" أو "pending" أو None
-
-        today = date.today()
-        current_month, current_year = today.month, today.year
-
-        # حساب الشهر السابق
-        if current_month == 1:
-            prev_month = 12
-            prev_year = current_year - 1
-        else:
-            prev_month = current_month - 1
-            prev_year = current_year
-
-        # ✅ جلب كل النقاط (الشهر الحالي كله + pending من الشهر السابق)
-        meeting_points = MeetingPoint.objects.filter(
-            Q(created_at__year=current_year, created_at__month=current_month)
-            | Q(created_at__year=prev_year, created_at__month=prev_month, is_done=False)
-        ).order_by("is_done", "-created_at")
-
-        # ✅ تطبيق الفلتر لو المستخدم اختار حاجة
+        status_filter = request.GET.get("status")  # "done" | "pending" | None / "all"
+        # نفس منطق meeting_points_tab: كل النقاط ثم فلترة الحالة.
+        # فلترة الشهر بـ __year/__month كانت تسبب 500 عند التقييم على SQLite/أنواع التاريخ.
+        meeting_points = MeetingPoint.objects.all().order_by("is_done", "-created_at")
         if status_filter == "done":
             meeting_points = meeting_points.filter(is_done=True)
         elif status_filter == "pending":
@@ -10890,29 +11234,132 @@ class MeetingPointListCreateView(View):
         )
 
     def post(self, request, *args, **kwargs):
+        import time
+
+        request_id = (request.POST.get("request_id") or "").strip()
         description = request.POST.get("description", "").strip()
         target_date = request.POST.get("target_date", "").strip() or None
         assigned_to = request.POST.get("assigned_to", "").strip() or None
 
-        if description:
-            point = MeetingPoint.objects.create(
-                description=description,
-                target_date=target_date,
-                assigned_to=assigned_to if assigned_to else None,
-            )
+        if not description:
+            return JsonResponse({"error": "Empty description"}, status=400)
 
-            return JsonResponse(
-                {
-                    "id": point.id,
-                    "description": point.description,
-                    "assigned_to": point.assigned_to,
-                    "created_at": str(point.created_at),
-                    "target_date": str(point.target_date),
-                    "is_done": point.is_done,
-                }
-            )
+        def _serialize_point(point):
+            return {
+                "id": point.id,
+                "description": point.description,
+                "assigned_to": point.assigned_to,
+                "created_at": (
+                    point.created_at.strftime("%Y-%m-%d")
+                    if hasattr(point.created_at, "strftime")
+                    else str(point.created_at)
+                ),
+                "target_date": (
+                    str(point.target_date) if point.target_date is not None else ""
+                ),
+                "is_done": point.is_done,
+            }
 
-        return JsonResponse({"error": "Empty description"}, status=400)
+        cache_key = f"mp_rid:{request_id}" if request_id else None
+        inflight_key = f"{cache_key}:inflight" if cache_key else None
+
+        # Cross-process idempotency: same request_id → same row (prevents double INSERT)
+        if cache_key:
+            cached_pk = cache.get(cache_key)
+            if cached_pk not in (None, "", "inflight"):
+                try:
+                    point = MeetingPoint.objects.filter(pk=int(cached_pk)).first()
+                    if point:
+                        return JsonResponse(_serialize_point(point))
+                except (TypeError, ValueError):
+                    pass
+
+        claimed_inflight = False
+        if cache_key and inflight_key:
+            if not cache.add(inflight_key, 1, 120):
+                for _ in range(100):
+                    time.sleep(0.02)
+                    v = cache.get(cache_key)
+                    if v not in (None, "", "inflight"):
+                        try:
+                            point = MeetingPoint.objects.filter(pk=int(v)).first()
+                            if point:
+                                return JsonResponse(_serialize_point(point))
+                        except (TypeError, ValueError):
+                            pass
+                return JsonResponse(
+                    {"error": "Duplicate request in progress"},
+                    status=409,
+                )
+            claimed_inflight = True
+
+        try:
+            # Session idempotency (same tab / same browser)
+            if request_id:
+                last_id = request.session.get("mp_last_request_id")
+                last_ts = request.session.get("mp_last_request_ts")
+                last_point_id = request.session.get("mp_last_point_id")
+                try:
+                    if last_id == request_id and last_ts and last_point_id:
+                        now_ts = timezone.now().timestamp()
+                        last_ts_f = float(last_ts)
+                        if (now_ts - last_ts_f) <= 30:
+                            point = MeetingPoint.objects.filter(id=last_point_id).first()
+                            if point:
+                                if cache_key:
+                                    cache.set(cache_key, point.id, 300)
+                                return JsonResponse(_serialize_point(point))
+                except Exception:
+                    pass
+
+            recent = (
+                MeetingPoint.objects.filter(description=description)
+                .order_by("-created_at")
+                .first()
+            )
+            if recent:
+                same_target = (str(recent.target_date) if recent.target_date else None) == (
+                    str(target_date) if target_date else None
+                )
+                same_assignee = (recent.assigned_to or None) == (assigned_to or None)
+                now = timezone.now()
+                is_recent = False
+                try:
+                    if hasattr(recent.created_at, "date"):
+                        is_recent = (now - recent.created_at).total_seconds() <= 60
+                    else:
+                        is_recent = (recent.created_at == now.date())
+                except Exception:
+                    try:
+                        is_recent = (str(recent.created_at) == str(now.date()))
+                    except Exception:
+                        is_recent = False
+                if same_target and same_assignee and is_recent:
+                    point = recent
+                else:
+                    point = MeetingPoint.objects.create(
+                        description=description,
+                        target_date=target_date,
+                        assigned_to=assigned_to if assigned_to else None,
+                    )
+            else:
+                point = MeetingPoint.objects.create(
+                    description=description,
+                    target_date=target_date,
+                    assigned_to=assigned_to if assigned_to else None,
+                )
+
+            if request_id:
+                request.session["mp_last_request_id"] = request_id
+                request.session["mp_last_request_ts"] = timezone.now().timestamp()
+                request.session["mp_last_point_id"] = point.id
+            if cache_key:
+                cache.set(cache_key, point.id, 300)
+
+            return JsonResponse(_serialize_point(point))
+        finally:
+            if claimed_inflight and inflight_key:
+                cache.delete(inflight_key)
 
 
 class ToggleMeetingPointView(View):

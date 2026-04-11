@@ -538,15 +538,89 @@
     let selectedTab = $("#dashboard-tabs button.nav-link.active").first().data("tab") || "dashboard";
     let selectedQuarter = "";
     const TAB_CACHE_PREFIX = "dashboard_tab_cache";
-    const TAB_CACHE_VERSION = "v7_table_style"; // زيدي الرقم عند تحديث شكل الجداول
+    const TAB_CACHE_VERSION = "v10_transport_month_panel"; // bump when tab HTML / chart init changes
     const TAB_CACHE_TTL_MS = 60 * 60 * 1000; // 60 دقيقة — عشان لما ترجع تفتح الموقع التابات تبقى محمّلة
+
+    window.transportationDetailFilters = window.transportationDetailFilters || {
+      primary_months: [],
+      primary_region: "",
+      normal_months: [],
+      normal_region: "",
+    };
+
+    function getTransportationFilterSignature() {
+      const f = window.transportationDetailFilters;
+      if (!f) return "";
+      return [
+        (f.primary_months || []).join(","),
+        f.primary_region || "",
+        (f.normal_months || []).join(","),
+        f.normal_region || "",
+      ].join("::");
+    }
 
     function buildTabCacheKey(tab, month, quarter) {
       const safeTab = (tab || "all").toLowerCase();
       const safeMonth = month && month !== "" ? month : "all";
       const safeQuarter = quarter && quarter !== "" ? quarter : "all";
-      return `${TAB_CACHE_PREFIX}:${TAB_CACHE_VERSION}:${safeTab}:${safeMonth}:${safeQuarter}`;
+      let extra = "";
+      if (safeTab === "transportation") {
+        extra = `:${getTransportationFilterSignature()}`;
+      }
+      return `${TAB_CACHE_PREFIX}:${TAB_CACHE_VERSION}:${safeTab}:${safeMonth}:${safeQuarter}${extra}`;
     }
+
+    function appendTransportationFilterParams(data) {
+      if ((selectedTab || "").toLowerCase() !== "transportation") return;
+      const f = window.transportationDetailFilters || {};
+      if (f.primary_months && f.primary_months.length) {
+        data.transport_primary_months = f.primary_months.slice(0, 2).join(",");
+      }
+      if (f.primary_region) data.transport_primary_region = f.primary_region;
+      if (f.normal_months && f.normal_months.length) {
+        data.transport_normal_months = f.normal_months.slice(0, 2).join(",");
+      }
+      if (f.normal_region) data.transport_normal_region = f.normal_region;
+    }
+
+    function destroyTabContentCharts() {
+      const tabEl = document.getElementById("tab-content");
+      if (!tabEl || !window.chartInstances) return;
+      tabEl.querySelectorAll("canvas").forEach(function (canvas) {
+        const id = canvas.id;
+        if (!id) return;
+        try {
+          if (window.chartInstances[id]) {
+            window.chartInstances[id].destroy();
+          }
+        } catch (e) {}
+        delete window.chartInstances[id];
+        if (window.chartLoadFunctions) delete window.chartLoadFunctions[id];
+        if (window.chartConfigs) delete window.chartConfigs[id];
+      });
+    }
+
+    window.updateTransportMonthToggleText = function ($wrap) {
+      const $label = $wrap.find(".transport-month-picker .transport-toggle-text");
+      const checked = $wrap
+        .find(".transport-month-cb:checked")
+        .map(function () {
+          return $(this).val();
+        })
+        .get();
+      $label.text(
+        checked.length
+          ? checked.join(" · ")
+          : "All months — open to select",
+      );
+    };
+
+    window.refreshTransportMonthDropdownLabels = function (root) {
+      const $root = root ? $(root) : $("#tab-content");
+      $root.find(".transport-filters-toolbar").each(function () {
+        window.updateTransportMonthToggleText($(this));
+      });
+    };
 
     function readTabCache(key) {
       try {
@@ -820,8 +894,11 @@
       if (selectedTab.toLowerCase() === "all") {
         const tabContent = $("#tab-content");
         if (data.detail_html && data.detail_html.trim() !== "") {
-          tabContent.html(data.detail_html).show();
-          reinitializeScripts(tabContent[0]);
+          // native innerHTML يحتفظ بوسوم <script> في الـ DOM حتى يعيدها reinitializeScripts وتُنفَّذ
+          const tabContentEl = tabContent[0];
+          tabContentEl.innerHTML = data.detail_html.trim();
+          tabContent.show();
+          reinitializeScripts(tabContentEl);
           attachInnerTabListeners(tabContent[0]);
 
           // ✅ رسم الشارتات من التابات — إذا الشارت دائرة (pie) نعرضه دائرة في All-in-One
@@ -850,56 +927,39 @@
       }
 
       if (data.detail_html && data.detail_html.trim() !== "") {
-        $("#tab-content").html(data.detail_html).show();
-        reinitializeScripts(document.getElementById("tab-content"));
+        destroyTabContentCharts();
+        const tabContentEl = document.getElementById("tab-content");
+        tabContentEl.innerHTML = data.detail_html.trim();
+        $("#tab-content").show();
+        reinitializeScripts(tabContentEl);
         attachInnerTabListeners(document.getElementById("tab-content"));
         queueInitialChartRefresh(document.getElementById("tab-content"));
         initInboundShipmentsDataTable(document.getElementById("tab-content"));
+        if (window.refreshTransportMonthDropdownLabels) {
+          window.refreshTransportMonthDropdownLabels(document.getElementById("tab-content"));
+        }
         if (selectedTab && selectedTab.toLowerCase() === "dashboard") {
+          // ✅ تحسين الأداء: استدعاء واحد كفاية بدل 3 مرات
           setTimeout(function () {
             if (window.initInboundPendingDonut) {
               window.initInboundPendingDonut();
               window.dispatchEvent(new Event("resize"));
             }
-          }, 100);
-          setTimeout(function () {
-            if (window.initInboundPendingDonut) {
-              window.initInboundPendingDonut();
-              window.dispatchEvent(new Event("resize"));
-            }
-          }, 500);
-          setTimeout(function () {
-            if (window.initInboundPendingDonut) {
-              window.initInboundPendingDonut();
-              window.dispatchEvent(new Event("resize"));
-            }
-          }, 1200);
+          }, 200);
           if (window.initPodsComplianceChart) {
             setTimeout(window.initPodsComplianceChart, 100);
-            setTimeout(window.initPodsComplianceChart, 500);
           }
           if (window.initPodsStatusDonut) {
             setTimeout(window.initPodsStatusDonut, 100);
-            setTimeout(window.initPodsStatusDonut, 500);
           }
           if (window.initReturnsComplianceChart) {
             setTimeout(window.initReturnsComplianceChart, 100);
-            setTimeout(window.initReturnsComplianceChart, 500);
           }
           if (window.initInventoryCapacityChart) {
             setTimeout(window.initInventoryCapacityChart, 100);
-            setTimeout(window.initInventoryCapacityChart, 500);
           }
         }
-        setTimeout(function () {
-          initInboundShipmentsDataTable(document.getElementById("tab-content"));
-        }, 300);
-        setTimeout(function () {
-          initInboundShipmentsDataTable(document.getElementById("tab-content"));
-        }, 500);
-        setTimeout(function () {
-          initInboundShipmentsDataTable(document.getElementById("tab-content"));
-        }, 1000);
+        // ✅ DataTable initialization مرة واحدة كفاية
       } else {
         $("#tab-content").html(
           "<div class='text-center text-muted'>No data available to display.</div>",
@@ -926,16 +986,20 @@
         handleTabResponse(cachedPayload, { fromCache: true });
       }
 
+      const ajaxData = { tab: selectedTab, month: month, quarter: quarter };
+      appendTransportationFilterParams(ajaxData);
+
       $.ajax({
         url: "{% url 'dashboard:upload_excel' %}",
         method: "GET",
         headers: { "X-Requested-With": "XMLHttpRequest" },
-        data: { tab: selectedTab, month: month, quarter: quarter },
+        data: ajaxData,
         beforeSend: function () {
           if (skipLoader) return;
           if (quarter) {
             $("#quarter-loader").show();
           }
+          destroyTabContentCharts();
           $("#tab-content").html(
             "<div class='text-center p-3 text-muted'>⏳ Loading data...</div>",
           );
@@ -943,7 +1007,8 @@
         success: function (data) {
           writeTabCache(cacheKey, data);
           handleTabResponse(data);
-          preloadOtherTabs(month, quarter);
+          // ✅ تحسين الأداء: إلغاء preloading التلقائي للتابات لأنه يسبب 7+ طلبات إضافية
+          // لو احتجنا نرجّعه لاحقاً نخليه اختياري وعلى idle فقط.
         },
         error: function (err) {
           $("#quarter-loader").hide();
@@ -967,11 +1032,15 @@
         if (tabName === currentTab) return;
         const key = buildTabCacheKey(tabName, month || "", quarter || "");
         if (readTabCache(key)) return;
+        const preloadData = { tab: tabName, month: month || "", quarter: quarter || "" };
+        if ((tabName || "").toLowerCase() === "transportation") {
+          appendTransportationFilterParams(preloadData);
+        }
         $.ajax({
           url: "{% url 'dashboard:upload_excel' %}",
           method: "GET",
           headers: { "X-Requested-With": "XMLHttpRequest" },
-          data: { tab: tabName, month: month || "", quarter: quarter || "" },
+          data: preloadData,
           success: function (data) {
             if (data && !data.error) writeTabCache(key, data);
           },
@@ -1004,6 +1073,12 @@
       if (selectedQuarter) {
         $("#month-select").val("");
       }
+      window.transportationDetailFilters = {
+        primary_months: [],
+        primary_region: "",
+        normal_months: [],
+        normal_region: "",
+      };
       loadTabData();
     });
 
@@ -1013,8 +1088,135 @@
         selectedQuarter = "";
         $("#quarter-select").val("");
       }
+      window.transportationDetailFilters = {
+        primary_months: [],
+        primary_region: "",
+        normal_months: [],
+        normal_region: "",
+      };
       // نجيب اسم التاب الحالي
       selectedTab = $(".nav-link.active").data("tab") || "overview";
+      loadTabData();
+    });
+
+    $(document).on("click", ".transport-month-dropdown-btn", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const picker = $(this).closest(".transport-month-picker");
+      const panel = picker.find(".transport-month-dropdown-panel");
+      const willOpen = panel.hasClass("d-none");
+      $(".transport-month-dropdown-panel").addClass("d-none");
+      $(".transport-month-dropdown-btn").attr("aria-expanded", "false");
+      if (willOpen) {
+        panel.removeClass("d-none");
+        $(this).attr("aria-expanded", "true");
+      }
+    });
+
+    $(document).on("click", ".transport-month-dropdown-panel", function (e) {
+      e.stopPropagation();
+    });
+
+    $(document).on("click", function (e) {
+      if ($(e.target).closest(".transport-month-picker").length) return;
+      $(".transport-month-dropdown-panel").addClass("d-none");
+      $(".transport-month-dropdown-btn").attr("aria-expanded", "false");
+    });
+
+    $(document).on("change", ".transport-month-cb", function () {
+      const wrap = $(this).closest(".transport-filters-toolbar");
+      const n = wrap.find(".transport-month-cb:checked").length;
+      if (n > 2) {
+        $(this).prop("checked", false);
+        alert("You can select at most 2 months.");
+        return;
+      }
+      if (window.updateTransportMonthToggleText) {
+        window.updateTransportMonthToggleText(wrap);
+      }
+    });
+
+    $(document).on("click", ".transport-apply-months", function () {
+      const wrap = $(this).closest(".transport-filters-toolbar");
+      const monthsParam = wrap.data("filter-months-param");
+      const months = wrap
+        .find(".transport-month-cb:checked")
+        .map(function () {
+          return $(this).val();
+        })
+        .get();
+      if (months.length > 2) {
+        alert("You can select at most 2 months.");
+        return;
+      }
+      window.transportationDetailFilters = window.transportationDetailFilters || {
+        primary_months: [],
+        primary_region: "",
+        normal_months: [],
+        normal_region: "",
+      };
+      if (monthsParam === "transport_primary_months") {
+        window.transportationDetailFilters.primary_months = months;
+      } else if (monthsParam === "transport_normal_months") {
+        window.transportationDetailFilters.normal_months = months;
+      }
+      loadTabData();
+    });
+
+    $(document).on("click", ".transport-apply-region", function () {
+      const wrap = $(this).closest(".transport-filters-toolbar");
+      const regionParam = wrap.data("filter-region-param");
+      const region = wrap.find(".transport-region-one").val() || "";
+      window.transportationDetailFilters = window.transportationDetailFilters || {
+        primary_months: [],
+        primary_region: "",
+        normal_months: [],
+        normal_region: "",
+      };
+      if (regionParam === "transport_primary_region") {
+        window.transportationDetailFilters.primary_region = region;
+      } else if (regionParam === "transport_normal_region") {
+        window.transportationDetailFilters.normal_region = region;
+      }
+      loadTabData();
+    });
+
+    $(document).on("click", ".transport-clear-months", function () {
+      const wrap = $(this).closest(".transport-filters-toolbar");
+      const monthsParam = wrap.data("filter-months-param");
+      wrap.find(".transport-month-cb").prop("checked", false);
+      window.transportationDetailFilters = window.transportationDetailFilters || {
+        primary_months: [],
+        primary_region: "",
+        normal_months: [],
+        normal_region: "",
+      };
+      if (monthsParam === "transport_primary_months") {
+        window.transportationDetailFilters.primary_months = [];
+      } else if (monthsParam === "transport_normal_months") {
+        window.transportationDetailFilters.normal_months = [];
+      }
+      if (window.updateTransportMonthToggleText) {
+        window.updateTransportMonthToggleText(wrap);
+      }
+      loadTabData();
+    });
+
+    $(document).on("click", ".transport-clear-region", function () {
+      const wrap = $(this).closest(".transport-filters-toolbar");
+      const regionParam = wrap.data("filter-region-param");
+      wrap.find(".transport-region-one").val("");
+      window.transportationDetailFilters = window.transportationDetailFilters || {
+        primary_months: [],
+        primary_region: "",
+        normal_months: [],
+        normal_region: "",
+      };
+      if (regionParam === "transport_primary_region") {
+        window.transportationDetailFilters.primary_region = "";
+      } else if (regionParam === "transport_normal_region") {
+        window.transportationDetailFilters.normal_region = "";
+      }
       loadTabData();
     });
 

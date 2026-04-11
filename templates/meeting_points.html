@@ -10,10 +10,20 @@
   0% { background-color: #cde7ff; }
   100% { background-color: inherit; }
 }
+.filter-buttons button.active {
+  outline: 3px solid #007fa3;
+  outline-offset: 2px;
+  font-weight: 700;
+}
 </style>
 
 
-<div class="meeting" style="background-color: #24455e1f; padding: 50px 0;">
+<div id="meeting-points-root"
+     class="meeting"
+     style="background-color: #24455e1f; padding: 50px 0;"
+     data-mp-status="{{ status_filter|default:'all' }}"
+     data-mp-api-url="{% url 'dashboard:meeting_points' %}"
+     data-mp-toggle-url-template="{% url 'dashboard:toggle_meeting_point' 999999999 %}">
     <div class="container">
         <h3 class="mb-3 text-center" style="color: #007fa3; font-size: 24px;">Meeting Points & Actions</h3>
         <!-- ✅ Add new point -->
@@ -29,7 +39,7 @@
                            id="description"
                            name="description"
                            placeholder="Enter meeting point details"
-                           required>
+                           autocomplete="off">
                 </div>
                 <div class="col-md-3">
                     <label for="target_date"
@@ -52,8 +62,10 @@
                 </div>
                 <div class="col-md-2 d-grid">
                     <button type="submit"
+                            id="meeting-save-btn"
                             class="btn text-white fw-semibold"
-                            style="background-color: #9fc0e4">Save</button>
+                            style="background-color: #9fc0e4"
+                            disabled>Save</button>
                 </div>
             </div>
         </form>
@@ -63,20 +75,23 @@
         </h5>
         <!-- ✅ Filter buttons -->
         <div class="filter-buttons mb-3 text-center">
-            <button onclick="loadMeetingPoints('all')"
-                    class="btn btn-secondary mx-1"
+            <button type="button"
+                    data-mp-filter="all"
+                    class="btn btn-secondary mx-1{% if not status_filter or status_filter == 'all' %} active{% endif %}"
                     style="font-weight: 600;
                            background-color: #9fc0e4 !important;
                            border-color: #9fc0e4 !important;
                            color: #000 !important">All</button>
-            <button onclick="loadMeetingPoints('done')"
-                    class="btn btn-success mx-1"
+            <button type="button"
+                    data-mp-filter="done"
+                    class="btn btn-success mx-1{% if status_filter == 'done' %} active{% endif %}"
                     style="font-weight: 600;
                            background-color: #b8b8b8 !important;
                            border-color: #b8b8b8 !important;
                            color: #000 !important">Completed</button>
-            <button onclick="loadMeetingPoints('pending')"
-                    class="btn btn-warning mx-1"
+            <button type="button"
+                    data-mp-filter="pending"
+                    class="btn btn-warning mx-1{% if status_filter == 'pending' %} active{% endif %}"
                     style="font-weight: 600;
                            background-color: #9fc0e4 !important;
                            border-color: #9fc0e4 !important;
@@ -129,107 +144,324 @@
 </div>
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script>
-$(document).ready(function () {
-  const doneCountEl = $("#done-count");
-  const totalCountEl = $("#total-count");
-  const meetingBody = $("#meeting-body");
-
-  function updateCounter() {
-    const total = meetingBody.find("tr").length;
-    const done = meetingBody.find("input.toggle-done:checked").length;
-    totalCountEl.text(total);
-    doneCountEl.text(done);
+(function () {
+  function getMpRoot() {
+    return document.getElementById("meeting-points-root");
   }
 
-  // ✅ Add new point at the bottom
-  $("#meeting-form").on("submit", async function (e) {
-    e.preventDefault();
+  var mpRoot0 = getMpRoot();
+  if (mpRoot0 && mpRoot0.getAttribute("data-mp-status")) {
+    window.__mpStatusFilter = mpRoot0.getAttribute("data-mp-status") || "all";
+  } else {
+    window.__mpStatusFilter = window.__mpStatusFilter || "all";
+  }
 
-    const description = $("#description").val().trim();
-    const target_date = $("#target_date").val().trim();
-    if (!description) return alert("Please enter a description");
+  function syncFilterButtonActive(root, buttonElement) {
+    if (!root) return;
+    var wrap = root.querySelector(".filter-buttons");
+    if (!wrap) return;
+    wrap.querySelectorAll("button").forEach(function (b) {
+      b.classList.remove("active");
+    });
+    if (buttonElement) buttonElement.classList.add("active");
+  }
 
-    const csrfToken = $('[name=csrfmiddlewaretoken]').val();
+  function mpApiBase(root) {
+    if (root && root.getAttribute("data-mp-api-url")) {
+      return root.getAttribute("data-mp-api-url");
+    }
+    return "{% url 'dashboard:meeting_points' %}";
+  }
 
-    const response = await fetch("{% url 'dashboard:meeting_points' %}", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "X-CSRFToken": csrfToken,
+  function toggleUrlFor(root, id) {
+    var tpl =
+      (root && root.getAttribute("data-mp-toggle-url-template")) ||
+      "/toggle-meeting-point/999999999/";
+    return String(tpl).replace("999999999", String(id));
+  }
+
+  // DOMParser + scope to #meeting-points-root so we never update the wrong table
+  window.loadMeetingPoints = function loadMeetingPoints(status, buttonElement) {
+    var root = getMpRoot();
+    var st = status || "all";
+    window.__mpStatusFilter = st;
+    if (buttonElement) syncFilterButtonActive(root, buttonElement);
+
+    var base = mpApiBase(root);
+    var url = base + (base.indexOf("?") >= 0 ? "&" : "?") + "status=" + encodeURIComponent(st);
+
+    return fetch(url, {
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+      credentials: "same-origin",
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("Network response was not ok");
+        return response.text();
+      })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, "text/html");
+        var parsedRoot =
+          doc.getElementById("meeting-points-root") || doc.body;
+        var newBody = parsedRoot.querySelector("#meeting-body");
+        var newDone = parsedRoot.querySelector("#done-count");
+        var newTotal = parsedRoot.querySelector("#total-count");
+
+        if (!root) root = getMpRoot();
+        if (!root) return;
+
+        var liveBody = root.querySelector("#meeting-body");
+        if (newBody && liveBody) liveBody.innerHTML = newBody.innerHTML;
+        var dc = root.querySelector("#done-count");
+        var tc = root.querySelector("#total-count");
+        if (newDone && dc) dc.textContent = newDone.textContent;
+        if (newTotal && tc) tc.textContent = newTotal.textContent;
+
+        if (window.jQuery) {
+          var $ = window.jQuery;
+          var $mb = $(root).find("#meeting-body");
+          var total = $mb.find("tr").length;
+          var done = $mb.find("input.toggle-done:checked").length;
+          $(root).find("#total-count").text(total);
+          $(root).find("#done-count").text(done);
+        }
+      })
+      .catch(function (error) {
+        console.error("Fetch error:", error);
+      });
+  };
+
+  // أزرار الفلتر: مستمع أصلي على الـ root (لا يعتمد على jQuery) — يعمل حتى لو تأخر تحميل jQuery
+  (function bindFilterClickVanilla() {
+    var root = getMpRoot();
+    if (!root) return;
+    if (root.getAttribute("data-mp-vanilla-filter") === "1") return;
+    root.setAttribute("data-mp-vanilla-filter", "1");
+    root.addEventListener(
+      "click",
+      function (ev) {
+        var t = ev.target;
+        if (!t || typeof t.closest !== "function") return;
+        var btn = t.closest("[data-mp-filter]");
+        if (!btn || !root.contains(btn)) return;
+        ev.preventDefault();
+        var st = btn.getAttribute("data-mp-filter");
+        if (st && typeof window.loadMeetingPoints === "function") {
+          window.loadMeetingPoints(st, btn);
+        }
       },
-      body: new URLSearchParams({
-        description: description,
-        target_date: target_date,
-        assigned_to: $("#assigned_to").val().trim()
-      }),
-    });
+      false,
+    );
+  })();
 
-    if (!response.ok) return alert("Failed to save");
+  function appendMeetingRowFromData($, meetingBody, data) {
+    if (!data || !data.id) return;
+    if (meetingBody.find('tr[data-id="' + data.id + '"]').length) return;
 
-    const data = await response.json();
-    const checked = data.is_done ? "checked" : "";
-    const statusText = data.is_done
+    var statusText = data.is_done
       ? '<span class="badge bg-success">Done</span>'
       : '<span class="badge bg-warning text-dark">Pending</span>';
+    var td = $("<td>");
+    td.text(data.description || "");
+    var tr = $("<tr>")
+      .attr("data-id", data.id)
+      .addClass("highlight-row")
+      .append(td)
+      .append($("<td>").addClass("status").html(statusText))
+      .append(
+        $("<td>").text(
+          data.created_at != null ? String(data.created_at).slice(0, 10) : "",
+        ),
+      )
+      .append(
+        $("<td>").text(
+          data.target_date && String(data.target_date) !== "None"
+            ? String(data.target_date).slice(0, 10)
+            : "-",
+        ),
+      )
+      .append(
+        $("<td>").text(
+          data.assigned_to && String(data.assigned_to) !== "None"
+            ? data.assigned_to
+            : "-",
+        ),
+      )
+      .append(
+        $("<td>").append(
+          $("<input type=\"checkbox\" class=\"toggle-done\" />").prop(
+            "checked",
+            !!data.is_done,
+          ),
+        ),
+      );
+    meetingBody.append(tr);
+  }
 
-    const newRow = $(`
-      <tr data-id="${data.id}" class="highlight-row">
-        <td>${data.description}</td>
-        <td class="status">${statusText}</td>
-        <td>${data.created_at}</td>
-        <td>${data.target_date || '-'}</td>
-        <td>${data.assigned_to || '-'}</td>
-        <td><input type="checkbox" class="toggle-done" ${checked}></td>
-      </tr>
-    `);
+  function bindMeetingPointsForm() {
+    if (!window.jQuery) return;
+    var $ = window.jQuery;
+    var root = getMpRoot();
+    if (!root) return;
 
+    var $root = $(root);
+    var doneCountEl = $root.find("#done-count");
+    var totalCountEl = $root.find("#total-count");
+    var meetingBody = $root.find("#meeting-body");
+    var meetingForm = $root.find("#meeting-form");
+    if (!meetingForm.length) return;
 
-    meetingBody.append(newRow);
-    $("#description").val("");
-    $("#target_date").val("");
-    $("#assigned_to").val("");
-    updateCounter();
-  });
+    var submitBtn = meetingForm.find('button[type="submit"]');
+    var isSubmitting = false;
 
-  // ✅ Toggle Done/Pending
-  meetingBody.on("change", ".toggle-done", async function () {
-    const row = $(this).closest("tr");
-    const id = row.data("id");
-    const spanStatus = row.find(".status");
+    function updateSaveButtonState() {
+      var description = String($root.find("#description").val() || "").trim();
+      var enabled = description.length > 0 && !isSubmitting;
+      submitBtn.prop("disabled", !enabled);
+      submitBtn.css({
+        opacity: enabled ? "1" : "0.5",
+        cursor: enabled ? "pointer" : "not-allowed",
+        backgroundColor: enabled ? "#007fa3" : "#9fc0e4",
+        borderColor: enabled ? "#005f7a" : "#9fc0e4",
+        boxShadow: enabled ? "0 2px 8px rgba(0,127,163,0.35)" : "none",
+      });
+    }
 
-    const res = await fetch(`/toggle-meeting-point/${id}/`, {
-      method: "POST",
-      headers: { "X-CSRFToken": $('[name=csrfmiddlewaretoken]').val() },
-    });
+    function updateCounter() {
+      var total = meetingBody.find("tr").length;
+      var done = meetingBody.find("input.toggle-done:checked").length;
+      totalCountEl.text(total);
+      doneCountEl.text(done);
+    }
 
-    const data = await res.json();
-    const badge = data.is_done
-      ? '<span class="badge bg-success">Done</span>'
-      : '<span class="badge bg-warning text-dark">Pending</span>';
-    spanStatus.html(badge);
-    updateCounter();
-  });
+    meetingForm.off("submit.mp").on("submit.mp", async function (e) {
+      e.preventDefault();
+      if (isSubmitting) return;
 
-  updateCounter();
-});
-
-// ✅ Filter points inside the same table (no duplication)
-function loadMeetingPoints(status = 'all') {
-  const url = `{% url 'dashboard:upload_excel' %}?status=${status}`;
-
-  fetch(url)
-    .then(response => {
-      if (!response.ok) throw new Error("❌ Network response was not ok");
-      return response.json();
-    })
-    .then(data => {
-      $("#meeting-body").html($(data.detail_html).find("tbody").html());
-
-      if (data.done_count !== undefined && data.total_count !== undefined) {
-        $("#done-count").text(data.done_count);
-        $("#total-count").text(data.total_count);
+      var description = $root.find("#description").val().trim();
+      var target_date = $root.find("#target_date").val().trim();
+      var assigned_to = $root.find("#assigned_to").val().trim();
+      if (!description) {
+        alert("Please enter a meeting point name.");
+        return;
       }
-    })
-    .catch(error => console.error("❌ Fetch error:", error));
-}
+
+      isSubmitting = true;
+      submitBtn.prop("disabled", true);
+      updateSaveButtonState();
+
+      var csrfToken = meetingForm.find("[name=csrfmiddlewaretoken]").val();
+      var requestId =
+        window.crypto && window.crypto.randomUUID
+          ? window.crypto.randomUUID()
+          : String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+
+      try {
+        var response = await fetch(mpApiBase(root), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-CSRFToken": csrfToken,
+          },
+          body: new URLSearchParams({
+            request_id: requestId,
+            description: description,
+            target_date: target_date,
+            assigned_to: assigned_to,
+          }),
+        });
+
+        if (!response.ok) {
+          alert("Failed to save");
+          return;
+        }
+
+        var data = await response.json();
+
+        $root.find("#description").val("");
+        $root.find("#target_date").val("");
+        $root.find("#assigned_to").val("");
+
+        appendMeetingRowFromData($, meetingBody, data);
+        updateCounter();
+
+        var activeBtn = root.querySelector(".filter-buttons button.active");
+        await window.loadMeetingPoints(
+          window.__mpStatusFilter || "all",
+          activeBtn,
+        );
+        updateCounter();
+      } finally {
+        isSubmitting = false;
+        submitBtn.prop("disabled", false);
+        updateSaveButtonState();
+      }
+    });
+
+    meetingBody
+      .off("change.mp", ".toggle-done")
+      .on("change.mp", ".toggle-done", async function () {
+        var row = $(this).closest("tr");
+        var id = row.data("id");
+        var spanStatus = row.find(".status");
+
+        var res = await fetch(toggleUrlFor(root, id), {
+          method: "POST",
+          headers: {
+            "X-CSRFToken": meetingForm.find("[name=csrfmiddlewaretoken]").val(),
+          },
+        });
+
+        var tdata = await res.json();
+        var badge = tdata.is_done
+          ? '<span class="badge bg-success">Done</span>'
+          : '<span class="badge bg-warning text-dark">Pending</span>';
+        spanStatus.html(badge);
+        updateCounter();
+      });
+
+    meetingForm
+      .off("input.mp change.mp", "#description, #target_date, #assigned_to")
+      .on(
+        "input.mp change.mp",
+        "#description, #target_date, #assigned_to",
+        updateSaveButtonState,
+      );
+
+    updateCounter();
+    updateSaveButtonState();
+
+    var st0 = window.__mpStatusFilter || "all";
+    var filterWrap = root.querySelector(".filter-buttons");
+    if (filterWrap) {
+      var btns = filterWrap.querySelectorAll("button");
+      var activeIdx = st0 === "done" ? 1 : st0 === "pending" ? 2 : 0;
+      if (btns[activeIdx]) syncFilterButtonActive(root, btns[activeIdx]);
+    }
+  }
+
+  function initMeetingPointsTab() {
+    if (window.jQuery) {
+      bindMeetingPointsForm();
+      return;
+    }
+    var tries = 0;
+    var t = setInterval(function () {
+      tries += 1;
+      if (window.jQuery) {
+        clearInterval(t);
+        bindMeetingPointsForm();
+      } else if (tries > 80) clearInterval(t);
+    }, 50);
+  }
+
+  if (window.jQuery) {
+    window.jQuery(initMeetingPointsTab);
+  } else {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", initMeetingPointsTab);
+    } else {
+      initMeetingPointsTab();
+    }
+  }
+})();
 </script>

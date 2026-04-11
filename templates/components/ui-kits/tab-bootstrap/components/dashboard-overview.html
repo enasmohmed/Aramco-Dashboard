@@ -633,8 +633,11 @@
     const params = new URLSearchParams();
     params.set("status", status);
 
-    fetch(`?${params.toString()}`, {
+    const url = `{% url 'dashboard:upload_excel' %}?${params.toString()}`;
+    fetch(url, {
       headers: { "X-Requested-With": "XMLHttpRequest" },
+      cache: "no-store",
+      credentials: "same-origin",
     })
       .then((res) => res.json())
       .then((data) => {

@@ -28,7 +28,7 @@ class UploadMonth(models.Model):
 class MeetingPoint(models.Model):
     description = models.TextField()  # لازم يكون TextField أو CharField
     is_done = models.BooleanField(default=False)
-    created_at = models.DateField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
     target_date = models.DateField(null=True, blank=True)
     assigned_to = models.CharField(max_length=255, blank=True, null=True)
 
