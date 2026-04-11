@@ -212,6 +212,159 @@
   }
 
   // =====================================================
+  // 📊 Stock Count — Gauge (نصف دائرة) + تدرج ألوان ثيم Aramco
+  // =====================================================
+  function drawStockCountGaugeChart(ctx, canvasIdArg, kpi) {
+    let el = getCanvasElement();
+    if (!el) {
+      console.warn("⚠️ [Gauge] Canvas not found:", canvasIdArg);
+      return;
+    }
+    const ctxGauge = el.getContext("2d");
+    if (!ctxGauge) return;
+
+    Chart.register(ChartDataLabels);
+
+    window._stockGaugeCanvasIds = window._stockGaugeCanvasIds || {};
+    delete window._stockGaugeCanvasIds[canvasIdArg];
+
+    if (window.chartInstances[canvasIdArg]) {
+      try {
+        window.chartInstances[canvasIdArg].destroy();
+      } catch (e) {}
+      delete window.chartInstances[canvasIdArg];
+    }
+
+    const dps = (kpi && kpi.dataPoints) || [];
+    let hit = 0;
+    let miss = 0;
+    dps.forEach(function (dp) {
+      const lab = String(dp.label || "").trim().toLowerCase();
+      const v = Number(dp.y);
+      const n = isNaN(v) ? 0 : v;
+      if (lab === "hit" || lab.includes("hit")) hit = n;
+      else if (lab === "miss" || lab.includes("miss")) miss = n;
+    });
+    if (hit + miss < 0.01) {
+      hit = 0;
+      miss = 100;
+    }
+    const suffix = kpi.valueSuffix !== undefined ? kpi.valueSuffix : "%";
+
+    const w = Math.max(el.width || 280, el.clientWidth || 280);
+    const h = Math.max(el.height || 220, el.clientHeight || 220);
+
+    const gradHit = ctxGauge.createLinearGradient(0, h * 0.9, w, h * 0.1);
+    gradHit.addColorStop(0, "#4C8FD6");
+    gradHit.addColorStop(0.4, "#6FA6DE");
+    gradHit.addColorStop(0.65, "#A8C8EB");
+    gradHit.addColorStop(0.85, "#3F8F7A");
+    gradHit.addColorStop(1, "#2F6F5F");
+
+    const gradMiss = ctxGauge.createLinearGradient(w * 0.15, 0, w, h * 0.95);
+    gradMiss.addColorStop(0, "#F3B2AD");
+    gradMiss.addColorStop(0.45, "#E7B17A");
+    gradMiss.addColorStop(0.75, "#D9645A");
+    gradMiss.addColorStop(1, "#B84D45");
+
+    const centerPid =
+      "stockGaugeCenter_" + String(canvasIdArg).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const hitVal = hit;
+    const centerTextPlugin = {
+      id: centerPid,
+      afterDatasetsDraw: function (chart) {
+        const c = chart.ctx;
+        const area = chart.chartArea;
+        if (!area) return;
+        const cx = (area.left + area.right) / 2;
+        const cy = (area.top + area.bottom) / 2 + (area.bottom - area.top) * 0.06;
+        c.save();
+        c.font = "600 20px system-ui,Segoe UI,sans-serif";
+        c.fillStyle = "#2C2F33";
+        c.textAlign = "center";
+        c.textBaseline = "middle";
+        c.fillText(Number(hitVal).toFixed(1) + suffix, cx, cy);
+        c.font = "600 11px system-ui,Segoe UI,sans-serif";
+        c.fillStyle = "#5F6B78";
+        c.fillText("Hit", cx, cy + 20);
+        c.restore();
+      },
+    };
+
+    const gaugeChart = new Chart(ctxGauge, {
+      type: "doughnut",
+      plugins: [ChartDataLabels, centerTextPlugin],
+      data: {
+        labels: ["Hit", "Miss"],
+        datasets: [
+          {
+            data: [hit, miss],
+            backgroundColor: [gradHit, gradMiss],
+            borderWidth: 2,
+            borderColor: "#ffffff",
+            hoverBorderWidth: 2,
+            hoverBorderColor: "#ffffff",
+            spacing: 1,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        rotation: -90,
+        circumference: 180,
+        cutout: "72%",
+        layout: { padding: { top: 4, bottom: 4, left: 8, right: 8 } },
+        animation: {
+          animateRotate: true,
+          duration: 900,
+          easing: "easeOutCubic",
+        },
+        plugins: {
+          legend: {
+            display: true,
+            position: "bottom",
+            labels: {
+              padding: 12,
+              usePointStyle: true,
+              pointStyle: "circle",
+              font: { size: 11, weight: "600" },
+              color: "#5F6B78",
+            },
+          },
+          tooltip: {
+            callbacks: {
+              label: function (c) {
+                var raw = c.parsed;
+                var v = typeof raw === "number" ? raw : (raw && raw.x !== undefined ? raw.x : 0);
+                v = Number(v);
+                return " " + c.label + ": " + (isNaN(v) ? "0" : v.toFixed(1)) + suffix;
+              },
+            },
+          },
+          datalabels: {
+            display: true,
+            anchor: "center",
+            align: "center",
+            color: "#ffffff",
+            font: { weight: "bold", size: 12 },
+            formatter: function (value) {
+              if (value === null || value === undefined) return "";
+              if (typeof value === "number" && value < 4) return "";
+              return Math.round(value) + suffix;
+            },
+          },
+        },
+      },
+    });
+
+    window._stockGaugeCanvasIds[canvasIdArg] = true;
+    window.chartInstances[canvasIdArg] = gaugeChart;
+    gaugeChart.update();
+    window.notifyChartRendered(canvasIdArg);
+  }
+
+  // =====================================================
   // 🧠 2️⃣ دالة عامة لتحميل البيانات من السيرفر ورسم الشارتات
   // =====================================================
   function loadChartData() {
@@ -438,6 +591,17 @@
           return;
         }
 
+        const gaugeKpiEarly = res.chart_data && res.chart_data[0];
+        const canvasIdGauge = String(canvasId).toLowerCase();
+        if (
+          gaugeKpiEarly &&
+          String(gaugeKpiEarly.type || "").toLowerCase() === "gauge" &&
+          canvasIdGauge.includes("stockcount")
+        ) {
+          drawStockCountGaugeChart(ctx, canvasId, gaugeKpiEarly);
+          return;
+        }
+
         // =====================================================
         // 🎯 استخراج target إن وجد
         // =====================================================
@@ -549,13 +713,10 @@
         // =====================================================
         const mainType = datasets[0]?.type || "bar";
 
-        const chartInstance = new Chart(ctx, {
-          type: mainType,
-          data: { labels, datasets },
-          options: {
+        const chartOptionsFinal = {
             responsive: true,
             maintainAspectRatio: false,
-              layout: { padding: { top: 56, right: 24, bottom: 10 } }, // ✅ مساحة للأرقام فوق الأعمدة + آخر عمود
+              layout: { padding: { top: 56, right: 24, bottom: 10 } },
             indexAxis: "x", // ✅ عمودي
             plugins: {
                 legend: {
@@ -695,7 +856,12 @@
                 max: hasStackedCharts ? 100 : undefined,  // ✅ تحديد max إلى 100 للـ stacked charts (100%)
               },
             },
-          },
+          };
+
+        const chartInstance = new Chart(ctx, {
+          type: mainType,
+          data: { labels, datasets },
+          options: chartOptionsFinal,
           plugins: [ChartDataLabels],
         });
 

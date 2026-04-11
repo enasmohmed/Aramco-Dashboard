@@ -6129,7 +6129,7 @@ class UploadExcelViewRoche(View):
                 # أعمدة الجدول كما في الإكسل: Total, Hit, Miss:Shortages, Miss:Excess, Results
                 EXCEL_TABLE_COLUMNS = ["", "Total", "Hit", "Miss:Shortages", "Miss:Excess", "Results"]
                 FACILITIES_ORDER = ["Jeddah", "Riyadh", "Dammam"]
-                facility_colors = {"Riyadh": "#9084ad", "Dammam": "#a4aeb8", "Jeddah": "#538fe7"}
+                facility_colors = {"Riyadh": "#6366f1", "Dammam": "#0ea5e9", "Jeddah": "#14b8a6"}
                 sub_tables = []
                 total_hit_loc = 0
                 total_loc = 0
@@ -6167,16 +6167,18 @@ class UploadExcelViewRoche(View):
                     hit_f = no_loc.get("Hit", 0) or 0
                     pct_f = round((hit_f / no_loc_total) * 100, 2) if no_loc_total else 0
                     miss_pct_f = round(100 - pct_f, 2)
-                    chart_data_f = [{
-                        "type": "pie",
-                        "name": f"{f}",
-                        "color": ["#9084ad", "#dc3545"],
-                        "valueSuffix": "%",
-                        "dataPoints": [
-                            {"label": "Hit", "y": pct_f},
-                            {"label": "Miss", "y": miss_pct_f},
-                        ],
-                    }]
+                    chart_data_f = [
+                        {
+                            "type": "gauge",
+                            "name": f,
+                            "valueSuffix": "%",
+                            "showInLegend": True,
+                            "dataPoints": [
+                                {"label": "Hit", "y": pct_f},
+                                {"label": "Miss", "y": miss_pct_f},
+                            ],
+                        }
+                    ]
                     cid = "chart-sub-table-stockcount-" + f.lower()
                     sub_tables.append({
                         "id": f"sub-table-stockcount-{f.lower()}",
@@ -6365,7 +6367,7 @@ class UploadExcelViewRoche(View):
             target = 99
             stats = {"total": total, "hit": hit_count, "miss": miss_count, "hit_pct": hit_pct, "target": target}
 
-            facility_colors = {"Riyadh": "#9084ad", "Dammam": "#a4aeb8", "Jeddah": "#538fe7"}
+            facility_colors = {"Riyadh": "#6366f1", "Dammam": "#0ea5e9", "Jeddah": "#14b8a6"}
             # كل منطقة في sub_table لوحدها: جدول على اليسار + شارت Hit % للمنطقة على اليمين
             sub_tables = []
             for f in FACILITIES:
@@ -6374,16 +6376,18 @@ class UploadExcelViewRoche(View):
                 hit_f = sum(1 for row in region_rows if str(row.get("Status", "")).strip().lower() == "hit")
                 pct_f = round((hit_f / tot_f) * 100, 2) if tot_f else 0
                 miss_pct_f = round(100 - pct_f, 2)
-                chart_data_f = [{
-                    "type": "pie",
-                    "name": f"{f}",
-                    "color": ["#9084ad", "#dc3545"],
-                    "valueSuffix": "%",
-                    "dataPoints": [
-                        {"label": "Hit", "y": pct_f},
-                        {"label": "Miss", "y": miss_pct_f},
-                    ],
-                }]
+                chart_data_f = [
+                    {
+                        "type": "gauge",
+                        "name": f,
+                        "valueSuffix": "%",
+                        "showInLegend": True,
+                        "dataPoints": [
+                            {"label": "Hit", "y": pct_f},
+                            {"label": "Miss", "y": miss_pct_f},
+                        ],
+                    }
+                ]
                 # أعمدة يمكن إضافتها على الشارت (لخيار "إضافة عمود على الشارت")
                 chart_columns = [col for col in columns if col and str(col).strip()]
                 cid = "chart-sub-table-stockcount-" + f.lower()
@@ -10408,14 +10412,14 @@ class UploadExcelViewRoche(View):
                         month_for_filters,
                         selected_months=selected_months,
                     )
-                    # شارت All-in-One لــ Stock Count: دائرة واحدة بها 3 قطاعات (Riyadh / Dammam / Jeddah)
+                    # شارت All-in-One لــ Stock Count: أعمدة عمودية لنسبة Hit لكل منطقة
                     try:
                         sub_tables_sc = res.get("sub_tables") or []
                         pie_points = []
                         facility_colors_sc = {
-                            "Riyadh": "#9084ad",
-                            "Dammam": "#a4aeb8",
-                            "Jeddah": "#538fe7",
+                            "Riyadh": "#6366f1",
+                            "Dammam": "#0ea5e9",
+                            "Jeddah": "#14b8a6",
                         }
                         for sub in sub_tables_sc:
                             if not isinstance(sub, dict):
@@ -10437,17 +10441,15 @@ class UploadExcelViewRoche(View):
                                     {
                                         "label": title,
                                         "y": y_val,
-                                        "color": facility_colors_sc.get(title, "#9084ad"),
+                                        "color": facility_colors_sc.get(title, "#6366f1"),
                                     }
                                 )
                         if pie_points:
-                            # All-in-One: نفس شارت تب Stock Count (دائرة واحدة تضم 3 مناطق)
                             res["chart_data"] = [
                                 {
-                                    "type": "doughnut",
-                                    "name": "Stock Count Hit %",
+                                    "type": "bar",
+                                    "name": "Hit %",
                                     "valueSuffix": "%",
-                                    # drawAllInOneCharts لا يقرأ color لكل نقطة، بل يقرأ ds.color كـ array
                                     "color": [p.get("color") for p in pie_points],
                                     "dataPoints": [
                                         {"label": p["label"], "y": p["y"]}
@@ -10518,17 +10520,16 @@ class UploadExcelViewRoche(View):
                 hit_pct_val = 0
                 target_pct = target_manual.get(tab_name.lower(), 100)
 
-            # All-in-One: Stock Count يعرض نفس الدائرة (Riyadh/Dammam/Jeddah) مثل التاب
+            # All-in-One: Stock Count — أعمدة Hit % لكل منطقة (نفس منطق التاب)
             if tab_lower == "stock count":
-                chart_type = "doughnut"
-                # إذا مفيش chart_data (خطأ أو داتا فاضية) نعرض دائرة بثلاث قطاعات (0%) عشان الشارت يظهر
+                chart_type = "bar"
                 if not chart_data or not isinstance(chart_data, list) or len(chart_data) == 0:
                     chart_data = [
                         {
-                            "type": "doughnut",
-                            "name": "Stock Count Hit %",
+                            "type": "bar",
+                            "name": "Hit %",
                             "valueSuffix": "%",
-                            "color": ["#9084ad", "#a4aeb8", "#538fe7"],
+                            "color": ["#6366f1", "#0ea5e9", "#14b8a6"],
                             "dataPoints": [
                                 {"label": "Riyadh", "y": 0},
                                 {"label": "Dammam", "y": 0},
@@ -10576,15 +10577,15 @@ class UploadExcelViewRoche(View):
                         "chart_data": [],
                         "chart_type": "bar",
                     }
-                    # Stock Count (All-in-One): حتى مع الخطأ نعرض دائرة بثلاث مناطق (0%) عشان ما يظهرش "No data available" مكان الشارت
+                    # Stock Count (All-in-One): أعمدة افتراضية عند الخطأ
                     if tab_name and tab_name.strip().lower() == "stock count":
-                        fallback_card["chart_type"] = "doughnut"
+                        fallback_card["chart_type"] = "bar"
                         fallback_card["chart_data"] = [
                             {
-                                "type": "doughnut",
-                                "name": "Stock Count Hit %",
+                                "type": "bar",
+                                "name": "Hit %",
                                 "valueSuffix": "%",
-                                "color": ["#9084ad", "#a4aeb8", "#538fe7"],
+                                "color": ["#6366f1", "#0ea5e9", "#14b8a6"],
                                 "dataPoints": [
                                     {"label": "Riyadh", "y": 0},
                                     {"label": "Dammam", "y": 0},

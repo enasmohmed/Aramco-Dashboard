@@ -1394,7 +1394,25 @@
   {# ================= STOCK COUNT: كل منطقة في ديف — جدول على اليسار + شارت Hit % على اليمين ================= #}
   {% elif tab_name_lower == 'inventory' or tab_name_lower == 'stock count' %}
   <style>
-    .stockcount-pie-wrapper .chart-container { height: 280px !important; max-width: 280px; width: 100% !important; margin: 0 auto; }
+    .stockcount-chart-hit .card {
+      border: 1px solid rgba(99, 102, 241, 0.12);
+      box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
+    }
+    .stockcount-chart-hit .card-header {
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.06) 0%, rgba(20, 184, 166, 0.05) 100%);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+    }
+    .stockcount-pie-wrapper {
+      min-height: 260px;
+      padding: 0.35rem 0.25rem 0.5rem;
+    }
+    .stockcount-pie-wrapper .chart-container {
+      height: min(260px, 88vw) !important;
+      max-width: 100%;
+      width: 100% !important;
+      margin: 0 auto !important;
+      margin-top: 4px !important;
+    }
   </style>
   <div class="col-12">
     {# كل منطقة: جدول يسار (في منتصف الديف)، شارت يمين #}
@@ -1444,12 +1462,12 @@
           </div>
         </div>
       </div>
-      <div class="col-12 col-lg-5">
+      <div class="col-12 col-lg-5 stockcount-chart-hit">
         <div class="card h-100">
           <div class="card-header pb-0 card-no-border d-flex flex-wrap align-items-center justify-content-between gap-2">
-            <h5 class="mb-0 fw-bold" style="color: #9084ad">{{ sub.title }} — Hit %</h5>
+            <h5 class="mb-0 fw-bold" style="color: #4f46e5">{{ sub.title }} — Hit %</h5>
           </div>
-          <div class="card-body d-flex align-items-center justify-content-center stockcount-pie-wrapper" style="min-height: 280px;">
+          <div class="card-body d-flex align-items-center justify-content-center stockcount-pie-wrapper">
             {% render_chart sub.id %}
           </div>
         </div>
@@ -1476,6 +1494,7 @@
           if (!canvasId) return;
           var chart = window.chartInstances && window.chartInstances[canvasId];
           if (!chart) return;
+          if (window._stockGaugeCanvasIds && window._stockGaugeCanvasIds[canvasId]) return;
           var colName = sel.value;
           var thead = table.querySelector('thead tr');
           var ths = thead ? thead.querySelectorAll('th') : [];

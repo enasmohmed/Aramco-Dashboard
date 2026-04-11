@@ -827,6 +827,11 @@
         if (!colors || !colors.length) colors = ["#9084ad", "#e8f1fb", "#538fe7", "#28a745", "#dc3545"];
         while (colors.length < values.length) colors.push(colors[colors.length % colors.length]);
         var isPie = chartType === "pie" || chartType === "doughnut";
+        var perBarColors = [];
+        for (var ci = 0; ci < values.length; ci++) {
+          perBarColors.push(colors[ci % colors.length]);
+        }
+        var isStockCountSlug = slug === "stock-count";
         var canvas = document.createElement("canvas");
         canvas.style.maxHeight = "200px";
         el.innerHTML = "";
@@ -838,7 +843,9 @@
             datasets: [{
               label: ds.name || "Hit %",
               data: values,
-              backgroundColor: isPie ? colors.slice(0, values.length) : (colors[0] || "#9084ad"),
+              backgroundColor: isPie ? perBarColors : perBarColors,
+              borderRadius: isPie ? 0 : 6,
+              borderSkipped: false,
               borderWidth: 1,
             }],
           },
@@ -846,7 +853,16 @@
             responsive: true,
             maintainAspectRatio: true,
             plugins: { legend: { display: isPie } },
-            scales: isPie ? {} : { y: { beginAtZero: true } },
+            scales: isPie
+              ? {}
+              : {
+                  x: { grid: { display: false } },
+                  y: {
+                    beginAtZero: true,
+                    max: isStockCountSlug ? 100 : undefined,
+                    ticks: isStockCountSlug ? { callback: function (v) { return v + "%"; } } : {},
+                  },
+                },
           },
         };
         try {
