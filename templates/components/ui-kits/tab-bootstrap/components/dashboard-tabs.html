@@ -779,11 +779,14 @@
       const table = container.querySelector("#inbound-shipments-detail-table");
       if (!table || !window.$ || !$.fn.DataTable) return;
       try {
-        if (!$.fn.DataTable.isDataTable(table)) {
-          $(table).DataTable();
+        // لا نفعّل DataTables على هذا الجدول: الفلاتر العلوية (Facility / Month / Status …)
+        // تخفي الصفوف بـ display:none بينما DataTables يحسب كل الصفوف فيظهر "Showing 1 to 10 of 143"
+        // والبادجنيشن غير متزامن مع الفلتر. التمرير موجود عبر inbound-detail-table-scroll.
+        if ($.fn.DataTable.isDataTable(table)) {
+          $(table).DataTable().destroy();
         }
       } catch (e) {
-        console.warn("DataTable init:", e);
+        console.warn("DataTable cleanup (inbound detail):", e);
       }
     }
 

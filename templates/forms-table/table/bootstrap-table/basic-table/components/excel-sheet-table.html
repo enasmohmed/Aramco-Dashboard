@@ -212,6 +212,22 @@
   white-space: nowrap;
 }
 
+/* Transportation: visually split grouped month tables */
+.transportation-sheet-table .transport-group-spacer td {
+  padding: 0 !important;
+  height: 14px;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.transportation-sheet-table tbody tr.transport-month-group-header td {
+  background: #f3f0f9 !important;
+  color: #5c4d7a;
+  font-weight: 700;
+  border-top: 1px solid #d8d0e6 !important;
+  border-bottom: 2px solid #d8d0e6 !important;
+}
+
 </style>
 
 
@@ -523,7 +539,7 @@
           <select class="form-select form-select-sm util-region-month-filter w-100">
             <option value="">All</option>
             {% for mo in sub.month_options %}
-            <option value="{{ mo.value }}">{{ mo.label }}</option>
+            <option value="{{ mo.value }}"{% if forloop.last %} selected{% endif %}>{{ mo.label }}</option>
             {% endfor %}
           </select>
         </div>
@@ -595,7 +611,7 @@
                 <select id="raw-util-excel-month-filter" class="form-select w-100">
                   <option value="">All</option>
                   {% for mo in tab.raw_excel_table.month_options %}
-                  <option value="{{ mo.value }}">{{ mo.label }}</option>
+                  <option value="{{ mo.value }}"{% if forloop.last %} selected{% endif %}>{{ mo.label }}</option>
                   {% endfor %}
                 </select>
               </div>
@@ -1029,7 +1045,7 @@
       {% if sub.full_width %}
     <div class="row mt-4">
       <div class="col-12">
-        <div class="card">
+        <div class="card" {% if sub.id == 'sub-table-inbound-full-sheet' %}id="inbound-full-sheet-card"{% endif %}>
           <div class="card-header pb-0 card-no-border text-center">
             <h4 class="mb-2">{{ sub.title }}</h4>
           </div>
@@ -1057,24 +1073,24 @@
                   </select>
                 </div>
                 {% endif %}
-                {% if sub.filter_options.hit_miss %}
+                {% if sub.filter_options.statuses %}
                 <div class="col-12 col-sm-6 col-md-4 col-lg-3">
-                  <label class="form-label small fw-semibold mb-1">Hit or Miss</label>
-                  <select class="form-select inbound-detail-filter w-100" data-filter="hit-miss">
+                  <label class="form-label small fw-semibold mb-1">Status</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="status">
                     <option value="">All</option>
-                    {% for opt in sub.filter_options.hit_miss %}
+                    {% for opt in sub.filter_options.statuses %}
                     <option value="{{ opt }}">{{ opt }}</option>
                     {% endfor %}
                   </select>
                 </div>
                 {% endif %}
                 <div class="col-12 col-sm-6 col-md-4 col-lg-3">
-                  <label class="form-label small fw-semibold mb-1">Order Nbr</label>
+                  <label class="form-label small fw-semibold mb-1">{% if sub.id == 'sub-table-inbound-full-sheet' %}Shipment Nbr{% else %}Order Nbr{% endif %}</label>
                   <input
                     type="text"
                     class="form-control inbound-detail-filter"
                     data-filter="order-nbr"
-                    placeholder="Search Order Nbr"
+                    placeholder="{% if sub.id == 'sub-table-inbound-full-sheet' %}Search Shipment Nbr{% else %}Search Order Nbr{% endif %}"
                   />
                 </div>
               </div>
@@ -1083,7 +1099,7 @@
           {% endif %}
           <div class="card-body text-center">
             <div class="table-responsive custom-scrollbar inbound-detail-table-scroll">
-              <table class="table table-bordered" id="inbound-shipments-detail-table">
+              <table class="table table-bordered" {% if sub.id == 'sub-table-inbound-full-sheet' %}id="inbound-full-sheet-table"{% else %}id="inbound-shipments-detail-table"{% endif %}>
                 <thead class="table-primary">
                   <tr role="row">
                     {% for col in sub.columns %}
@@ -1093,13 +1109,33 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}"{% endif %}>
+                  <tr role="row" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-status="{% with s=row|get_item:'Status' %}{% if s %}{{ s }}{% else %}{{ row|get_item:'HIT or MISS'|default:'' }}{% endif %}{% endwith %}" data-order-nbr="{% firstof row|get_item:'Shipment_nbr' row|get_item:'Order Nbr' '' %}" data-hit-miss="{% with s=row|get_item:'Status' %}{% if s %}{{ s|lower }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}{% endwith %}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {% if col|lower == "shipment_nbr" or col|lower == "shipment nbr" %}
                     <td><span class="badge bg-primary rounded-pill">{{ value|default:"—" }}</span></td>
                     {% elif "received" in col|lower and "qty" in col|lower %}
                     <td><span class="badge bg-info rounded-pill">{{ value|default:"—" }}</span></td>
+                    {% elif sub.id == 'sub-table-inbound-detail' and col|lower == "remark" %}
+                    <td class="align-middle p-1">
+                      <input type="text" class="form-control form-control-sm editable-remark" placeholder="Add remark..."
+                        data-tab="inbound"
+                        data-key="{{ row|get_item:'Shipment_nbr'|default:'' }}"
+                        data-facility="{{ row|get_item:'Facility Code'|default:'' }}"
+                        value="{{ value|default:'' }}" />
+                    </td>
+                    {% elif sub.id == 'sub-table-inbound-detail' and col|lower == "status" %}
+                    <td class="align-middle p-1">
+                      <select
+                        class="form-select form-select-sm editable-status"
+                        data-tab="inbound"
+                        data-key="{{ row|get_item:'Shipment_nbr'|default:'' }}"
+                        data-facility="{{ row|get_item:'Facility Code'|default:'' }}"
+                      >
+                        <option value="Hit" {% if value|default_if_none:""|trim|lower == "hit" %}selected{% endif %}>Hit</option>
+                        <option value="Miss" {% if value|default_if_none:""|trim|lower == "miss" %}selected{% endif %}>Miss</option>
+                      </select>
+                    </td>
                     {% else %}
                     <td>{{ value }}</td>
                     {% endif %}
@@ -1394,6 +1430,43 @@
   {# ================= STOCK COUNT: كل منطقة في ديف — جدول على اليسار + شارت Hit % على اليمين ================= #}
   {% elif tab_name_lower == 'inventory' or tab_name_lower == 'stock count' %}
   <style>
+    .stockcount-excel-wrapper {
+      border: 1px solid #2f2f2f;
+      border-radius: 8px;
+      background: #fff;
+    }
+    .stockcount-excel-table {
+      border-collapse: collapse;
+      margin: 0;
+    }
+    .stockcount-excel-table th,
+    .stockcount-excel-table td {
+      border: 1px solid #2f2f2f !important;
+      white-space: nowrap;
+      font-size: 0.92rem;
+      vertical-align: middle;
+      padding: 0.45rem 0.55rem;
+    }
+    .stockcount-excel-table thead th,
+    .stockcount-excel-table .stockcount-repeat-header td {
+      background: #11dbe3 !important;
+      color: #111;
+      font-weight: 700;
+      text-align: center;
+    }
+    .stockcount-excel-table tbody tr:nth-child(even):not(.stockcount-repeat-header):not(.stockcount-group-spacer) {
+      background: #f8f8f8;
+    }
+    .stockcount-excel-table .stockcount-group-spacer td {
+      border: none !important;
+      height: 12px;
+      background: #fff;
+      padding: 0;
+    }
+    .stockcount-excel-table .stockcount-accuracy-col {
+      background: #c9ead8;
+      font-weight: 600;
+    }
     .stockcount-chart-hit .card {
       border: 1px solid rgba(99, 102, 241, 0.12);
       box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
@@ -1405,6 +1478,7 @@
     .stockcount-pie-wrapper {
       min-height: 260px;
       padding: 0.35rem 0.25rem 0.5rem;
+      position: relative;
     }
     .stockcount-pie-wrapper .chart-container {
       height: min(260px, 88vw) !important;
@@ -1413,24 +1487,42 @@
       margin: 0 auto !important;
       margin-top: 4px !important;
     }
+    .stockcount-chart-center-label {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid #d7dcec;
+      border-radius: 999px;
+      padding: 0.35rem 0.7rem;
+      font-size: 0.92rem;
+      font-weight: 700;
+      color: #3f3f46;
+      line-height: 1;
+      pointer-events: none;
+      z-index: 4;
+      white-space: nowrap;
+    }
   </style>
   <div class="col-12">
-    {# كل منطقة: جدول يسار (في منتصف الديف)، شارت يمين #}
     {% for sub in tab.sub_tables %}
       {% if sub.region_section %}
     <div class="row mb-4 align-items-stretch stockcount-region-row" data-region-id="{{ sub.id }}">
       <div class="col-12 col-lg-7 mb-3 mb-lg-0">
         <div class="card h-100">
           <div class="card-header pb-0 card-no-border">
-            <h5 class="mb-0 fw-bold" style="color: #9084ad">{{ sub.title }}</h5>
+            <h5 class="mb-2 fw-bold" style="color: #9084ad">{{ sub.title }}</h5>
           </div>
-          <div class="card-body p-2">
-            <div class="table-responsive custom-scrollbar inbound-detail-table-scroll" style="max-height: 400px;">
-              <table class="table table-striped table-bordered text-center align-middle mb-0 stockcount-region-table">
-                <thead class="table-light sticky-top">
+          <div class="card-body pt-1">
+            <div class="table-responsive custom-scrollbar stockcount-excel-wrapper inbound-detail-table-scroll" style="max-height: 430px; overflow-x: auto;">
+              <table class="table text-center align-middle mb-0 stockcount-region-table stockcount-excel-table">
+                <thead class="sticky-top">
                   <tr>
                     {% for col in sub.columns %}
-                    <th class="text-nowrap" style="min-width: 4rem;">{{ col }}</th>
+                    {% if col|lower != 'status' and col|lower != 'hit or miss' and col|lower != 'hit/miss' %}
+                    <th class="{% if 'accuracy' in col|lower or 'results' in col|lower %}stockcount-accuracy-col{% endif %}">{{ col|default:"" }}</th>
+                    {% endif %}
                     {% endfor %}
                   </tr>
                 </thead>
@@ -1438,19 +1530,11 @@
                   {% for row in sub.data %}
                   <tr>
                     {% for col in sub.columns %}
+                    {% if col|lower != 'status' and col|lower != 'hit or miss' and col|lower != 'hit/miss' %}
                     {% with value=row|get_item:col %}
-                    {% if col == 'Status' or col|lower == 'hit or miss' or col|lower == 'hit/miss' %}
-                    <td>
-                      {% if value|default_if_none:""|trim|lower == "hit" %}
-                      <span class="badge bg-success rounded-pill">Hit</span>
-                      {% elif value|default_if_none:""|trim|lower == "miss" %}
-                      <span class="badge bg-danger rounded-pill">Miss</span>
-                      {% else %}{{ value|default:"—" }}{% endif %}
-                    </td>
-                    {% else %}
-                    <td class="text-nowrap" style="min-width: 4rem;">{{ value|default:"—" }}</td>
-                    {% endif %}
+                    <td class="{% if 'accuracy' in col|lower or 'results' in col|lower %}stockcount-accuracy-col{% endif %}">{{ value|default:"—" }}</td>
                     {% endwith %}
+                    {% endif %}
                     {% endfor %}
                   </tr>
                   {% empty %}
@@ -1465,10 +1549,18 @@
       <div class="col-12 col-lg-5 stockcount-chart-hit">
         <div class="card h-100">
           <div class="card-header pb-0 card-no-border d-flex flex-wrap align-items-center justify-content-between gap-2">
-            <h5 class="mb-0 fw-bold" style="color: #4f46e5">{{ sub.title }} — Hit %</h5>
+            <h5 class="mb-2 fw-bold" style="color: #4f46e5">{{ sub.title }} — Hit %</h5>
           </div>
           <div class="card-body d-flex align-items-center justify-content-center stockcount-pie-wrapper">
             {% render_chart sub.id %}
+            <div class="stockcount-chart-center-label">
+              Hit
+              {% if sub.chart_data and sub.chart_data.0.dataPoints and sub.chart_data.0.dataPoints.0 %}
+                {{ sub.chart_data.0.dataPoints.0.y|floatformat:0 }}%
+              {% else %}
+                0%
+              {% endif %}
+            </div>
           </div>
         </div>
       </div>
@@ -1799,7 +1891,7 @@
           </div>
           {% endif %}
           <div class="table-responsive custom-scrollbar">
-            <table class="table table-bordered text-center align-middle mb-0" style="border-color: #dee2e6;">
+            <table class="table table-bordered text-center align-middle mb-0 transportation-sheet-table" style="border-color: #dee2e6;">
               <thead>
                 <tr style="background: #c8e6c9;">
                   {% for col in sub.columns %}
@@ -1809,7 +1901,13 @@
               </thead>
               <tbody>
                 {% for row in sub.data %}
-                <tr style="background: {{ row.row_bg|default:'#e8f5e9' }};">
+                {% with month_marker=row|get_item:'Month'|default_if_none:''|trim|lower %}
+                {% if month_marker == 'month' and not forloop.first %}
+                <tr class="transport-group-spacer" aria-hidden="true">
+                  <td colspan="{{ sub.columns|length }}"></td>
+                </tr>
+                {% endif %}
+                <tr class="{% if month_marker == 'month' %}transport-month-group-header{% endif %}" style="background: {{ row.row_bg|default:'#e8f5e9' }};">
                   {% for col in sub.columns %}
                   {% with rs=row|get_rowspan:col %}
                   {% if rs == 0 %}
@@ -1819,6 +1917,7 @@
                   {% endwith %}
                   {% endfor %}
                 </tr>
+                {% endwith %}
                 {% empty %}
                 <tr><td colspan="{{ sub.columns|length }}" class="text-muted">No data available.</td></tr>
                 {% endfor %}
@@ -2220,7 +2319,7 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}"{% endif %} data-status="{% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-inbound-full-sheet' or sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' %}{{ row|get_item:'HIT or MISS'|default:'' }}{% else %}{{ row|get_item:'Status'|default:'' }}{% endif %}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.id == 'sub-table-return-detail' %}data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %} {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{% if sub.id == 'sub-table-inventory-detail' %}{{ row|get_item:'Status'|default:'' }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}"{% endif %}{% endif %}>
+                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}"{% endif %} data-status="{% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-inbound-full-sheet' %}{% with s=row|get_item:'Status' %}{% if s %}{{ s }}{% else %}{{ row|get_item:'HIT or MISS'|default:'' }}{% endif %}{% endwith %}{% elif sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' %}{{ row|get_item:'HIT or MISS'|default:'' }}{% else %}{{ row|get_item:'Status'|default:'' }}{% endif %}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.id == 'sub-table-return-detail' %}data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %} {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{% if sub.id == 'sub-table-inventory-detail' %}{{ row|get_item:'Status'|default:'' }}{% elif sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-inbound-full-sheet' %}{% with s=row|get_item:'Status' %}{% if s %}{{ s|lower }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}{% endwith %}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}"{% endif %}{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {# ===== INBOUND / RETURN: Shipment_nbr, Received QTY, Remark (editable), HIT or MISS (عرض فقط) ===== #}
@@ -2237,7 +2336,7 @@
                         data-facility="{{ row|get_item:'Facility Code'|default:'' }}"
                         value="{{ value|default:'' }}" />
                     </td>
-                    {% elif col|lower == "hit or miss" or col|lower == "hit/miss" %}
+                    {% elif col|lower == "hit or miss" or col|lower == "hit/miss" or col|lower == "status" %}
                     <td class="align-middle p-1">
                       <select
                         class="form-select form-select-sm editable-status"
@@ -2534,6 +2633,12 @@
           var selects = card.querySelectorAll('.inbound-detail-filter');
           if (!selects.length) return;
           function applyFilters() {
+            function normHitMiss(v) {
+              var t = String(v == null ? '' : v).trim().toLowerCase();
+              if (t === 'hit' || t === 'h') return 'hit';
+              if (t === 'miss' || t === 'm') return 'miss';
+              return t;
+            }
             var facility = (card.querySelector('[data-filter="facility"]') || {}).value || '';
             var facilityCode = (card.querySelector('[data-filter="facility-code"]') || {}).value || '';
             var status = (card.querySelector('[data-filter="status"]') || {}).value || '';
@@ -2556,9 +2661,11 @@
               var c = (tr.getAttribute('data-city') || '').trim();
               var on = (tr.getAttribute('data-order-nbr') || '').trim();
               var sn = (tr.getAttribute('data-shipment-nbr') || '').trim();
+              var rowHm = (s || hm || '').trim();
+              var statusOk = !status || normHitMiss(rowHm) === normHitMiss(status);
               var show = (!facility || f === facility) &&
                          (!facilityCode || fc === facilityCode) &&
-                         (!status || s === status) &&
+                         statusOk &&
                          (!month || m === month) &&
                          (!hitMiss || hm.toLowerCase() === hitMiss.toLowerCase()) &&
                          (!city || c === city) &&
@@ -2732,6 +2839,11 @@
             }
           });
         });
+        // Apply selected month immediately on first render.
+        var initialBlocks = document.querySelectorAll('.util-region-block');
+        for (var bi = 0; bi < initialBlocks.length; bi++) {
+          applyUtilRegionMonth(initialBlocks[bi]);
+        }
       })();
 
       (function rawUtilExcelMonthFilter() {
@@ -2749,6 +2861,96 @@
           }
         }
         sel.addEventListener('change', apply);
+        // Apply selected month immediately on first render.
+        apply();
+      })();
+
+      (function utilizationDefaultLatestMonth() {
+        function isMonthValue(v) {
+          return /^\d{4}-\d{2}$/.test(String(v || '').trim());
+        }
+        function addFromSelectOptions(setRef, selector) {
+          var selects = document.querySelectorAll(selector);
+          for (var i = 0; i < selects.length; i++) {
+            var opts = selects[i].options || [];
+            for (var j = 0; j < opts.length; j++) {
+              var val = String((opts[j] && opts[j].value) || '').trim();
+              if (isMonthValue(val)) setRef.add(val);
+            }
+          }
+        }
+        function addFromRows(setRef, selector, attrName) {
+          var rows = document.querySelectorAll(selector);
+          for (var i = 0; i < rows.length; i++) {
+            var val = String((rows[i].getAttribute(attrName) || '')).trim();
+            if (isMonthValue(val)) setRef.add(val);
+          }
+        }
+        function getLatestMonth() {
+          var months = new Set();
+          addFromSelectOptions(months, '.util-region-month-filter');
+          addFromSelectOptions(months, '#raw-util-excel-month-filter');
+          addFromRows(months, '.util-region-detail-table tbody tr[data-util-month]', 'data-util-month');
+          addFromRows(months, '#raw-util-excel-table tbody tr[data-raw-report-month]', 'data-raw-report-month');
+          var list = Array.from(months);
+          if (!list.length) return '';
+          list.sort();
+          return list[list.length - 1];
+        }
+        function hasOption(selectEl, value) {
+          if (!selectEl || !value) return false;
+          var opts = selectEl.options || [];
+          for (var i = 0; i < opts.length; i++) {
+            if (String((opts[i] && opts[i].value) || '').trim() === value) return true;
+          }
+          return false;
+        }
+        function triggerChange(selectEl) {
+          if (!selectEl) return;
+          selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        function initOnce() {
+          if (window.__utilizationDefaultLatestMonthApplied) return;
+          var hasUtilizationContent = !!(
+            document.querySelector('.util-region-block') ||
+            document.getElementById('raw-util-excel-table')
+          );
+          if (!hasUtilizationContent) return;
+          var latestMonth = getLatestMonth();
+          if (!latestMonth) return;
+
+          var regionMonthFilters = document.querySelectorAll('.util-region-month-filter');
+          for (var i = 0; i < regionMonthFilters.length; i++) {
+            var sel = regionMonthFilters[i];
+            if (hasOption(sel, latestMonth)) {
+              sel.value = latestMonth;
+              triggerChange(sel);
+            }
+          }
+
+          var rawSel = document.getElementById('raw-util-excel-month-filter');
+          if (hasOption(rawSel, latestMonth)) {
+            rawSel.value = latestMonth;
+            triggerChange(rawSel);
+          }
+          window.__utilizationDefaultLatestMonthApplied = true;
+        }
+
+        document.addEventListener('shown.bs.tab', function (e) {
+          if (window.__utilizationDefaultLatestMonthApplied) return;
+          var targetId = e && e.target ? e.target.getAttribute('data-bs-target') : null;
+          var pane = targetId ? document.querySelector(targetId) : null;
+          if (!pane) return;
+          if (pane.querySelector('.util-region-block') || pane.querySelector('#raw-util-excel-table')) {
+            initOnce();
+          }
+        });
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', initOnce);
+        } else {
+          initOnce();
+        }
       })();
 
       (function sohDamagesDetailFilters() {

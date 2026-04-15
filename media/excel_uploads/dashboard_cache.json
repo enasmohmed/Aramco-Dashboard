@@ -2,16 +2,16 @@
   "/media/enas/01DCA27B13BCF520/Data/projects/Data Anlysis/aramco_project/media/excel_uploads/latest.xlsx": {
     "inbound_kpi": {
       "number_of_vehicles": 0,
-      "number_of_shipments": 99,
-      "number_of_pallets": 2392,
-      "total_quantity": 25969,
-      "total_quantity_display": "26.0k",
+      "number_of_shipments": 153,
+      "number_of_pallets": 3721,
+      "total_quantity": 47713,
+      "total_quantity_display": "47.7k",
       "number_of_return_shipments": 10
     },
     "pending_shipments": [],
     "outbound_kpi": {
-      "released_orders": 85,
-      "picked_orders": 5884,
+      "released_orders": 326,
+      "picked_orders": 23733,
       "number_of_pallets": 0
     },
     "outbound_kpi_keys_from_sheet": [
@@ -20,19 +20,19 @@
       "number_of_pallets"
     ],
     "inventory_kpi": {
-      "no_of_location": 1997,
-      "no_of_location_riyadh": 535,
-      "no_of_location_dammam": 769,
-      "no_of_location_jeddah": 693,
-      "total_qty": 20081,
-      "total_qty_riyadh": 5886,
-      "total_qty_dammam": 6958,
-      "total_qty_jeddah": 7237,
-      "hit_pct": 100.0,
+      "no_of_location": 0,
+      "no_of_location_riyadh": 0,
+      "no_of_location_dammam": 0,
+      "no_of_location_jeddah": 0,
+      "total_qty": 0,
+      "total_qty_riyadh": 0,
+      "total_qty_dammam": 0,
+      "total_qty_jeddah": 0,
+      "hit_pct": 0,
       "total_skus": 0,
       "total_lpns": 0,
       "utilization_pct": ""
     },
-    "_file_mtime": 1773628385.9975934
+    "_file_mtime": 1776193058.3659997
   }
 }

@@ -2591,6 +2591,10 @@ class UploadExcelViewRoche(View):
                                 new_row = {
                                     col: row.get(col, "") for col in filtered_columns
                                 }
+                                # مفاتيح للعرض/الفلاتر فقط وليست أعمدة شيت (مثل Inbound Report)
+                                for _k, _v in row.items():
+                                    if _k not in new_row:
+                                        new_row[_k] = _v
                             else:
                                 new_row = row
                             new_data.append(new_row)
@@ -2613,9 +2617,14 @@ class UploadExcelViewRoche(View):
                         new_data = []
                         for row in sub["data"]:
                             if isinstance(row, dict):
-                                new_data.append(
-                                    {orig_to_safe[c]: row.get(c, "") for c in filtered_columns}
-                                )
+                                _mapped = {
+                                    orig_to_safe[c]: row.get(c, "")
+                                    for c in filtered_columns
+                                }
+                                for _k, _v in row.items():
+                                    if _k not in filtered_columns:
+                                        _mapped[_k] = _v
+                                new_data.append(_mapped)
                             else:
                                 new_data.append(row)
                         sub["data"] = new_data
@@ -5072,12 +5081,39 @@ class UploadExcelViewRoche(View):
                 df1["Packed Qty"] = 0
             if "Allocated Qty" not in df1.columns:
                 df1["Allocated Qty"] = 0
-            # مفتاح التجميع والفلترة: Order checked (إن وُجد) وإلا Order Nbr
+            # تطبيع الفاسيليتي إلى Riyadh / Dammam / Jeddah لاستخدامها في الجداول
+            def _norm_facility(val):
+                v = (str(val) or "").strip().lower()
+                if "riyadh" in v or v == "ruh":
+                    return "Riyadh"
+                if "dammam" in v or "damam" in v:
+                    return "Dammam"
+                if "jeddah" in v or "jdda" in v or "jedd" in v:
+                    return "Jeddah"
+                return None
+
+            if "Facility Code" in df1.columns:
+                df1["_FacilityNorm"] = df1["Facility Code"].apply(_norm_facility)
+            else:
+                df1["_FacilityNorm"] = None
+
+            # مفتاح العرض والفلترة: Order checked (إن وُجد) وإلا Order Nbr
             order_key_col = "Order checked" if "Order checked" in df1.columns else "Order Nbr"
             df1["_OrderKey"] = df1[order_key_col].astype(str).str.strip()
             df1["Order Nbr"] = df1["Order Nbr"].astype(str).str.strip()
             if order_key_col == "Order checked":
                 df1["Order checked"] = df1["Order checked"].astype(str).str.strip()
+            # تجنب مفاتيح فارغة/NaN حتى لا تضيع في التجميع
+            invalid_key_mask = df1["_OrderKey"].str.lower().isin(["", "nan", "none", "nat"])
+            df1.loc[invalid_key_mask, "_OrderKey"] = df1.loc[invalid_key_mask, "Order Nbr"]
+
+            # مفتاح الأداء: Facility + OrderKey لمنع دمج طلبات مدن مختلفة تحمل نفس Order checked
+            df1["_FacilityKeyForPerf"] = df1["_FacilityNorm"].fillna("").astype(str).str.strip()
+            missing_facility_mask = df1["_FacilityKeyForPerf"] == ""
+            df1.loc[missing_facility_mask, "_FacilityKeyForPerf"] = (
+                df1.loc[missing_facility_mask, "Facility Code"].fillna("").astype(str).str.strip()
+            )
+            df1["_PerfKey"] = df1["_FacilityKeyForPerf"] + "||" + df1["_OrderKey"]
 
             # عمود Create Order و Ship Date: تحويل قوي لتاريخ (Excel serial، نصوص، صيغ متعددة)
             def _parse_outbound_date(val):
@@ -5275,14 +5311,14 @@ class UploadExcelViewRoche(View):
                     current += timedelta(days=1)
                 return days
 
-            line_count_per_order = df1.groupby("_OrderKey").size()
-            create_min = df1.groupby("_OrderKey")["Create Timestamp"].min()
-            ship_max = df1.groupby("_OrderKey")["Ship Date"].max()
+            line_count_per_order = df1.groupby("_PerfKey").size()
+            create_min = df1.groupby("_PerfKey")["Create Timestamp"].min()
+            ship_max = df1.groupby("_PerfKey")["Ship Date"].max()
             order_days_used = {}
             order_allowed_days = {}
             order_line_count = {}
             order_is_hit = {}
-            for o in df1["_OrderKey"].unique():
+            for o in df1["_PerfKey"].unique():
                 if not o or (isinstance(o, str) and o.strip() == "") or (isinstance(o, float) and pd.isna(o)):
                     continue
                 line_count = int(line_count_per_order.get(o, 0))
@@ -5300,13 +5336,13 @@ class UploadExcelViewRoche(View):
                 order_allowed_days[o] = allowed_days
                 order_line_count[o] = line_count
 
-            df1["_LineCount"] = df1["_OrderKey"].map(order_line_count)
-            df1["_AllowedDays"] = df1["_OrderKey"].map(order_allowed_days)
-            df1["_DaysUsed"] = df1["_OrderKey"].map(order_days_used)
+            df1["_LineCount"] = df1["_PerfKey"].map(order_line_count)
+            df1["_AllowedDays"] = df1["_PerfKey"].map(order_allowed_days)
+            df1["_DaysUsed"] = df1["_PerfKey"].map(order_days_used)
             df1["Cycle Days"] = df1["_DaysUsed"].replace(np.nan, 0)
             df1["Cycle Hours"] = df1["Cycle Days"] * 24
             df1["Days_Used"] = df1["_DaysUsed"]
-            df1["is_hit"] = df1["_OrderKey"].map(lambda o: order_is_hit.get(o, False))
+            df1["is_hit"] = df1["_PerfKey"].map(lambda o: order_is_hit.get(o, False))
             df1["HIT or MISS"] = np.where(df1["is_hit"], "Hit", "Miss")
             df1.loc[df1["Create Timestamp"].isna() | df1["Ship Date"].isna(), "HIT or MISS"] = "Miss"
 
@@ -5336,10 +5372,10 @@ class UploadExcelViewRoche(View):
                     "[Outbound] ⚠️ كل الطلبات Miss — تحقق من قراءة التواريخ: "
                     f"Create Timestamp صالح={_n_create_ok}, Ship Date صالح={_n_ship_ok}"
                 )
-            # تشخيص النتيجة النهائية (باستخدام _OrderKey = Order checked أو Order Nbr)
-            n_orders = df1["_OrderKey"].nunique()
+            # تشخيص النتيجة النهائية (باستخدام _PerfKey = Facility + OrderKey)
+            n_orders = df1["_PerfKey"].nunique()
             n_orders_both_dates = sum(
-                1 for o in df1["_OrderKey"].unique()
+                1 for o in df1["_PerfKey"].unique()
                 if not (pd.isna(create_min.get(o)) or pd.isna(ship_max.get(o)))
             )
             print(
@@ -5350,21 +5386,7 @@ class UploadExcelViewRoche(View):
             # الشهر من Create Order (عمود Create Timestamp) — زي Inbound: يوم/شهر/سنة
             df1["Month"] = df1["Create Timestamp"].dt.strftime("%b").replace("NaT", "").fillna("")
 
-            # تطبيع الفاسيليتي إلى Riyadh / Dammam / Jeddah لاستخدامها في جداول المناطق
-            def _norm_facility(val):
-                v = (str(val) or "").strip().lower()
-                if "riyadh" in v or v == "ruh":
-                    return "Riyadh"
-                if "dammam" in v or "damam" in v:
-                    return "Dammam"
-                if "jeddah" in v or "jdda" in v or "jedd" in v:
-                    return "Jeddah"
-                return None
-
-            if "Facility Code" in df1.columns:
-                df1["_FacilityNorm"] = df1["Facility Code"].apply(_norm_facility)
-            else:
-                df1["_FacilityNorm"] = None
+            # _FacilityNorm محسوب أعلاه قبل تجميع الأداء لضمان ثبات مفاتيح الحساب
 
             # فلتر Facility أولاً (من الطلب أو من المعامل)
             _fac = (str(selected_facility).strip() if selected_facility else "") or (
@@ -5446,13 +5468,13 @@ class UploadExcelViewRoche(View):
                 return 999
 
             total_per_month = (
-                df_summary.groupby("Month")["_OrderKey"]
+                df_summary.groupby("Month")["_PerfKey"]
                 .nunique()
                 .reset_index(name="Total_Shipments")
             )
             hits_df = (
                 df_summary[df_summary["is_hit"]]
-                .groupby("Month")["_OrderKey"]
+                .groupby("Month")["_PerfKey"]
                 .nunique()
                 .reset_index(name="Hits")
             )
@@ -5537,7 +5559,7 @@ class UploadExcelViewRoche(View):
             summary_data = summary_data_pivot
 
             # إحصائيات على مستوى الشحنة (Order checked / _OrderKey): Hit / Miss
-            orders_df = df1.drop_duplicates(subset=["_OrderKey"], keep="first")
+            orders_df = df1.drop_duplicates(subset=["_PerfKey"], keep="first")
             overall_total = int(orders_df.shape[0])
             overall_hits = int((orders_df["HIT or MISS"] == "Hit").sum())
             overall_miss = int((orders_df["HIT or MISS"] == "Miss").sum())
@@ -5585,15 +5607,15 @@ class UploadExcelViewRoche(View):
                     continue
 
                 # صف واحد لكل Order (مفتاح = Order checked أو Order Nbr)
-                f_orders = fdf.drop_duplicates(subset=["_OrderKey"], keep="first")
-                packed_per_order = fdf.groupby("_OrderKey")["Packed Qty"].apply(lambda s: pd.to_numeric(s, errors="coerce").fillna(0).sum()).to_dict() if "Packed Qty" in fdf.columns else {}
-                allocated_per_order = fdf.groupby("_OrderKey")["Allocated Qty"].apply(lambda s: pd.to_numeric(s, errors="coerce").fillna(0).sum()).to_dict() if "Allocated Qty" in fdf.columns else {}
+                f_orders = fdf.drop_duplicates(subset=["_PerfKey"], keep="first")
+                packed_per_order = fdf.groupby("_PerfKey")["Packed Qty"].apply(lambda s: pd.to_numeric(s, errors="coerce").fillna(0).sum()).to_dict() if "Packed Qty" in fdf.columns else {}
+                allocated_per_order = fdf.groupby("_PerfKey")["Allocated Qty"].apply(lambda s: pd.to_numeric(s, errors="coerce").fillna(0).sum()).to_dict() if "Allocated Qty" in fdf.columns else {}
                 rows_f = []
                 for _, r in f_orders.iterrows():
-                    o = r.get("_OrderKey")
+                    o = r.get("_PerfKey")
                     rows_f.append({
                         "Facility Code": f,
-                        "Order checked": o,
+                        "Order checked": r.get("_OrderKey"),
                         "Order Nbr": r.get("Order Nbr"),
                         "Line Count": int(r.get("_LineCount") or 0),
                         "Allowed Days": int(r.get("_AllowedDays") or 0),
@@ -5604,13 +5626,13 @@ class UploadExcelViewRoche(View):
                         "Allocated Qty": int(allocated_per_order.get(o, 0)) if allocated_per_order else "",
                     })
                 f_total_per_month = (
-                    fdf.groupby("Month")["_OrderKey"]
+                    fdf.groupby("Month")["_PerfKey"]
                     .nunique()
                     .reset_index(name="Total_Shipments")
                 )
                 f_hits_df = (
                     fdf[fdf["is_hit"]]
-                    .groupby("Month")["_OrderKey"]
+                    .groupby("Month")["_PerfKey"]
                     .nunique()
                     .reset_index(name="Hits")
                 )
@@ -6133,6 +6155,7 @@ class UploadExcelViewRoche(View):
                 sub_tables = []
                 total_hit_loc = 0
                 total_loc = 0
+                tab_pct_values = []
                 for f in FACILITIES_ORDER:
                     block = excel_block_regions.get(f, {})
                     no_loc = block.get("no_of_location") or {}
@@ -6165,8 +6188,15 @@ class UploadExcelViewRoche(View):
                         },
                     ]
                     hit_f = no_loc.get("Hit", 0) or 0
-                    pct_f = round((hit_f / no_loc_total) * 100, 2) if no_loc_total else 0
+                    pct_from_results = _to_percent(res_no)
+                    pct_f = (
+                        pct_from_results
+                        if pct_from_results is not None
+                        else (round((hit_f / no_loc_total) * 100, 2) if no_loc_total else 0)
+                    )
                     miss_pct_f = round(100 - pct_f, 2)
+                    if pct_from_results is not None:
+                        tab_pct_values.append(pct_from_results)
                     chart_data_f = [
                         {
                             "type": "gauge",
@@ -6193,7 +6223,11 @@ class UploadExcelViewRoche(View):
                         "region_section": True,
                         "filter_options": None,
                     })
-                hit_pct = round((total_hit_loc / total_loc) * 100, 2) if total_loc else 0
+                hit_pct = (
+                    round(float(_last_percent(tab_pct_values)), 2)
+                    if _last_percent(tab_pct_values) is not None
+                    else (round((total_hit_loc / total_loc) * 100, 2) if total_loc else 0)
+                )
                 stats = {"total": total_loc, "hit": total_hit_loc, "miss": total_loc - total_hit_loc, "hit_pct": hit_pct, "target": 99}
                 tab_data = {
                     "name": "Stock Count",
@@ -6215,6 +6249,30 @@ class UploadExcelViewRoche(View):
 
             def _norm(s):
                 return re.sub(r"[^a-z0-9]", "", str(s).strip().lower())
+
+            def _to_percent(val):
+                if val is None:
+                    return None
+                raw = str(val).strip()
+                if not raw:
+                    return None
+                has_percent_sign = "%" in raw
+                cleaned = raw.replace("%", "").replace(",", "").strip()
+                try:
+                    pct = float(cleaned)
+                except (ValueError, TypeError):
+                    return None
+                if not has_percent_sign and pct <= 1:
+                    pct *= 100
+                return max(0.0, min(100.0, pct))
+
+            def _last_percent(values):
+                last_val = None
+                for item in values:
+                    pct = _to_percent(item)
+                    if pct is not None:
+                        last_val = pct
+                return last_val
 
             def _find_col(names):
                 col_map = {_norm(c): c for c in df.columns}
@@ -6363,7 +6421,20 @@ class UploadExcelViewRoche(View):
             total = len(rows)
             hit_count = sum(1 for row in rows if str(row.get("Status", "")).strip().lower() == "hit")
             miss_count = sum(1 for row in rows if str(row.get("Status", "")).strip().lower() == "miss")
-            hit_pct = round((hit_count / total) * 100, 2) if total else 0
+            accuracy_col = next((c for c in columns if "accuracy" in str(c).strip().lower()), None)
+            if not accuracy_col:
+                accuracy_col = next((c for c in columns if str(c).strip().lower() == "results"), None)
+            acc_values = []
+            if accuracy_col:
+                for row in rows:
+                    pct = _to_percent(row.get(accuracy_col))
+                    if pct is not None:
+                        acc_values.append(pct)
+            hit_pct = (
+                round(float(_last_percent(acc_values)), 2)
+                if _last_percent(acc_values) is not None
+                else (round((hit_count / total) * 100, 2) if total else 0)
+            )
             target = 99
             stats = {"total": total, "hit": hit_count, "miss": miss_count, "hit_pct": hit_pct, "target": target}
 
@@ -6374,7 +6445,17 @@ class UploadExcelViewRoche(View):
                 region_rows = rows_by_region.get(f, [])
                 tot_f = len(region_rows)
                 hit_f = sum(1 for row in region_rows if str(row.get("Status", "")).strip().lower() == "hit")
-                pct_f = round((hit_f / tot_f) * 100, 2) if tot_f else 0
+                acc_region_values = []
+                if accuracy_col:
+                    for row in region_rows:
+                        pct = _to_percent(row.get(accuracy_col))
+                        if pct is not None:
+                            acc_region_values.append(pct)
+                pct_f = (
+                    round(float(_last_percent(acc_region_values)), 2)
+                    if _last_percent(acc_region_values) is not None
+                    else (round((hit_f / tot_f) * 100, 2) if tot_f else 0)
+                )
                 miss_pct_f = round(100 - pct_f, 2)
                 chart_data_f = [
                     {
@@ -6627,16 +6708,18 @@ class UploadExcelViewRoche(View):
             if not col_received:
                 col_received = find_column_containing("received", "lpn") or find_column_containing("lpn", "rcv") or find_column_containing("lpn", "receive") or find_column_containing("last", "lpn")
 
-            # Inbound: نستخدم Offloading D&T. Return: نستخدم Create shipment D&T
+            # Inbound: نستخدم Offloading D&T مع fallback إلى Create shipment D&T عند غياب/offloading الفارغ.
+            # Return: نستخدم Create shipment D&T فقط.
             col_start_date = col_offloading if not is_return_tab else col_create
-            if not col_facility or not col_shipment or not col_start_date or not col_received:
+            has_inbound_start_source = bool(col_offloading or col_create) if not is_return_tab else bool(col_start_date)
+            if not col_facility or not col_shipment or not has_inbound_start_source or not col_received:
                 missing = []
                 if not col_facility:
                     missing.append("Facility")
                 if not col_shipment:
                     missing.append("Shipment_nbr")
-                if not col_start_date:
-                    missing.append("Offloading D&T" if not is_return_tab else "Create shipment D&T")
+                if not has_inbound_start_source:
+                    missing.append("Offloading D&T / Create shipment D&T" if not is_return_tab else "Create shipment D&T")
                 if not col_received:
                     missing.append("Received LPN D&T")
                 actual_cols = ", ".join(str(c) for c in df.columns.tolist()[:20])
@@ -6651,12 +6734,25 @@ class UploadExcelViewRoche(View):
                     "chart_data": [],
                 }
 
-            df = df.rename(columns={
+            rename_map = {
                 col_facility: "Facility",
                 col_shipment: "Shipment_nbr",
-                col_start_date: "Create_shipment_DT",  # Inbound: Offloading D&T، Return: Create shipment D&T
                 col_received: "Received_LPN_DT",
-            })
+            }
+            if is_return_tab and col_create:
+                rename_map[col_create] = "Create_shipment_DT"
+            elif not is_return_tab and col_offloading:
+                rename_map[col_offloading] = "Create_shipment_DT"
+            df = df.rename(columns=rename_map)
+
+            # Inbound fallback: لو Offloading ناقص في بعض الصفوف نكمله من Create shipment D&T.
+            if not is_return_tab:
+                if "Create_shipment_DT" not in df.columns:
+                    df["Create_shipment_DT"] = pd.NA
+                if col_create and col_create in df.columns:
+                    _fallback_start = pd.to_datetime(df[col_create], errors="coerce", dayfirst=True)
+                    _primary_start = pd.to_datetime(df["Create_shipment_DT"], errors="coerce", dayfirst=True)
+                    df["Create_shipment_DT"] = _primary_start.fillna(_fallback_start)
             if col_lpn:
                 df = df.rename(columns={col_lpn: "LPN"})
             else:
@@ -6694,8 +6790,6 @@ class UploadExcelViewRoche(View):
                 df["Received_LPN_DT"], errors="coerce", dayfirst=True
             )
 
-            FACILITIES = ["Riyadh", "Dammam", "Jeddah"]
-
             def norm_facility(val):
                 v = (val or "").strip().lower()
                 if not v:
@@ -6714,15 +6808,29 @@ class UploadExcelViewRoche(View):
                     return "Dammam"
                 if "western" in v or "west" in v or "غربي" in v:
                     return "Jeddah"
-                return None
+                # أي قيمة Facility/Region أخرى تُعرض كما هي (ديناميك) بدل الاستبعاد.
+                cleaned = re.sub(r"\s+", " ", str(val).strip())
+                if not cleaned or cleaned.lower() in {"facility", "region", "site", "location", "warehouse"}:
+                    return None
+                return cleaned
 
             df["_FacilityNorm"] = df["Facility"].map(norm_facility)
             df = df[df["_FacilityNorm"].notna()].copy()
             df["Month"] = df["Create_shipment_DT"].dt.strftime("%b").fillna("")
 
-            if df.empty:
+            preferred_facility_order = ["Riyadh", "Dammam", "Jeddah"]
+            facilities_seen = sorted(set(df["_FacilityNorm"].dropna().astype(str).str.strip().tolist()))
+            FACILITIES = sorted(
+                facilities_seen,
+                key=lambda name: (
+                    preferred_facility_order.index(name) if name in preferred_facility_order else len(preferred_facility_order),
+                    name.lower(),
+                ),
+            )
+
+            if df.empty or not FACILITIES:
                 return {
-                    "detail_html": "<p class='text-warning'>⚠️ No rows with Facility in (Riyadh, Dammam, Jeddah).</p>",
+                    "detail_html": "<p class='text-warning'>⚠️ No rows with valid Facility/Region values after normalization.</p>",
                     "sub_tables": [],
                     "chart_data": [],
                 }
@@ -6770,8 +6878,11 @@ class UploadExcelViewRoche(View):
                 return (end_d - start_d).days
 
             def _is_holiday(date_val):
-                """يوم الجمعة أو 22 فبراير (عطلة رسمية) لا يُحسب ضمن أيام العمل."""
-                if date_val.weekday() == 4:  # Friday
+                """أيام لا تُحسب كأيام عمل: الجمعة والسبت (نهاية أسبوع السعودية) + 22 فبراير."""
+                wd = date_val.weekday()
+                if wd == 4:  # Friday
+                    return True
+                if wd == 5:  # Saturday (weekend with Friday in KSA)
                     return True
                 if date_val.month == 2 and date_val.day == 22:  # 22/2 عطلة رسمية في كل سنة
                     return True
@@ -6779,9 +6890,9 @@ class UploadExcelViewRoche(View):
 
             def working_days_between_exclude_friday(create_ts, received_ts):
                 """
-                Working days between start and Received; Friday and Feb 22 not counted.
+                Working days between start and Received; Fri/Sat weekend + Feb 22 not counted.
                 Inbound: start = Offloading D&T. Return: start = Create shipment D&T.
-                نستبعد: الجمعة + 22 فبراير (عطلة رسمية).
+                مثال: 28 فبراير 2026 = سبت، 2 مارس = اثنين → يُحسب يوم الأحد فقط = يوم عمل واحد.
                 """
                 if create_ts is None or received_ts is None or pd.isna(create_ts) or pd.isna(received_ts):
                     return 0
@@ -6808,6 +6919,12 @@ class UploadExcelViewRoche(View):
                     if month_abbr[idx] == label:
                         return idx
                 return 999
+
+            def pct_value(numerator, denominator):
+                """Return rounded percentage as integer (no decimals)."""
+                if not denominator:
+                    return 0
+                return int(round((numerator / denominator) * 100))
 
             def compute_facility_kpi(facility_name):
                 fdf = df[df["_FacilityNorm"] == facility_name].copy()
@@ -6877,14 +6994,14 @@ class UploadExcelViewRoche(View):
                 # Hit % = (total hit / total shipment) * 100; Miss % = (total miss / total shipment) * 100
                 for m in by_month:
                     t = by_month[m]["total"]
-                    by_month[m]["hit_pct"] = round((by_month[m]["hit"] / t) * 100, 2) if t else 0
-                    by_month[m]["miss_pct"] = round((by_month[m]["miss"] / t) * 100, 2) if t else 0
+                    by_month[m]["hit_pct"] = pct_value(by_month[m]["hit"], t)
+                    by_month[m]["miss_pct"] = pct_value(by_month[m]["miss"], t)
 
                 ordered_months = sorted(by_month.keys(), key=lambda x: month_order_value(x))
                 months_with_miss = [m for m in ordered_months if by_month[m]["miss"] > 0]
                 total = hits + misses
-                hit_pct = round((hits / total) * 100, 2) if total else 0   # Hit % = total hit / total shipment * 100
-                miss_pct = round((misses / total) * 100, 2) if total else 0  # Miss % = total miss / total shipment * 100
+                hit_pct = pct_value(hits, total)   # Hit % = total hit / total shipment * 100
+                miss_pct = pct_value(misses, total)  # Miss % = total miss / total shipment * 100
                 return {
                     "total": total, "hit": hits, "miss": misses, "hit_pct": hit_pct, "miss_pct": miss_pct, "rows": rows,
                     "by_month": by_month, "months_with_miss": months_with_miss, "ordered_months": ordered_months,
@@ -6900,11 +7017,8 @@ class UploadExcelViewRoche(View):
             ordered_months_overall = sorted(all_months, key=lambda x: month_order_value(x))
 
             # الشارت: Hit % فقط (من إجمالي الشحنات)
-            facility_colors = {
-                "Riyadh": "#9084ad",
-                "Dammam": "#a4aeb8",
-                "Jeddah": "#538fe7",
-            }
+            palette = ["#9084ad", "#a4aeb8", "#538fe7", "#0ea5e9", "#14b8a6", "#f59e0b", "#22c55e", "#ef4444"]
+            facility_colors = {name: palette[idx % len(palette)] for idx, name in enumerate(FACILITIES)}
             chart_data = []
             if ordered_months_overall:
                 for f in FACILITIES:
@@ -6963,11 +7077,11 @@ class UploadExcelViewRoche(View):
             overall_total = sum(facility_stats[f]["total"] for f in FACILITIES)
             overall_hits = sum(facility_stats[f]["hit"] for f in FACILITIES)
             overall_miss = overall_total - overall_hits
-            overall_hit_pct = round((overall_hits / overall_total) * 100, 2) if overall_total else 0   # total hit / total shipment * 100
-            overall_miss_pct = round((overall_miss / overall_total) * 100, 2) if overall_total else 0   # total miss / total shipment * 100
+            overall_hit_pct = pct_value(overall_hits, overall_total)   # total hit / total shipment * 100
+            overall_miss_pct = pct_value(overall_miss, overall_total)   # total miss / total shipment * 100
             aggregated_kpi_rows = [
-                {"KPI": "Hit %", "2025": round(overall_hit_pct, 2)},
-                {"KPI": "Miss %", "2025": round(overall_miss_pct, 2)},
+                {"KPI": "Hit %", "2025": overall_hit_pct},
+                {"KPI": "Miss %", "2025": overall_miss_pct},
                 {"KPI": "Hit (≤2d)", "2025": overall_hits},
                 {"KPI": "Miss (>2d)", "2025": overall_miss},
                 {"KPI": "Total Shipments", "2025": overall_total},
@@ -6983,9 +7097,10 @@ class UploadExcelViewRoche(View):
                 "is_first_facility": False,
             }
 
-            # Detail table: one row per shipment — filters Facility / Month / Shipment_nbr / Hit or Miss
+            # Detail table: one row per shipment — filters Facility / Month / Shipment_nbr / Status
             # Inbound: Offloading D&T ↔ Received LPN D&T. Return: Create shipment D&T ↔ Received LPN D&T
             _start_date_col_label = "Offloading D&T" if not is_return_tab else "Create shipment D&T"
+            _status_col = "Status" if not is_return_tab else "HIT or MISS"
             detail_columns = [
                 "Facility Code",
                 "Shipment_nbr",
@@ -6995,10 +7110,19 @@ class UploadExcelViewRoche(View):
                 "Item Count",
                 "Allowed Days",
                 "Days",
-                "HIT or MISS",
+                _status_col,
                 "Month",
                 "Remark",
             ]
+
+            def _norm_override_status(val):
+                t = (str(val or "").strip().lower())
+                if t == "hit":
+                    return "Hit"
+                if t == "miss":
+                    return "Miss"
+                return ""
+
             detail_rows = []
             for fac in FACILITIES:
                 for r in facility_stats.get(fac, {}).get("rows", []):
@@ -7011,37 +7135,56 @@ class UploadExcelViewRoche(View):
                         "Item Count": r.get("Item Count"),
                         "Allowed Days": r.get("Allowed Days"),
                         "Days": r.get("Days"),
-                        "HIT or MISS": r.get("HIT or MISS"),
+                        _status_col: r.get("HIT or MISS"),
                         "Month": r.get("Month"),
                     })
             # Remark و status_override من InboundShipmentRemark (مشترك بين Inbound و Return)
             if detail_rows:
-                unique_pairs = list(dict.fromkeys([(str(r.get("Shipment_nbr", "")).strip(), r.get("Facility Code")) for r in detail_rows if r.get("Shipment_nbr") and r.get("Facility Code")]))
-                if unique_pairs:
-                    remarks_qs = InboundShipmentRemark.objects.filter(
-                        shipment_nbr__in=[p[0] for p in unique_pairs],
-                        facility__in=[p[1] for p in unique_pairs],
+                def _remark_facility_norm(val):
+                    """Normalize facility for robust admin-override matching across uploads."""
+                    raw = str(val or "").strip()
+                    if not raw:
+                        return ""
+                    mapped = norm_facility(raw)
+                    if mapped:
+                        return str(mapped).strip().lower()
+                    return raw.lower()
+
+                shipment_nbrs = list(
+                    dict.fromkeys(
+                        str(r.get("Shipment_nbr", "")).strip()
+                        for r in detail_rows
+                        if r.get("Shipment_nbr") and str(r.get("Shipment_nbr", "")).strip()
                     )
-                    remarks_map = {(obj.shipment_nbr.strip(), obj.facility.strip()): (obj.remark or "", obj.status_override) for obj in remarks_qs}
-                else:
-                    remarks_map = {}
+                )
+                remarks_by_shipment = {}
+                if shipment_nbrs:
+                    for obj in InboundShipmentRemark.objects.filter(shipment_nbr__in=shipment_nbrs):
+                        remarks_by_shipment.setdefault(obj.shipment_nbr.strip(), []).append(obj)
                 for row in detail_rows:
                     sn = str(row.get("Shipment_nbr", "")).strip()
-                    fc = row.get("Facility Code", "")
-                    remark_and_status = remarks_map.get((sn, fc), ("", None)) if sn and fc else ("", None)
-                    if isinstance(remark_and_status, tuple):
-                        row["Remark"] = remark_and_status[0] if len(remark_and_status) > 0 else ""
-                        if len(remark_and_status) > 1 and remark_and_status[1]:
-                            row["HIT or MISS"] = (remark_and_status[1] or "").strip() or row.get("HIT or MISS", "Miss")
-                    else:
-                        row["Remark"] = remark_and_status or ""
-                # ✅ تصحيح: شحنة جدة 1329001727_1 تكون Hit وليس Miss
-                for row in detail_rows:
-                    if (str(row.get("Facility Code", "")).strip() == "Jeddah" and
-                            str(row.get("Shipment_nbr", "")).strip() == "1329001727_1"):
-                        row["HIT or MISS"] = "Hit"
-                        break
-
+                    fc = str(row.get("Facility Code", "") or "").strip()
+                    row.setdefault("Remark", "")
+                    if not sn or not fc:
+                        continue
+                    fc_key = _remark_facility_norm(fc)
+                    matched = None
+                    for obj in remarks_by_shipment.get(sn, []):
+                        if _remark_facility_norm(obj.facility) == fc_key:
+                            matched = obj
+                            break
+                    # Fallback: if only one admin record exists for this shipment, apply it
+                    # (helps when facility label format changes between uploads).
+                    if not matched:
+                        candidates = remarks_by_shipment.get(sn, [])
+                        if len(candidates) == 1:
+                            matched = candidates[0]
+                    if not matched:
+                        continue
+                    row["Remark"] = matched.remark or ""
+                    ov = _norm_override_status(matched.status_override)
+                    if ov:
+                        row[_status_col] = ov
                 # Pivot "On time inbound Receiving…" كان يُبنى من الحساب قبل Remark/status_override،
                 # فيظهر Miss في شهر معيّن بينما الجدول التفصيلي Hit. نُعيد التجميع من detail_rows النهائي.
                 by_f_m = {f: {} for f in FACILITIES}
@@ -7052,7 +7195,7 @@ class UploadExcelViewRoche(View):
                     m = (r.get("Month") or "").strip()
                     if not m:
                         continue
-                    hm = (r.get("HIT or MISS") or "").strip().lower()
+                    hm = (r.get(_status_col) or "").strip().lower()
                     if m not in by_f_m[fac]:
                         by_f_m[fac][m] = {"total": 0, "hit": 0, "miss": 0}
                     if hm == "hit":
@@ -7062,7 +7205,7 @@ class UploadExcelViewRoche(View):
                         by_f_m[fac][m]["total"] += 1
                         by_f_m[fac][m]["miss"] += 1
                 hm_map = {
-                    (r.get("Facility Code"), str(r.get("Shipment_nbr", "")).strip()): r.get("HIT or MISS")
+                    (r.get("Facility Code"), str(r.get("Shipment_nbr", "")).strip()): r.get(_status_col)
                     for r in detail_rows
                     if r.get("Shipment_nbr")
                 }
@@ -7070,8 +7213,8 @@ class UploadExcelViewRoche(View):
                     by_month = by_f_m.get(fac, {})
                     for m in by_month:
                         t = by_month[m]["total"]
-                        by_month[m]["hit_pct"] = round((by_month[m]["hit"] / t) * 100, 2) if t else 0
-                        by_month[m]["miss_pct"] = round((by_month[m]["miss"] / t) * 100, 2) if t else 0
+                        by_month[m]["hit_pct"] = pct_value(by_month[m]["hit"], t)
+                        by_month[m]["miss_pct"] = pct_value(by_month[m]["miss"], t)
                     ordered_m = sorted(by_month.keys(), key=lambda x: month_order_value(x))
                     months_wm = [mx for mx in ordered_m if by_month[mx]["miss"] > 0]
                     hits_f = sum(by_month[m]["hit"] for m in by_month)
@@ -7083,8 +7226,8 @@ class UploadExcelViewRoche(View):
                     facility_stats[fac]["hit"] = hits_f
                     facility_stats[fac]["miss"] = misses_f
                     facility_stats[fac]["total"] = total_f
-                    facility_stats[fac]["hit_pct"] = round((hits_f / total_f) * 100, 2) if total_f else 0
-                    facility_stats[fac]["miss_pct"] = round((misses_f / total_f) * 100, 2) if total_f else 0
+                    facility_stats[fac]["hit_pct"] = pct_value(hits_f, total_f)
+                    facility_stats[fac]["miss_pct"] = pct_value(misses_f, total_f)
                     for row in facility_stats[fac].get("rows", []):
                         k = (fac, str(row.get("Shipment_nbr", "")).strip())
                         if k in hm_map and hm_map[k]:
@@ -7094,11 +7237,7 @@ class UploadExcelViewRoche(View):
                 for s in facility_stats.values():
                     all_months.update((s.get("by_month") or {}).keys())
                 ordered_months_overall = sorted(all_months, key=lambda x: month_order_value(x))
-                facility_colors = {
-                    "Riyadh": "#9084ad",
-                    "Dammam": "#a4aeb8",
-                    "Jeddah": "#538fe7",
-                }
+                facility_colors = {name: palette[idx % len(palette)] for idx, name in enumerate(FACILITIES)}
                 chart_data = []
                 if ordered_months_overall:
                     for f in FACILITIES:
@@ -7153,17 +7292,17 @@ class UploadExcelViewRoche(View):
                 overall_total = sum(facility_stats[f]["total"] for f in FACILITIES)
                 overall_hits = sum(facility_stats[f]["hit"] for f in FACILITIES)
                 overall_miss = sum(facility_stats[f]["miss"] for f in FACILITIES)
-                overall_hit_pct = round((overall_hits / overall_total) * 100, 2) if overall_total else 0
-                overall_miss_pct = round((overall_miss / overall_total) * 100, 2) if overall_total else 0
+                overall_hit_pct = pct_value(overall_hits, overall_total)
+                overall_miss_pct = pct_value(overall_miss, overall_total)
                 aggregated_kpi_table["data"] = [
-                    {"KPI": "Hit %", "2025": round(overall_hit_pct, 2)},
-                    {"KPI": "Miss %", "2025": round(overall_miss_pct, 2)},
+                    {"KPI": "Hit %", "2025": overall_hit_pct},
+                    {"KPI": "Miss %", "2025": overall_miss_pct},
                     {"KPI": "Hit (≤2d)", "2025": overall_hits},
                     {"KPI": "Miss (>2d)", "2025": overall_miss},
                     {"KPI": "Total Shipments", "2025": overall_total},
                 ]
 
-            facility_options = sorted(df["Facility"].dropna().unique().astype(str).tolist())
+            facility_options = list(FACILITIES)
             month_options = sorted(set(r.get("Month") for r in detail_rows if r.get("Month")))
             detail_table = {
                 "id": "sub-table-return-detail" if is_return_tab else "sub-table-inbound-detail",
@@ -7176,7 +7315,7 @@ class UploadExcelViewRoche(View):
                     "facility_codes": facility_options,
                     "months": month_options,
                     "statuses": ["Hit", "Miss"],
-                    "hit_miss": ["Hit", "Miss"],
+                    **({"hit_miss": ["Hit", "Miss"]} if is_return_tab else {}),
                 },
             }
 
@@ -7205,7 +7344,7 @@ class UploadExcelViewRoche(View):
                     _sn = str(r.get("Shipment_nbr", "")).strip()
                     _fc = str(r.get("Facility Code", "")).strip()
                     if _sn:
-                        hm_by_ship_fac[(_sn, _fc)] = (r.get("HIT or MISS") or "").strip()
+                        hm_by_ship_fac[(_sn, _fc)] = (r.get(_status_col) or "").strip()
 
                 _full_data = []
                 for _, _row in _full_df.iterrows():
@@ -7239,7 +7378,7 @@ class UploadExcelViewRoche(View):
                     # نفس مفاتيح Inbound Shipments Detail للفلاتر (غير معروضة كأعمدة — فقط في الصف)
                     _d["Facility Code"] = _fnorm
                     _d["Month"] = _mv
-                    _d["HIT or MISS"] = _hm
+                    _d["Status"] = _hm
                     _full_data.append(_d)
                 _full_title = "Inbound Report"
                 full_sheet_table = {
@@ -7253,7 +7392,11 @@ class UploadExcelViewRoche(View):
                         "facility_codes": list(detail_table["filter_options"]["facility_codes"]),
                         "months": list(detail_table["filter_options"]["months"]),
                         "statuses": list(detail_table["filter_options"]["statuses"]),
-                        "hit_miss": list(detail_table["filter_options"]["hit_miss"]),
+                        **(
+                            {"hit_miss": list(detail_table["filter_options"]["hit_miss"])}
+                            if detail_table["filter_options"].get("hit_miss")
+                            else {}
+                        ),
                     },
                     "full_sheet_scroll": True,
                 }
@@ -7452,7 +7595,7 @@ class UploadExcelViewRoche(View):
             def _norm(val):
                 return re.sub(r"[^a-z0-9]", "", str(val).strip().lower())
 
-            # ----- 1) Number of track من شيت PODs -----
+            # ----- 1) Number of track من عمود Shipping Point (بدون حذف المكرر) -----
             number_of_track = 0
             pods_sheet = next(
                 (s for s in xls.sheet_names if "pod" in (s or "").lower()),
@@ -7467,12 +7610,25 @@ class UploadExcelViewRoche(View):
                     header=0,
                 ).fillna("")
                 df_pods.columns = df_pods.columns.astype(str).str.strip()
+                col_shipping_point = None
                 col_delivery = None
                 for c in df_pods.columns:
-                    if _norm(c) in ("delivery", "deliverynumber", "deliveryno", "deliverynbr") or "delivery" in _norm(c):
-                        col_delivery = c
+                    c_norm = _norm(c)
+                    if c_norm in ("shippingpoint", "shippingpt", "shippoint") or ("shipping" in c_norm and "point" in c_norm):
+                        col_shipping_point = c
                         break
-                if col_delivery is not None:
+                    if c_norm in ("delivery", "deliverynumber", "deliveryno", "deliverynbr") or "delivery" in c_norm:
+                        col_delivery = c
+                if col_shipping_point is not None:
+                    has_shipping_point = (
+                        df_pods[col_shipping_point].astype(str).str.strip().fillna("") != ""
+                    )
+                    # نعد كل القيم غير الفارغة كما هي (يشمل القيم المكررة)
+                    number_of_track = int(has_shipping_point.sum())
+                    # بعض ملفات الإكسل يُحسب فيها عنوان العمود ضمن Count داخل الشيت نفسه،
+                    # فنضيف سطر الهيدر لمطابقة الرقم الظاهر للمستخدم داخل الإكسل.
+                    number_of_track += 1
+                elif col_delivery is not None:
                     has_delivery = df_pods[col_delivery].astype(str).str.strip().fillna("") != ""
                     number_of_track = int(has_delivery.sum())
                 else:
