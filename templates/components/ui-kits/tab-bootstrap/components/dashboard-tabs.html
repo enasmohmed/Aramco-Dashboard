@@ -919,6 +919,9 @@
           tabContent.show();
           reinitializeScripts(tabContentEl);
           attachInnerTabListeners(tabContent[0]);
+          if (typeof window.initInboundTableFilters === "function") {
+            window.initInboundTableFilters();
+          }
 
           // ✅ رسم الشارتات من التابات — إذا الشارت دائرة (pie) نعرضه دائرة في All-in-One
           if (data.tab_cards && data.tab_cards.length && typeof window.drawAllInOneCharts === "function") {
@@ -954,6 +957,9 @@
         attachInnerTabListeners(document.getElementById("tab-content"));
         queueInitialChartRefresh(document.getElementById("tab-content"));
         initInboundShipmentsDataTable(document.getElementById("tab-content"));
+        if (typeof window.initInboundTableFilters === "function") {
+          window.initInboundTableFilters();
+        }
         if (window.refreshTransportMonthDropdownLabels) {
           window.refreshTransportMonthDropdownLabels(document.getElementById("tab-content"));
         }

@@ -32,11 +32,11 @@ def get_rowspan(row, col):
 
 @register.filter
 def get_failed_shipments_count(kpi_table):
-    """من قائمة صفوف KPI يرجّع قيمة Failed Shipments (Miss أو Miss (>24h) أو Miss (>2d)) من عمود 2025، أو 0"""
+    """من قائمة صفوف KPI يرجّع قيمة Failed Shipments من عمود 2025، أو 0"""
     if not kpi_table:
         return 0
     for row in kpi_table:
-        if isinstance(row, dict) and row.get("KPI") in ("Miss", "Miss (>24h)", "Miss (>2d)"):
+        if isinstance(row, dict) and row.get("KPI") in ("Miss", "Miss (>24h)", "Miss (>2d)", "Miss (>1d)"):
             val = row.get("2025") if isinstance(row.get("2025"), (int, float)) else row.get("2025")
             try:
                 return int(float(val)) if val is not None else 0

@@ -45,7 +45,6 @@
 
   /* جدول Inbound و Outbound و Return Shipments Detail: الهيدر يبقى ثابت عند السكرول */
   #inbound-shipments-detail-table thead th,
-  #inbound-full-sheet-table thead th,
   #outbound-shipments-detail-table thead th,
   #return-shipments-detail-table thead th {
     position: sticky;
@@ -261,7 +260,7 @@
         </div>
         <div class="kpi-title">Successful Shipments</div>
         <div class="kpi-value">{{ row.2025|floatformat:0 }}%</div>
-        <small class="text-muted d-block mt-1">{{ kpi_table|get_kpi_value:"Hit (≤2d)" }} shipments</small>
+        <small class="text-muted d-block mt-1">{% if tab.name|lower == 'inbound' or tab.name|lower == 'outbound shipments' %}{{ kpi_table|get_kpi_value:"Hit (≤1d)" }}{% else %}{{ kpi_table|get_kpi_value:"Hit (≤2d)" }}{% endif %} shipments</small>
       </div>
     </div>
     {% endif %}
@@ -445,6 +444,17 @@
                     {% endfor %}
                   </select>
                 </div>
+                {% if sub.filter_options.companies %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Company</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="company">
+                    <option value="">All</option>
+                    {% for opt in sub.filter_options.companies %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                {% endif %}
                 {% if sub.filter_options.months %}
                 <div class="col-12 col-sm-6 col-md-4 col-lg-3">
                   <label class="form-label small fw-semibold mb-1">Month</label>
@@ -487,7 +497,7 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}" data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %}>
+                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-company="{{ row|get_item:'Company'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}" data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {% if col|lower == "shipment_nbr" or col|lower == "shipment nbr" %}
@@ -1045,7 +1055,7 @@
       {% if sub.full_width %}
     <div class="row mt-4">
       <div class="col-12">
-        <div class="card" {% if sub.id == 'sub-table-inbound-full-sheet' %}id="inbound-full-sheet-card"{% endif %}>
+        <div class="card" {% if sub.id == 'sub-table-inbound-detail' %}id="inbound-detail-card"{% endif %}>
           <div class="card-header pb-0 card-no-border text-center">
             <h4 class="mb-2">{{ sub.title }}</h4>
           </div>
@@ -1062,6 +1072,17 @@
                     {% endfor %}
                   </select>
                 </div>
+                {% if sub.filter_options.companies %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Company</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="company">
+                    <option value="">All</option>
+                    {% for opt in sub.filter_options.companies %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                {% endif %}
                 {% if sub.filter_options.months %}
                 <div class="col-12 col-sm-6 col-md-4 col-lg-3">
                   <label class="form-label small fw-semibold mb-1">Month</label>
@@ -1085,12 +1106,12 @@
                 </div>
                 {% endif %}
                 <div class="col-12 col-sm-6 col-md-4 col-lg-3">
-                  <label class="form-label small fw-semibold mb-1">{% if sub.id == 'sub-table-inbound-full-sheet' %}Shipment Nbr{% else %}Order Nbr{% endif %}</label>
+                  <label class="form-label small fw-semibold mb-1">Shipment Nbr</label>
                   <input
                     type="text"
                     class="form-control inbound-detail-filter"
                     data-filter="order-nbr"
-                    placeholder="{% if sub.id == 'sub-table-inbound-full-sheet' %}Search Shipment Nbr{% else %}Search Order Nbr{% endif %}"
+                    placeholder="Search Shipment Nbr"
                   />
                 </div>
               </div>
@@ -1099,7 +1120,7 @@
           {% endif %}
           <div class="card-body text-center">
             <div class="table-responsive custom-scrollbar inbound-detail-table-scroll">
-              <table class="table table-bordered" {% if sub.id == 'sub-table-inbound-full-sheet' %}id="inbound-full-sheet-table"{% else %}id="inbound-shipments-detail-table"{% endif %}>
+              <table class="table table-bordered" id="inbound-shipments-detail-table">
                 <thead class="table-primary">
                   <tr role="row">
                     {% for col in sub.columns %}
@@ -1109,7 +1130,7 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-status="{% with s=row|get_item:'Status' %}{% if s %}{{ s }}{% else %}{{ row|get_item:'HIT or MISS'|default:'' }}{% endif %}{% endwith %}" data-order-nbr="{% firstof row|get_item:'Shipment_nbr' row|get_item:'Order Nbr' '' %}" data-hit-miss="{% with s=row|get_item:'Status' %}{% if s %}{{ s|lower }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}{% endwith %}"{% endif %}>
+                  <tr role="row" {% if sub.id == 'sub-table-inbound-detail' or sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-company="{{ row|get_item:'Company'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-status="{% with s=row|get_item:'Status' %}{% if s %}{{ s }}{% else %}{{ row|get_item:'HIT or MISS'|default:'' }}{% endif %}{% endwith %}" data-order-nbr="{% firstof row|get_item:'Shipment_nbr' row|get_item:'Order Nbr' '' %}" data-hit-miss="{% with s=row|get_item:'Status' %}{% if s %}{{ s|lower }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}{% endwith %}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {% if col|lower == "shipment_nbr" or col|lower == "shipment nbr" %}
@@ -1289,6 +1310,21 @@
                     {% endfor %}
                   </select>
                 </div>
+                {% if sub.filter_options.companies %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Company</label>
+                  <select class="form-select inbound-detail-filter w-100" data-filter="company">
+                    <option value="">All</option>
+                    {% for opt in sub.filter_options.companies %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                {% endif %}
+                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                  <label class="form-label small fw-semibold mb-1">Order Nbr</label>
+                  <input type="text" class="form-control inbound-detail-filter" data-filter="order-nbr" placeholder="Order Nbr / Order checked" />
+                </div>
                 <div class="col-12 col-sm-6 col-md-4 col-lg-3">
                   <label class="form-label small fw-semibold mb-1">Month</label>
                   <select class="form-select inbound-detail-filter w-100" data-filter="month">
@@ -1309,10 +1345,6 @@
                   </select>
                 </div>
                 {% endif %}
-                <div class="col-12 col-sm-6 col-md-4 col-lg-3">
-                  <label class="form-label small fw-semibold mb-1">Order Nbr</label>
-                  <input type="text" class="form-control inbound-detail-filter" data-filter="order-nbr" placeholder="Search Order Nbr" />
-                </div>
               </div>
             </div>
           </div>
@@ -1330,7 +1362,7 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}"{% endif %}>
+                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}" data-company="{{ row|get_item:'Company'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }} {{ row|get_item:'Order checked'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {% if col|lower == "status" %}
@@ -2184,13 +2216,13 @@
     {% for sub in tab.sub_tables %} {% if sub.full_width %}
     <div class="row mt-4">
       <div class="col-12">
-        <div class="card" {% if sub.id == 'sub-table-return-detail' %}id="return-detail-card"{% elif sub.id == 'sub-table-inbound-full-sheet' %}id="inbound-full-sheet-card"{% endif %}>
+        <div class="card" {% if sub.id == 'sub-table-return-detail' %}id="return-detail-card"{% endif %}>
           <div class="card-header pb-0 card-no-border text-center">
             <h4 class="mb-2">{{ sub.title }}</h4>
           </div>
 
-          {# فلتر Hit or Miss فوق جدول Inbound Shipments Detail و Inbound Report #}
-          {% if sub.filter_options and sub.filter_options.hit_miss and sub.id == 'sub-table-inbound-detail' or sub.filter_options and sub.filter_options.hit_miss and sub.id == 'sub-table-inbound-full-sheet' %}
+          {# فلتر Hit or Miss فوق جدول Inbound Shipments Detail #}
+          {% if sub.filter_options and sub.filter_options.hit_miss and sub.id == 'sub-table-inbound-detail' %}
           <div class="card-body py-2 px-3 border-bottom">
             <div class="row align-items-center g-2">
               <div class="col-auto">
@@ -2238,6 +2270,25 @@
                       {% endfor %}
                     </select>
                   </div>
+
+                  {% if sub.filter_options.companies %}
+                  <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                    <label class="form-label small fw-semibold mb-1">Company</label>
+                    <select class="form-select inbound-detail-filter w-100" data-filter="company">
+                      <option value="">All</option>
+                      {% for opt in sub.filter_options.companies %}
+                      <option value="{{ opt }}">{{ opt }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  {% endif %}
+
+                  {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options %}
+                  <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                    <label class="form-label small fw-semibold mb-1">Order Nbr</label>
+                    <input type="text" class="form-control inbound-detail-filter" data-filter="order-nbr" placeholder="Order Nbr / Order checked" />
+                  </div>
+                  {% endif %}
 
                   <!-- Status (Hit/Miss for Inbound, other statuses for Outbound) -->
                   {% if sub.filter_options.statuses %}
@@ -2308,8 +2359,8 @@
 
 
           <div class="card-body text-center ">
-            <div class="table-responsive custom-scrollbar{% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' or sub.id == 'sub-table-inbound-full-sheet' or sub.id == 'sub-table-outbound-full-sheet' %} inbound-detail-table-scroll{% endif %}">
-              <table class="table table-bordered" {% if sub.id == 'sub-table-inbound-detail' %}id="inbound-shipments-detail-table"{% elif sub.id == 'sub-table-inbound-full-sheet' %}id="inbound-full-sheet-table"{% elif sub.id == 'sub-table-outbound-detail' %}id="outbound-shipments-detail-table"{% elif sub.id == 'sub-table-return-detail' %}id="return-shipments-detail-table"{% endif %}>
+            <div class="table-responsive custom-scrollbar{% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' or sub.id == 'sub-table-outbound-full-sheet' %} inbound-detail-table-scroll{% endif %}">
+              <table class="table table-bordered" {% if sub.id == 'sub-table-inbound-detail' %}id="inbound-shipments-detail-table"{% elif sub.id == 'sub-table-outbound-detail' %}id="outbound-shipments-detail-table"{% elif sub.id == 'sub-table-return-detail' %}id="return-shipments-detail-table"{% endif %}>
                 <thead class="table-primary">
                   <tr role="row">
                     {% for col in sub.columns %}
@@ -2319,7 +2370,7 @@
                 </thead>
                 <tbody>
                   {% for row in sub.data %}
-                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" {% if sub.id == 'sub-table-outbound-detail' and sub.filter_options.facility_code_list %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}"{% endif %} data-status="{% if sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-inbound-full-sheet' %}{% with s=row|get_item:'Status' %}{% if s %}{{ s }}{% else %}{{ row|get_item:'HIT or MISS'|default:'' }}{% endif %}{% endwith %}{% elif sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' %}{{ row|get_item:'HIT or MISS'|default:'' }}{% else %}{{ row|get_item:'Status'|default:'' }}{% endif %}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.id == 'sub-table-return-detail' %}data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %} {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{% if sub.id == 'sub-table-inventory-detail' %}{{ row|get_item:'Status'|default:'' }}{% elif sub.id == 'sub-table-inbound-detail' or sub.id == 'sub-table-inbound-full-sheet' %}{% with s=row|get_item:'Status' %}{% if s %}{{ s|lower }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}{% endwith %}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}"{% endif %}{% endif %}>
+                  <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-company="{{ row|get_item:'Company'|default:'' }}" {% if sub.id == 'sub-table-outbound-detail' %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }} {{ row|get_item:'Order checked'|default:'' }}"{% endif %} data-status="{% if sub.id == 'sub-table-inbound-detail' %}{% with s=row|get_item:'Status' %}{% if s %}{{ s }}{% else %}{{ row|get_item:'HIT or MISS'|default:'' }}{% endif %}{% endwith %}{% elif sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' %}{{ row|get_item:'HIT or MISS'|default:'' }}{% else %}{{ row|get_item:'Status'|default:'' }}{% endif %}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.id == 'sub-table-return-detail' %}data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %} {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{% if sub.id == 'sub-table-inventory-detail' %}{{ row|get_item:'Status'|default:'' }}{% elif sub.id == 'sub-table-inbound-detail' %}{% with s=row|get_item:'Status' %}{% if s %}{{ s|lower }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}{% endwith %}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}"{% endif %}{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
                     {# ===== INBOUND / RETURN: Shipment_nbr, Received QTY, Remark (editable), HIT or MISS (عرض فقط) ===== #}
@@ -2623,63 +2674,100 @@
 
 <script>
       (function() {
-        var tableIds = ['inbound-shipments-detail-table', 'inbound-full-sheet-table', 'inventory-shipments-detail-table', 'return-shipments-detail-table'];
-        tableIds.forEach(function(tableId) {
+        function normHitMiss(v) {
+          var t = String(v == null ? '' : v).trim().toLowerCase();
+          if (t === 'hit' || t === 'h') return 'hit';
+          if (t === 'miss' || t === 'm') return 'miss';
+          return t;
+        }
+        function findFilterCardForTable(table) {
+          if (!table) return null;
+          if (table.id === 'inbound-shipments-detail-table') {
+            return document.getElementById('inbound-detail-card') || table.closest('.card');
+          }
+          if (table.id === 'return-shipments-detail-table') {
+            return document.getElementById('return-detail-card') || table.closest('.card');
+          }
+          return table.closest('.card');
+        }
+        function applyTableRowFilters(card, table) {
+          if (!card || !table) return;
+          var tbody = table.querySelector('tbody');
+          if (!tbody) return;
+          var facility = (card.querySelector('[data-filter="facility"]') || {}).value || '';
+          var facilityCode = (card.querySelector('[data-filter="facility-code"]') || {}).value || '';
+          var company = (card.querySelector('[data-filter="company"]') || {}).value || '';
+          var status = (card.querySelector('[data-filter="status"]') || {}).value || '';
+          var month = (card.querySelector('[data-filter="month"]') || {}).value || '';
+          var hitMissEl = card.querySelector('[data-filter="hit-miss"]');
+          var hitMiss = (hitMissEl && hitMissEl.value) ? hitMissEl.value.trim() : '';
+          var cityEl = card.querySelector('[data-filter="city"]');
+          var city = (cityEl && cityEl.value) ? cityEl.value : '';
+          var orderNbrInput = card.querySelector('[data-filter="order-nbr"]');
+          var orderNbr = (orderNbrInput && orderNbrInput.value) ? orderNbrInput.value.trim() : '';
+          var shipmentNbrInput = card.querySelector('[data-filter="shipment-nbr"]');
+          var shipmentNbr = (shipmentNbrInput && shipmentNbrInput.value) ? shipmentNbrInput.value.trim() : '';
+          facility = String(facility).trim();
+          month = String(month).trim();
+          var rows = tbody.querySelectorAll('tr');
+          var wantHm = normHitMiss(status) || normHitMiss(hitMiss);
+          for (var i = 0; i < rows.length; i++) {
+            var tr = rows[i];
+            var f = (tr.getAttribute('data-facility') || '').trim();
+            var fc = (tr.getAttribute('data-facility-code') || '').trim();
+            var co = (tr.getAttribute('data-company') || '').trim();
+            var s = (tr.getAttribute('data-status') || '').trim();
+            var m = (tr.getAttribute('data-month') || '').trim();
+            var hm = (tr.getAttribute('data-hit-miss') || '').trim();
+            var c = (tr.getAttribute('data-city') || '').trim();
+            var on = (tr.getAttribute('data-order-nbr') || '').trim();
+            var sn = (tr.getAttribute('data-shipment-nbr') || '').trim();
+            var rowHm = (s || hm || '').trim();
+            var classificationOk = !wantHm || normHitMiss(rowHm) === wantHm;
+            var facOk = !facility || f.toLowerCase() === facility.toLowerCase();
+            var monOk = !month || m === month;
+            var show = facOk &&
+              (!facilityCode || fc === facilityCode) &&
+              (!company || co === company) &&
+              classificationOk &&
+              monOk &&
+              (!city || c === city) &&
+              (!orderNbr || on.indexOf(orderNbr) !== -1) &&
+              (!shipmentNbr || sn.indexOf(shipmentNbr) !== -1);
+            tr.style.display = show ? '' : 'none';
+          }
+        }
+        function onInboundFilterEvent(ev) {
+          var t = ev.target;
+          if (!t || !t.classList || !t.classList.contains('inbound-detail-filter')) return;
+          var card = t.closest('#inbound-detail-card') || t.closest('#return-detail-card') || t.closest('.card');
+          if (!card) return;
+          var table = card.querySelector('#inbound-shipments-detail-table, #return-shipments-detail-table, #inventory-shipments-detail-table');
+          if (table) applyTableRowFilters(card, table);
+        }
+        if (!window._inboundFilterDelegationAttached) {
+          window._inboundFilterDelegationAttached = true;
+          document.addEventListener('change', onInboundFilterEvent);
+          document.addEventListener('input', onInboundFilterEvent);
+        }
+        window.initInboundTableFilters = function () {
+          var ids = ['inbound-shipments-detail-table', 'return-shipments-detail-table', 'inventory-shipments-detail-table'];
+          for (var j = 0; j < ids.length; j++) {
+            var table = document.getElementById(ids[j]);
+            if (!table) continue;
+            var card = findFilterCardForTable(table);
+            if (card) applyTableRowFilters(card, table);
+          }
+        };
+        var tableIds = ['inbound-shipments-detail-table', 'inventory-shipments-detail-table', 'return-shipments-detail-table'];
+        tableIds.forEach(function (tableId) {
           var table = document.getElementById(tableId);
           if (!table) return;
-          var card = table.closest('.card');
+          var card = findFilterCardForTable(table);
           if (!card) return;
-          var tbody = table.querySelector('tbody');
-          var selects = card.querySelectorAll('.inbound-detail-filter');
-          if (!selects.length) return;
-          function applyFilters() {
-            function normHitMiss(v) {
-              var t = String(v == null ? '' : v).trim().toLowerCase();
-              if (t === 'hit' || t === 'h') return 'hit';
-              if (t === 'miss' || t === 'm') return 'miss';
-              return t;
-            }
-            var facility = (card.querySelector('[data-filter="facility"]') || {}).value || '';
-            var facilityCode = (card.querySelector('[data-filter="facility-code"]') || {}).value || '';
-            var status = (card.querySelector('[data-filter="status"]') || {}).value || '';
-            var month = (card.querySelector('[data-filter="month"]') || {}).value || '';
-            var hitMissEl = card.querySelector('[data-filter="hit-miss"]');
-            var hitMiss = (hitMissEl && hitMissEl.value) ? hitMissEl.value.trim() : '';
-            var cityEl = card.querySelector('[data-filter="city"]');
-            var city = (cityEl && cityEl.value) ? cityEl.value : '';
-            var orderNbrInput = card.querySelector('[data-filter="order-nbr"]');
-            var orderNbr = (orderNbrInput && orderNbrInput.value) ? orderNbrInput.value.trim() : '';
-            var shipmentNbrInput = card.querySelector('[data-filter="shipment-nbr"]');
-            var shipmentNbr = (shipmentNbrInput && shipmentNbrInput.value) ? shipmentNbrInput.value.trim() : '';
-            var rows = tbody ? tbody.querySelectorAll('tr') : [];
-            rows.forEach(function(tr) {
-              var f = (tr.getAttribute('data-facility') || '').trim();
-              var fc = (tr.getAttribute('data-facility-code') || '').trim();
-              var s = (tr.getAttribute('data-status') || '').trim();
-              var m = (tr.getAttribute('data-month') || '').trim();
-              var hm = (tr.getAttribute('data-hit-miss') || '').trim();
-              var c = (tr.getAttribute('data-city') || '').trim();
-              var on = (tr.getAttribute('data-order-nbr') || '').trim();
-              var sn = (tr.getAttribute('data-shipment-nbr') || '').trim();
-              var rowHm = (s || hm || '').trim();
-              var statusOk = !status || normHitMiss(rowHm) === normHitMiss(status);
-              var show = (!facility || f === facility) &&
-                         (!facilityCode || fc === facilityCode) &&
-                         statusOk &&
-                         (!month || m === month) &&
-                         (!hitMiss || hm.toLowerCase() === hitMiss.toLowerCase()) &&
-                         (!city || c === city) &&
-                         (!orderNbr || on.indexOf(orderNbr) !== -1) &&
-                         (!shipmentNbr || sn.indexOf(shipmentNbr) !== -1);
-              tr.style.display = show ? '' : 'none';
-            });
+          if (card.querySelectorAll('.inbound-detail-filter').length) {
+            applyTableRowFilters(card, table);
           }
-          for (var i = 0; i < selects.length; i++) {
-            var el = selects[i];
-            var isInput = el.tagName && el.tagName.toLowerCase() === 'input';
-            el.addEventListener(isInput ? 'input' : 'change', applyFilters);
-          }
-          applyFilters();
         });
 
         (function outboundDetailFilter() {
@@ -2690,24 +2778,35 @@
             var tbody = table.querySelector('tbody');
             if (!tbody) return;
             var facility = (card.querySelector('[data-filter="facility"]') || {}).value || '';
+            var facilityCode = (card.querySelector('[data-filter="facility-code"]') || {}).value || '';
+            var companyEl = card.querySelector('[data-filter="company"]');
+            var company = (companyEl && companyEl.value) ? String(companyEl.value).trim() : '';
             var month = (card.querySelector('[data-filter="month"]') || {}).value || '';
             var hitMissEl = card.querySelector('[data-filter="hit-miss"]');
             var hitMiss = (hitMissEl && hitMissEl.value) ? String(hitMissEl.value).trim().toLowerCase() : '';
             var orderNbrInput = card.querySelector('[data-filter="order-nbr"]');
             var orderNbr = (orderNbrInput && orderNbrInput.value) ? orderNbrInput.value.trim() : '';
             var rows = tbody.querySelectorAll('tr');
+            facility = String(facility).trim();
+            facilityCode = String(facilityCode).trim();
             for (var i = 0; i < rows.length; i++) {
               var tr = rows[i];
               var f = (tr.getAttribute('data-facility') || '').trim();
+              var fcRow = (tr.getAttribute('data-facility-code') || '').trim();
+              var co = (tr.getAttribute('data-company') || '').trim();
               var m = (tr.getAttribute('data-month') || '').trim();
               var hmRaw = tr.getAttribute('data-hit-miss');
               var hm = (hmRaw != null ? String(hmRaw) : '').trim().toLowerCase();
-              var on = (tr.getAttribute('data-order-nbr') || '').trim();
+              var on = (tr.getAttribute('data-order-nbr') || '').trim().toLowerCase();
+              var orderNeedle = orderNbr.toLowerCase();
               var hitMissMatch = !hitMiss || hm === hitMiss || (hitMiss === 'miss' && hm === 'pending');
-              var show = (!facility || f === facility) &&
+              var facOk = !facility || f.toLowerCase() === facility.toLowerCase();
+              var facCodeOk = !facilityCode || fcRow === facilityCode;
+              var companyOk = !company || co === company;
+              var show = facOk && facCodeOk && companyOk &&
                          (!month || m === month) &&
                          hitMissMatch &&
-                         (!orderNbr || on.indexOf(orderNbr) !== -1);
+                         (!orderNbr || on.indexOf(orderNeedle) !== -1);
               tr.style.display = show ? '' : 'none';
             }
           }

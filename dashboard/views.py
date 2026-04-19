@@ -38,6 +38,67 @@ from .models import (
 )
 
 
+def _is_sla_non_working_day(date_val):
+    """
+    أيام لا تُحسب ضمن أيام عمل SLA (Inbound و Outbound بنفس القائمة):
+    الجمعة؛ 22 فبراير (يوم التأسيس)؛ وعيد الفطر في مارس (19–24 مارس).
+    """
+    if date_val is None:
+        return True
+    wd = date_val.weekday()
+    if wd == 4:  # Friday
+        return True
+    if date_val.month == 2 and date_val.day == 22:
+        return True
+    if date_val.month == 3 and 19 <= date_val.day <= 24:
+        return True
+    return False
+
+
+def _sla_working_days_between_dates(start_ts, end_ts):
+    """
+    عدد أيام العمل بين تاريخ البداية وتاريخ النهاية (التاريخ فقط، بدون وقت)،
+    من يوم البداية حتى **قبل** يوم النهاية — بنفس منطق Inbound Dock-to-Stock:
+    لا تُعدّ الجمعة ولا 22 فبراير ولا 19–24 مارس (عيد).
+    """
+    if start_ts is None or end_ts is None or pd.isna(start_ts) or pd.isna(end_ts):
+        return 0
+    try:
+        start_d = start_ts.date() if hasattr(start_ts, "date") else start_ts
+        end_d = end_ts.date() if hasattr(end_ts, "date") else end_ts
+    except Exception:
+        return 0
+    if start_d > end_d:
+        return 0
+    if start_d == end_d:
+        return 0
+    days = 0
+    current = start_d
+    while current < end_d:
+        if not _is_sla_non_working_day(current):
+            days += 1
+        current += timedelta(days=1)
+    return days
+
+
+def _outbound_calendar_span_days(create_ts, ship_ts):
+    """
+    فرق أيام التقويم الخام (Ship − Create).days — غير مستخدم لحساب Hit/Miss في Outbound
+    (الـ KPI يعتمد على _sla_working_days_between_dates مع استثناء الإجازات).
+    """
+    if create_ts is None or ship_ts is None or pd.isna(create_ts) or pd.isna(ship_ts):
+        return None
+    try:
+        start_d = create_ts.date() if hasattr(create_ts, "date") else create_ts
+        end_d = ship_ts.date() if hasattr(ship_ts, "date") else ship_ts
+    except Exception:
+        return None
+    try:
+        return (end_d - start_d).days
+    except Exception:
+        return None
+
+
 def make_json_serializable(df):
 
     def convert_value(x):
@@ -4786,10 +4847,11 @@ class UploadExcelViewRoche(View):
     ):
         """
         🔹 يقرأ من شيت ARAMCO Outbound Report. المفتاح: Order checked (أو Order Nbr للتوافق).
-        🔹 ترتيب الفلترة: Facility → Company (اختياري) → Order checked.
-        🔹 Hit/Miss (On time shipment 24 h): عدد الأسطر لكل Order checked؛ ≤50 سطر → مسموح يوم واحد؛ >50 سطر → مسموح يومين.
-           الأيام المحسوبة = أيام عمل بين Create Order و Shipped date (يوم الجمعة لا يُحسب).
-        🔹 Order Fulfilment: مقارنة Packed Qty و Allocated Qty لكل طلب؛ الشارت يعرض جدة/الدمام/الرياض: On time 24h % و Order Fulfilment %.
+        🔹 ترتيب الفلترة: Facility → Company → Order Nbr. تجميع الـ KPI لكل **Order Nbr** (كصف الشيت) حتى لا تُخلَط تواريخ شحنات مختلفة بسبب Order checked المشترك؛
+           استثناء: Order Nbr يبدأ بـ 240 و Order checked بـ 250 → المفتاح = رقم الـ 250 من Order checked.
+        🔹 Hit/Miss: مقارنة **تاريخ** Create Order مع **تاريخ** Shipped date فقط (الساعات تُهمل).
+           عدد **أيام العمل SLA** بين التاريخين (من يوم الإنشاء حتى قبل يوم الشحن) مع استثناء الجمعة و22 فبراير و19–24 مارس (عيد)، كما في Inbound؛ Hit إذا ≤ 1 يوم عمل، Miss إذا أكثر.
+        🔹 Order Fulfilment: مقارنة Packed Qty و Allocated Qty لكل طلب؛ الشارت يعرض المناطق: On time % و Order Fulfilment %.
         """
         try:
             import os
@@ -5097,13 +5159,29 @@ class UploadExcelViewRoche(View):
             else:
                 df1["_FacilityNorm"] = None
 
-            # مفتاح العرض والفلترة: Order checked (إن وُجد) وإلا Order Nbr
-            order_key_col = "Order checked" if "Order checked" in df1.columns else "Order Nbr"
-            df1["_OrderKey"] = df1[order_key_col].astype(str).str.strip()
+            # مفتاح التجميع والـ KPI (يطابق صف الشيت لكل شحنة 250…):
+            # - الافتراضي: Order Nbr — حتى لا تُدمَج شحنات مختلفة تتشارك نفس Order checked (240…) ويختلط Ship Date.
+            # - استثناء: Order Nbr يبدأ بـ 240 و Order checked يبدأ بـ 250 → المفتاح = Order checked (رقم الـ 250 الصحيح).
             df1["Order Nbr"] = df1["Order Nbr"].astype(str).str.strip()
-            if order_key_col == "Order checked":
+            if "Order checked" not in df1.columns:
+                df1["Order checked"] = df1["Order Nbr"]
+            else:
                 df1["Order checked"] = df1["Order checked"].astype(str).str.strip()
-            # تجنب مفاتيح فارغة/NaN حتى لا تضيع في التجميع
+            on_s = df1["Order Nbr"]
+            oc_s = df1["Order checked"]
+            empty_oc = oc_s.str.lower().isin(["", "nan", "none", "nat"]) | (oc_s.str.len() == 0)
+            return_240_to_250 = (
+                on_s.str.startswith("240", na=False)
+                & oc_s.str.startswith("250", na=False)
+                & (~empty_oc)
+            )
+            # مفتاح = Order Nbr؛ نستبدل فقط في سيناريو 240 ← 250
+            df1["_OrderKey"] = on_s.astype(str).str.strip()
+            df1["_OrderKey"] = np.where(
+                return_240_to_250,
+                oc_s.astype(str).str.strip(),
+                df1["_OrderKey"],
+            )
             invalid_key_mask = df1["_OrderKey"].str.lower().isin(["", "nan", "none", "nat"])
             df1.loc[invalid_key_mask, "_OrderKey"] = df1.loc[invalid_key_mask, "Order Nbr"]
 
@@ -5157,8 +5235,8 @@ class UploadExcelViewRoche(View):
                 if dt_col not in df1.columns:
                     continue
                 raw_dates = df1[dt_col].copy()
-                # أولاً: pandas قد يكون قرأ التواريخ تلقائياً من Excel
-                df1[dt_col] = pd.to_datetime(df1[dt_col], errors="coerce")
+                # أولاً: pandas من Excel؛ dayfirst=True يقلب التباس DD/MM مقابل MM/DD لنصوص مثل 04/03/2026
+                df1[dt_col] = pd.to_datetime(df1[dt_col], errors="coerce", dayfirst=True)
                 # ثانياً: أي قيمة لا تزال NaT نحاول تحويلها من القيمة الخام (نص، Excel serial، إلخ)
                 nat_mask = df1[dt_col].isna()
                 if nat_mask.any():
@@ -5290,51 +5368,31 @@ class UploadExcelViewRoche(View):
                         df1[packed_in_ob1], errors="coerce"
                     )
 
-            # ========== Outbound Hit/Miss (working days excl. Friday) ==========
-            # أيام العمل الواقعة بين Create و Ship فقط (لا يوم الإنشاء ولا يوم الاستلام، ولا الجمعة).
-            # ≤50 سطر → مسموح يوم واحد بينهما؛ >50 سطر → مسموح يومين. Hit لو الأيام ≤ المسموح.
-            def _working_days_between_exclude_friday(create_ts, ship_ts):
-                if create_ts is None or ship_ts is None or pd.isna(create_ts) or pd.isna(ship_ts):
-                    return 0
-                try:
-                    start_d = create_ts.date() if hasattr(create_ts, "date") else create_ts
-                    end_d = ship_ts.date() if hasattr(ship_ts, "date") else ship_ts
-                except Exception:
-                    return 0
-                if start_d >= end_d:
-                    return 0  # نفس اليوم أو استلام قبل إنشاء = 0 أيام بينهما
-                days = 0
-                current = start_d + timedelta(days=1)  # نبدأ من اليوم التالي لإنشاء (لا نحسب يوم الإنشاء ولا يوم الاستلام)
-                while current < end_d:
-                    if current.weekday() != 4:  # الجمعة لا تُحسب
-                        days += 1
-                    current += timedelta(days=1)
-                return days
+            # ========== Outbound Hit/Miss — أيام عمل SLA (بدون جمعة، 22 فبراير، 19–24 مارس)؛ نفس دالة Inbound ==========
 
-            line_count_per_order = df1.groupby("_PerfKey").size()
             create_min = df1.groupby("_PerfKey")["Create Timestamp"].min()
             ship_max = df1.groupby("_PerfKey")["Ship Date"].max()
+            line_count_per_order = df1.groupby("_PerfKey").size()
             order_days_used = {}
             order_allowed_days = {}
             order_line_count = {}
             order_is_hit = {}
+            allowed_days_out = 1  # Hit إذا ≤ يوم عمل SLA واحد
             for o in df1["_PerfKey"].unique():
                 if not o or (isinstance(o, str) and o.strip() == "") or (isinstance(o, float) and pd.isna(o)):
                     continue
                 line_count = int(line_count_per_order.get(o, 0))
-                # قاعدة 50 سطر: أكثر من 50 = مسموح يومين؛ 50 أو أقل = مسموح يوم واحد (On time shipment 24 h)
-                allowed_days = 2 if line_count > 50 else 1
                 create_ts = create_min.get(o)
                 ship_ts = ship_max.get(o)
+                order_line_count[o] = line_count
+                order_allowed_days[o] = allowed_days_out
                 if pd.isna(create_ts) or pd.isna(ship_ts):
                     order_is_hit[o] = False
                     order_days_used[o] = 0
                 else:
-                    days_used = _working_days_between_exclude_friday(create_ts, ship_ts)
+                    days_used = _sla_working_days_between_dates(create_ts, ship_ts)
                     order_days_used[o] = days_used
-                    order_is_hit[o] = days_used <= allowed_days
-                order_allowed_days[o] = allowed_days
-                order_line_count[o] = line_count
+                    order_is_hit[o] = days_used <= allowed_days_out
 
             df1["_LineCount"] = df1["_PerfKey"].map(order_line_count)
             df1["_AllowedDays"] = df1["_PerfKey"].map(order_allowed_days)
@@ -5342,22 +5400,9 @@ class UploadExcelViewRoche(View):
             df1["Cycle Days"] = df1["_DaysUsed"].replace(np.nan, 0)
             df1["Cycle Hours"] = df1["Cycle Days"] * 24
             df1["Days_Used"] = df1["_DaysUsed"]
-            df1["is_hit"] = df1["_PerfKey"].map(lambda o: order_is_hit.get(o, False))
+            df1["is_hit"] = df1["_PerfKey"].map(lambda x: order_is_hit.get(x, False))
             df1["HIT or MISS"] = np.where(df1["is_hit"], "Hit", "Miss")
             df1.loc[df1["Create Timestamp"].isna() | df1["Ship Date"].isna(), "HIT or MISS"] = "Miss"
-
-            # ✅ تصحيح يدوي: طلب الرياض 2501715493 يعتبر Hit دائماً (ينعكس على الشارتات والجداول)
-            try:
-                if "_FacilityNorm" in df1.columns:
-                    _override_mask = df1["_FacilityNorm"].astype(str).str.strip().eq("Riyadh")
-                else:
-                    _override_mask = df1["Facility Code"].astype(str).str.lower().str.contains("riyadh")
-                _override_mask = _override_mask & df1["_OrderKey"].astype(str).str.strip().eq("2501715493")
-                if _override_mask.any():
-                    df1.loc[_override_mask, "is_hit"] = True
-                    df1.loc[_override_mask, "HIT or MISS"] = "Hit"
-            except Exception:
-                pass
 
             # لو كل الطلبات Miss غالباً التواريخ ما اتحولتش صح (Create Order أو Ship Date فاضية)
             _n_hit = (df1["HIT or MISS"] == "Hit").sum()
@@ -5399,6 +5444,18 @@ class UploadExcelViewRoche(View):
                 fc = df1["Facility Code"].fillna("").astype(str).str.strip().str.lower()
                 df1 = df1[(fn == _fac) | (fc == _fac.lower())]
 
+            # فلتر Company (بعد Facility — نفس تسلسل Inbound)
+            _company_filter = (request.GET.get("outbound_company") or "").strip() if request and getattr(request, "GET", None) else ""
+            if _company_filter and "Company" in df1.columns:
+                df1 = df1[
+                    df1["Company"]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .str.lower()
+                    .str.contains(_company_filter.lower(), na=False, regex=False)
+                ]
+
             # فلتر الشهر (Create Order)
             selected_months_norm = []
             if selected_months:
@@ -5425,18 +5482,34 @@ class UploadExcelViewRoche(View):
                     df1["Month"].fillna("").str.lower() == selected_month_norm.lower()
                 ]
 
-            # فلتر Order checked (أو Order Nbr للتوافق): لعرض طلب معين
+            # فلتر رقم الطلب: يطابق _OrderKey أو Order Nbr أو Order checked (لو البحث بـ 240 والمفتاح أصبح 250 يظهر الصف)
             _order_filter = (selected_order_nbr or "").strip() if selected_order_nbr else ""
             if not _order_filter and request and getattr(request, "GET", None):
                 _order_filter = (request.GET.get("outbound_order_checked") or request.GET.get("outbound_order_nbr") or "").strip()
             if _order_filter:
-                df1 = df1[
-                    df1["_OrderKey"].astype(str).str.strip().str.lower().str.contains(_order_filter.lower(), na=False, regex=False)
-                ]
-            # فلتر Company (لحساب Order Fulfilment)
-            _company_filter = (request.GET.get("outbound_company") or "").strip() if request and getattr(request, "GET", None) else ""
-            if _company_filter and "Company" in df1.columns:
-                df1 = df1[df1["Company"].fillna("").astype(str).str.strip().str.lower().str.contains(_company_filter.lower(), na=False, regex=False)]
+                fl = _order_filter.lower()
+                m_key = (
+                    df1["_OrderKey"]
+                    .astype(str)
+                    .str.strip()
+                    .str.lower()
+                    .str.contains(fl, na=False, regex=False)
+                )
+                m_nbr = (
+                    df1["Order Nbr"]
+                    .astype(str)
+                    .str.strip()
+                    .str.lower()
+                    .str.contains(fl, na=False, regex=False)
+                )
+                m_chk = (
+                    df1["Order checked"]
+                    .astype(str)
+                    .str.strip()
+                    .str.lower()
+                    .str.contains(fl, na=False, regex=False)
+                )
+                df1 = df1[m_key | m_nbr | m_chk]
 
             if df1.empty:
                 return {
@@ -5516,8 +5589,8 @@ class UploadExcelViewRoche(View):
                     {
                         "Month": m,
                         "Total Order": int(row["Total_Shipments"]),
-                        "Hit (≤2d)": int(row["Hits"]),
-                        "Miss (>2d)": int(row["Misses"]),
+                        "Hit (≤1d)": int(row["Hits"]),
+                        "Miss (>1d)": int(row["Misses"]),
                         "Hit %": float(row["Hit %"]),
                         "Facility Count": int(row["Facility_Count"]),
                     }
@@ -5529,14 +5602,14 @@ class UploadExcelViewRoche(View):
 
             hit_pct_row = {"KPI": "Hit %"}
             total_row = {"KPI": "Total Order"}
-            hit_row = {"KPI": "Hit (≤2d)"}
-            miss_row = {"KPI": "Miss (>2d)"}
+            hit_row = {"KPI": "Hit (≤1d)"}
+            miss_row = {"KPI": "Miss (>1d)"}
             for m in ordered_months:
                 r = next((x for x in kpi_rows if x["Month"] == m), None)
                 if r:
                     total_val = int(r["Total Order"])
-                    hit_val = int(r["Hit (≤2d)"])
-                    miss_val = int(r["Miss (>2d)"])
+                    hit_val = int(r["Hit (≤1d)"])
+                    miss_val = int(r["Miss (>1d)"])
                     total_row[m] = total_val
                     hit_row[m] = hit_val
                     miss_row[m] = miss_val
@@ -5545,13 +5618,13 @@ class UploadExcelViewRoche(View):
                     )
             if "2025" in pivot_cols:
                 total_2025 = sum(r["Total Order"] for r in kpi_rows)
-                hit_2025 = sum(r["Hit (≤2d)"] for r in kpi_rows)
+                hit_2025 = sum(r["Hit (≤1d)"] for r in kpi_rows)
                 hit_pct_row["2025"] = (
                     int(round(hit_2025 / total_2025 * 100)) if total_2025 > 0 else 0
                 )
                 total_row["2025"] = int(sum(r["Total Order"] for r in kpi_rows))
-                hit_row["2025"] = int(sum(r["Hit (≤2d)"] for r in kpi_rows))
-                miss_row["2025"] = int(sum(r["Miss (>2d)"] for r in kpi_rows))
+                hit_row["2025"] = int(sum(r["Hit (≤1d)"] for r in kpi_rows))
+                miss_row["2025"] = int(sum(r["Miss (>1d)"] for r in kpi_rows))
 
             # Total Order آخر صف في الجدول
             summary_data_pivot = [hit_pct_row, hit_row, miss_row, total_row]
@@ -5584,7 +5657,8 @@ class UploadExcelViewRoche(View):
             )
             summary_table = {
                 "id": "sub-table-outbound-hit-summary",
-                "title": "On time shipment 24 h" + months_with_miss_label,
+                "title": "On time outbound (≤1 SLA working day; Create Order → Shipped date; excl. Fri, 22 Feb, Mar 19–24 Eid)"
+                + months_with_miss_label,
                 "columns": summary_columns,
                 "data": summary_data,
                 "chart_data": chart_data,
@@ -5606,18 +5680,40 @@ class UploadExcelViewRoche(View):
                     }
                     continue
 
-                # صف واحد لكل Order (مفتاح = Order checked أو Order Nbr)
+                # صف واحد لكل Order (مفتاح التجميع = Order Nbr كصف الشيت؛ استثناء 240→250)
                 f_orders = fdf.drop_duplicates(subset=["_PerfKey"], keep="first")
                 packed_per_order = fdf.groupby("_PerfKey")["Packed Qty"].apply(lambda s: pd.to_numeric(s, errors="coerce").fillna(0).sum()).to_dict() if "Packed Qty" in fdf.columns else {}
                 allocated_per_order = fdf.groupby("_PerfKey")["Allocated Qty"].apply(lambda s: pd.to_numeric(s, errors="coerce").fillna(0).sum()).to_dict() if "Allocated Qty" in fdf.columns else {}
+                company_by_key = fdf.groupby("_PerfKey")["Company"].first() if "Company" in fdf.columns else None
+
+                def _outbound_date_str(ts):
+                    if ts is None or (isinstance(ts, float) and pd.isna(ts)) or pd.isna(ts):
+                        return ""
+                    if hasattr(ts, "date") and callable(getattr(ts, "date", None)):
+                        try:
+                            return ts.date().isoformat()
+                        except Exception:
+                            pass
+                    s = str(ts).strip()
+                    return s[:10] if len(s) >= 10 else s
+
                 rows_f = []
                 for _, r in f_orders.iterrows():
                     o = r.get("_PerfKey")
+                    c_ts = create_min.get(o) if o in create_min.index else r.get("Create Timestamp")
+                    s_ts = ship_max.get(o) if o in ship_max.index else r.get("Ship Date")
+                    comp = ""
+                    if company_by_key is not None and o in company_by_key.index:
+                        comp = str(company_by_key.get(o) or "").strip()
+                    if not comp:
+                        comp = str(r.get("Company", "")).strip()
                     rows_f.append({
                         "Facility Code": f,
-                        "Order checked": r.get("_OrderKey"),
-                        "Order Nbr": r.get("Order Nbr"),
-                        "Line Count": int(r.get("_LineCount") or 0),
+                        "Company": comp,
+                        "Order checked": str(r.get("Order checked", "") or "").strip(),
+                        "Order Nbr": str(r.get("Order Nbr", "") or "").strip(),
+                        "Create Order": _outbound_date_str(c_ts),
+                        "Shipped date": _outbound_date_str(s_ts),
                         "Allowed Days": int(r.get("_AllowedDays") or 0),
                         "Days": int(r.get("_DaysUsed") or 0),
                         "HIT or MISS": r.get("HIT or MISS", "Miss"),
@@ -5643,10 +5739,6 @@ class UploadExcelViewRoche(View):
                 f_summary_df["Misses"] = (
                     f_summary_df["Total_Shipments"] - f_summary_df["Hits"]
                 )
-                # ✅ شرط خاص: الرياض يجب أن تكون 100% Hit (لا يوجد Miss في On time shipment 24 h)
-                if f == "Riyadh":
-                    f_summary_df["Hits"] = f_summary_df["Total_Shipments"].fillna(0).astype(int)
-                    f_summary_df["Misses"] = 0
                 f_summary_df["Hit %"] = (
                     f_summary_df["Hits"]
                     / f_summary_df["Total_Shipments"].replace(0, np.nan)
@@ -5741,7 +5833,7 @@ class UploadExcelViewRoche(View):
                     ]
                     ds_on_time = {
                         "type": "column",
-                        "name": f"{f} On time 24h %",
+                        "name": f"{f} On time (≤1d) %",
                         "color": facility_colors_ob.get(f, "#007fa3"),
                         "valueSuffix": "%",
                         "related_table": "sub-table-outbound-facilities-hit",
@@ -5785,7 +5877,7 @@ class UploadExcelViewRoche(View):
                 facility_tables.append(
                     {
                         "id": "sub-table-outbound-facilities-hit",
-                        "title": "On time shipment 24 h",
+                        "title": "On time outbound (≤1d; excl. Fri, 22 Feb, Mar 19–24 Eid)",
                         "columns": pivot_cols,
                         "data": summary_rows,
                         "chart_data": [],
@@ -5794,16 +5886,32 @@ class UploadExcelViewRoche(View):
                     }
                 )
 
-            # جدول Outbound Shipments Detail: صف واحد لكل طلب (Order checked) — + Remark
-            detail_columns_ob = ["Facility Code", "Order checked", "Line Count", "Allowed Days", "Days", "HIT or MISS", "Month", "Packed Qty", "Allocated Qty", "Remark"]
+            # جدول Outbound Shipments Detail: صف واحد لكل طلب — Facility → Company → Order (تتوافق مع الفلتر)
+            detail_columns_ob = [
+                "Facility Code",
+                "Company",
+                "Order checked",
+                "Order Nbr",
+                "Create Order",
+                "Shipped date",
+                "Allowed Days",
+                "Days",
+                "HIT or MISS",
+                "Month",
+                "Packed Qty",
+                "Allocated Qty",
+                "Remark",
+            ]
             detail_rows_ob = []
             for f in FACILITIES_OB:
                 for r in facility_stats.get(f, {}).get("rows", []):
                     detail_rows_ob.append({
                         "Facility Code": r.get("Facility Code", f),
+                        "Company": r.get("Company", ""),
                         "Order checked": r.get("Order checked"),
                         "Order Nbr": r.get("Order Nbr"),
-                        "Line Count": r.get("Line Count"),
+                        "Create Order": r.get("Create Order", ""),
+                        "Shipped date": r.get("Shipped date", ""),
                         "Allowed Days": r.get("Allowed Days"),
                         "Days": r.get("Days"),
                         "HIT or MISS": r.get("HIT or MISS", "Miss"),
@@ -5818,9 +5926,10 @@ class UploadExcelViewRoche(View):
                 unique_pairs_ob = list(
                     dict.fromkeys(
                         [
-                            (str(r.get("Order checked", r.get("Order Nbr", ""))).strip(), r.get("Facility Code"))
+                            (str(k).strip(), r.get("Facility Code"))
                             for r in detail_rows_ob
-                            if (r.get("Order checked") or r.get("Order Nbr")) and r.get("Facility Code")
+                            for k in (r.get("Order Nbr"), r.get("Order checked"))
+                            if k and str(k).strip() and r.get("Facility Code")
                         ]
                     )
                 )
@@ -5837,21 +5946,24 @@ class UploadExcelViewRoche(View):
                     remarks_map_ob = {}
 
                 for row in detail_rows_ob:
-                    on = str(row.get("Order checked", row.get("Order Nbr", ""))).strip()
                     fc = row.get("Facility Code", "")
-                    remark_and_status = remarks_map_ob.get((on, fc), ("", None)) if on and fc else ("", None)
+                    remark_and_status = ("", None)
+                    if fc:
+                        for key in (
+                            str(row.get("Order Nbr", "") or "").strip(),
+                            str(row.get("Order checked", "") or "").strip(),
+                        ):
+                            if key and key.lower() not in ("nan", "none", ""):
+                                t = remarks_map_ob.get((key, fc))
+                                if t:
+                                    remark_and_status = t
+                                    break
                     if isinstance(remark_and_status, tuple):
                         row["Remark"] = remark_and_status[0] if len(remark_and_status) > 0 else ""
                         if len(remark_and_status) > 1 and remark_and_status[1]:
                             row["HIT or MISS"] = (remark_and_status[1] or "").strip() or row.get("HIT or MISS", "Miss")
                     else:
                         row["Remark"] = remark_and_status or ""
-                # ✅ تصحيح: طلب الرياض 2501715493 يكون Hit وليس Miss
-                for row in detail_rows_ob:
-                    if (str(row.get("Facility Code", "")).strip() == "Riyadh" and
-                            str(row.get("Order checked", row.get("Order Nbr", ""))).strip() == "2501715493"):
-                        row["HIT or MISS"] = "Hit"
-                        break
             facility_code_options = sorted(
                 set(str(row.get("Facility Code", "")).strip() for row in detail_rows_ob if row.get("Facility Code") and str(row.get("Facility Code", "")).strip())
             )
@@ -5866,6 +5978,13 @@ class UploadExcelViewRoche(View):
                     _month_set.add(s)
             month_options = sorted(_month_set) if _month_set else []
             hit_miss_options = ["Hit", "Miss"]
+            company_options = sorted(
+                {
+                    str(row.get("Company", "")).strip()
+                    for row in detail_rows_ob
+                    if row.get("Company") and str(row.get("Company", "")).strip()
+                }
+            )
 
             detail_table = {
                 "id": "sub-table-outbound-detail",
@@ -5876,6 +5995,8 @@ class UploadExcelViewRoche(View):
                 "full_width": True,
                 "filter_options": {
                     "facility_codes": facility_code_options,
+                    "facility_code_list": facility_code_options,
+                    "companies": company_options,
                     "months": month_options,
                     "hit_miss": hit_miss_options,
                 },
@@ -5922,7 +6043,7 @@ class UploadExcelViewRoche(View):
                 "chart_data": chart_data_order_fulfilment,
                 "chart_only": True,
             }
-            # ترتيب العرض: شارت On Time → جدول On time shipment 24 h → شارت Order Fulfillment → جدول Order Fulfillment (KPI) → جدول التفاصيل
+            # ترتيب العرض: شارت On Time → جدول On time → شارت Order Fulfillment → جدول Order Fulfillment (KPI) → Outbound Shipments Detail
             outbound_sub_tables = (
                 [outbound_chart_on_time_block]
                 + facility_tables
@@ -5930,48 +6051,6 @@ class UploadExcelViewRoche(View):
                 + ([order_fulfilment_table] if order_fulfilment_table else [])
                 + [detail_table]
             )
-
-            # جدول بيانات الشيت كاملة تحت Outbound Shipments Detail (حد 1000 صف لتجنب بطء الصفحة)
-            if not df1.empty:
-                _ob_max_full = 1000
-                _ob_full_df = df1.head(_ob_max_full)
-                _ob_full_cols = _ob_full_df.columns.astype(str).tolist()
-                _ob_full_data = []
-                for _, _ob_row in _ob_full_df.iterrows():
-                    _ob_d = {}
-                    for _ob_c in _ob_full_cols:
-                        _ob_v = _ob_row.get(_ob_c)
-                        if _ob_v is None or (_ob_v is not None and pd.isna(_ob_v)):
-                            _ob_d[_ob_c] = ""
-                        elif hasattr(_ob_v, "strftime"):
-                            try:
-                                _ob_d[_ob_c] = _ob_v.strftime("%Y-%m-%d %H:%M") if hasattr(_ob_v, "strftime") else str(_ob_v)
-                            except Exception:
-                                _ob_d[_ob_c] = str(_ob_v)
-                        else:
-                            _ob_d[_ob_c] = _ob_v
-                    # حتى يعمل فلتر Facility مع الخيارات (Riyadh / Dammam / Jeddah)
-                    if "_FacilityNorm" in _ob_row and _ob_row.get("_FacilityNorm"):
-                        _ob_d["Facility Code"] = str(_ob_row.get("_FacilityNorm"))
-                    _ob_full_data.append(_ob_d)
-                _ob_full_title = "Outbound Report"
-                if len(df1) > _ob_max_full:
-                    _ob_full_title += f" (First {_ob_max_full} rows of {len(df1)})"
-                outbound_full_sheet_table = {
-                    "id": "sub-table-outbound-full-sheet",
-                    "title": _ob_full_title,
-                    "columns": _ob_full_cols,
-                    "data": _ob_full_data,
-                    "chart_data": [],
-                    "full_width": True,
-                    "filter_options": {
-                        "facility_codes": facility_code_options,
-                        "months": month_options,
-                        "hit_miss": hit_miss_options,
-                    },
-                    "full_sheet_scroll": True,
-                }
-                outbound_sub_tables.append(outbound_full_sheet_table)
 
             outbound_warning_html = ""
             if outbound_all_miss_dates_issue:
@@ -6517,10 +6596,10 @@ class UploadExcelViewRoche(View):
     def filter_inbound(self, request, selected_month=None, selected_months=None, tab_name=None):
         """
         Inbound tab: reads from ARAMCO Inbound Report. Excludes Shipment_nbr starting with 250 (Return).
-        Return & Refusal tab: same sheet (ARAMCO Inbound Report), includes only Shipment_nbr starting with 250.
-        Filter order (Return): Facility → Create shipment D&T (month/date) → Shipment_nbr (optional).
-        Hit/Miss: ≤50 lines = 1 day allowed, >50 = 2 days. Return uses working days (excl. Friday) between
-        Inbound: Offloading D&T ↔ Received LPN D&T (أيام عمل بدون جمعة). Return: Create shipment D&T ↔ Received LPN D&T.
+        Return & Refusal tab: same sheet, only Shipment_nbr starting with 250.
+        Inbound: Facility → Company → unique Shipment_nbr; Hit/Miss from Create shipment D&T vs Received LPN D&T
+        (calendar dates only — no hours). Working days between start/end: excludes Fridays, 22 Feb (Founding Day), and Mar 19–24 (Eid).
+        Hit if ≤1 working day elapsed, Miss if more. Return: Create vs Received, ≤50 items = 2 working days allowed else 1.
         """
         try:
             import os
@@ -6596,7 +6675,7 @@ class UploadExcelViewRoche(View):
                     for idx in range(min(10, raw.shape[0])):
                         row = raw.iloc[idx]
                         cells = " ".join(str(c).strip().lower() for c in row.dropna().astype(str))
-                        # Inbound: facility + shipment + (create أو offloading) + (received أو lpn)
+                        # Inbound: facility + shipment + create + received (company اختياري في الشيت)
                         if (
                             ("facility" in cells or "region" in cells)
                             and ("shipment" in cells or "shipment_nbr" in cells or "shipment nbr" in cells)
@@ -6660,7 +6739,10 @@ class UploadExcelViewRoche(View):
                 # شيت ARAMCO Inbound Report: Shipment_ID
                 "Shipment_ID",
             ])
-            # Inbound: مقارنة Offloading D&T مع Received LPN D&T. Return: Create shipment D&T مع Received LPN D&T
+            col_company = find_column([
+                "Company", "company", "Customer", "Customer Name", "Cust Name", "Ship To", "Bill To Company",
+            ])
+            # Inbound: مقارنة Create shipment D&T مع Received LPN D&T. Return: نفس المقارنة مع قواعد Return
             col_offloading = find_column([
                 "Offloading D&T", "Offloading D&T", "Offload D&T", "Offloading Date", "Offloading_Date",
                 "Offload Date", "Offloading Date & Time", "Offload Date & Time", "Offloading DT", "Offload DT",
@@ -6707,11 +6789,12 @@ class UploadExcelViewRoche(View):
                 col_create = find_column_containing("create", "shipment") or find_column_containing("create", "timestamp") or find_column_containing("create", "date") or find_column_containing("creation", "date")
             if not col_received:
                 col_received = find_column_containing("received", "lpn") or find_column_containing("lpn", "rcv") or find_column_containing("lpn", "receive") or find_column_containing("last", "lpn")
+            if not col_company:
+                col_company = find_column_containing("company")
 
-            # Inbound: نستخدم Offloading D&T مع fallback إلى Create shipment D&T عند غياب/offloading الفارغ.
-            # Return: نستخدم Create shipment D&T فقط.
-            col_start_date = col_offloading if not is_return_tab else col_create
-            has_inbound_start_source = bool(col_offloading or col_create) if not is_return_tab else bool(col_start_date)
+            # Inbound: Create shipment D&T فقط (بدون أوفلودينج). Return: Create shipment D&T.
+            col_start_date = col_create
+            has_inbound_start_source = bool(col_create) if not is_return_tab else bool(col_start_date)
             if not col_facility or not col_shipment or not has_inbound_start_source or not col_received:
                 missing = []
                 if not col_facility:
@@ -6719,7 +6802,7 @@ class UploadExcelViewRoche(View):
                 if not col_shipment:
                     missing.append("Shipment_nbr")
                 if not has_inbound_start_source:
-                    missing.append("Offloading D&T / Create shipment D&T" if not is_return_tab else "Create shipment D&T")
+                    missing.append("Create shipment D&T" if not is_return_tab else "Create shipment D&T")
                 if not col_received:
                     missing.append("Received LPN D&T")
                 actual_cols = ", ".join(str(c) for c in df.columns.tolist()[:20])
@@ -6739,20 +6822,14 @@ class UploadExcelViewRoche(View):
                 col_shipment: "Shipment_nbr",
                 col_received: "Received_LPN_DT",
             }
-            if is_return_tab and col_create:
+            if col_create:
                 rename_map[col_create] = "Create_shipment_DT"
-            elif not is_return_tab and col_offloading:
-                rename_map[col_offloading] = "Create_shipment_DT"
             df = df.rename(columns=rename_map)
 
-            # Inbound fallback: لو Offloading ناقص في بعض الصفوف نكمله من Create shipment D&T.
-            if not is_return_tab:
-                if "Create_shipment_DT" not in df.columns:
-                    df["Create_shipment_DT"] = pd.NA
-                if col_create and col_create in df.columns:
-                    _fallback_start = pd.to_datetime(df[col_create], errors="coerce", dayfirst=True)
-                    _primary_start = pd.to_datetime(df["Create_shipment_DT"], errors="coerce", dayfirst=True)
-                    df["Create_shipment_DT"] = _primary_start.fillna(_fallback_start)
+            if col_company and col_company in df.columns:
+                df = df.rename(columns={col_company: "Company"})
+            else:
+                df["Company"] = ""
             if col_lpn:
                 df = df.rename(columns={col_lpn: "LPN"})
             else:
@@ -6764,6 +6841,8 @@ class UploadExcelViewRoche(View):
 
             df["Facility"] = df["Facility"].astype(str).str.strip()
             df["Shipment_nbr"] = df["Shipment_nbr"].astype(str).str.strip()
+            df["Company"] = df["Company"].fillna("").astype(str).str.strip()
+            df.loc[df["Company"].str.lower().isin(["nan", "none", ""]), "Company"] = ""
             # Return tab: only Shipment_nbr starting with 250. Inbound: exclude 250 (Return shipments)
             if is_return_tab:
                 df = df[df["Shipment_nbr"].str.startswith("250", na=False)].copy()
@@ -6877,40 +6956,6 @@ class UploadExcelViewRoche(View):
                     return 0
                 return (end_d - start_d).days
 
-            def _is_holiday(date_val):
-                """أيام لا تُحسب كأيام عمل: الجمعة والسبت (نهاية أسبوع السعودية) + 22 فبراير."""
-                wd = date_val.weekday()
-                if wd == 4:  # Friday
-                    return True
-                if wd == 5:  # Saturday (weekend with Friday in KSA)
-                    return True
-                if date_val.month == 2 and date_val.day == 22:  # 22/2 عطلة رسمية في كل سنة
-                    return True
-                return False
-
-            def working_days_between_exclude_friday(create_ts, received_ts):
-                """
-                Working days between start and Received; Fri/Sat weekend + Feb 22 not counted.
-                Inbound: start = Offloading D&T. Return: start = Create shipment D&T.
-                مثال: 28 فبراير 2026 = سبت، 2 مارس = اثنين → يُحسب يوم الأحد فقط = يوم عمل واحد.
-                """
-                if create_ts is None or received_ts is None or pd.isna(create_ts) or pd.isna(received_ts):
-                    return 0
-                try:
-                    start_d = create_ts.date() if hasattr(create_ts, "date") else create_ts
-                    end_d = received_ts.date() if hasattr(received_ts, "date") else received_ts
-                except Exception:
-                    return 0
-                if start_d > end_d:
-                    return 0
-                days = 0
-                current = start_d
-                while current < end_d:
-                    if not _is_holiday(current):
-                        days += 1
-                    current += timedelta(days=1)
-                return days
-
             def month_order_value(label):
                 if not label:
                     return 999
@@ -6931,8 +6976,7 @@ class UploadExcelViewRoche(View):
                 if fdf.empty:
                     return {"total": 0, "hit": 0, "miss": 0, "hit_pct": 0, "miss_pct": 0, "rows": [], "by_month": {}, "months_with_miss": [], "ordered_months": []}
 
-                # فلترة: Facility (تمت) → Shipment_nbr → عد Items (عمود Item Alternate Code بعد حذف المتكرر) وعد الـ Lines (الصفوف).
-                # Hit/Miss: Inbound = حسب الـ line (أكثر من 50 line → يومين، وإلا يوم واحد). Return = حسب الـ Item (نفس قاعدة 50 على item_count).
+                # فلترة: Facility → Company (للعرض) → Shipment_nbr مميز. Inbound: يوم عمل واحد. Return: قاعدة 50 item.
                 line_count_per_shipment = fdf.groupby("Shipment_nbr").size()
                 item_count_per_shipment = (
                     fdf.groupby("Shipment_nbr")["Item_Alternate_Code"].apply(lambda s: s.astype(str).str.strip().replace("", pd.NA).dropna().nunique())
@@ -6941,6 +6985,7 @@ class UploadExcelViewRoche(View):
                 )
                 create_min = fdf.groupby("Shipment_nbr")["Create_shipment_DT"].min()
                 received_max = fdf.groupby("Shipment_nbr")["Received_LPN_DT"].max()
+                company_by_ship = fdf.groupby("Shipment_nbr")["Company"].first() if "Company" in fdf.columns else None
 
                 hits = 0
                 misses = 0
@@ -6951,25 +6996,29 @@ class UploadExcelViewRoche(View):
                         continue
                     line_count = int(line_count_per_shipment.get(ship_id, 0))
                     item_count = int(item_count_per_shipment.get(ship_id, line_count)) if item_count_per_shipment is not None else line_count
-                    # Inbound: قاعدة 50 على الـ line. Return: قاعدة 50 على الـ Item (Item Alternate Code).
+                    # Return: قاعدة 50 على الـ Item. Inbound: Hit إذا كان ≤ يوم عمل واحد.
                     if is_return_tab:
                         allowed_days = 2 if item_count > 50 else 1
                     else:
-                        allowed_days = 2 if line_count > 50 else 1
+                        allowed_days = 1
                     create_ts = create_min.get(ship_id)
                     received_ts = received_max.get(ship_id)
                     if pd.isna(create_ts) or pd.isna(received_ts):
                         continue
                     month = create_ts.strftime("%b") if pd.notna(create_ts) else ""
-                    days_used = working_days_between_exclude_friday(create_ts, received_ts)
+                    days_used = _sla_working_days_between_dates(create_ts, received_ts)
                     is_hit = days_used <= allowed_days
                     if is_hit:
                         hits += 1
                     else:
                         misses += 1
                     ship_month_hit.append((month, is_hit))
+                    comp_v = ""
+                    if company_by_ship is not None and ship_id in company_by_ship.index:
+                        comp_v = str(company_by_ship.get(ship_id) or "").strip()
                     rows.append({
                         "Shipment_nbr": ship_id,
+                        "Company": comp_v,
                         "Create_shipment_DT": create_ts,
                         "Received_LPN_DT": received_ts,
                         "Line Count": line_count,
@@ -7063,7 +7112,11 @@ class UploadExcelViewRoche(View):
                 facility_tables.append(
                     {
                         "id": "sub-table-inbound-facilities-hit",
-                        "title": "Return KPI ≤ 2d (working days excl. Friday) — Hit by Facility" if is_return_tab else "On time inbound Receiving(1 day from offloading date)",
+                        "title": (
+                            "Return KPI ≤ 2d (working days excl. Fri, 22 Feb, Mar 19–24 Eid) — Hit by Facility"
+                            if is_return_tab
+                            else "On time inbound receiving (≤1 working day from Create shipment date; excl. Fri, 22 Feb, Mar 19–24 Eid)"
+                        ),
                         "columns": pivot_cols,
                         "data": summary_rows,
                         "chart_data": [],
@@ -7079,11 +7132,13 @@ class UploadExcelViewRoche(View):
             overall_miss = overall_total - overall_hits
             overall_hit_pct = pct_value(overall_hits, overall_total)   # total hit / total shipment * 100
             overall_miss_pct = pct_value(overall_miss, overall_total)   # total miss / total shipment * 100
+            _hit_label = "Hit (≤2d)" if is_return_tab else "Hit (≤1d)"
+            _miss_label = "Miss (>2d)" if is_return_tab else "Miss (>1d)"
             aggregated_kpi_rows = [
                 {"KPI": "Hit %", "2025": overall_hit_pct},
                 {"KPI": "Miss %", "2025": overall_miss_pct},
-                {"KPI": "Hit (≤2d)", "2025": overall_hits},
-                {"KPI": "Miss (>2d)", "2025": overall_miss},
+                {"KPI": _hit_label, "2025": overall_hits},
+                {"KPI": _miss_label, "2025": overall_miss},
                 {"KPI": "Total Shipments", "2025": overall_total},
             ]
             aggregated_kpi_table = {
@@ -7097,12 +7152,12 @@ class UploadExcelViewRoche(View):
                 "is_first_facility": False,
             }
 
-            # Detail table: one row per shipment — filters Facility / Month / Shipment_nbr / Status
-            # Inbound: Offloading D&T ↔ Received LPN D&T. Return: Create shipment D&T ↔ Received LPN D&T
-            _start_date_col_label = "Offloading D&T" if not is_return_tab else "Create shipment D&T"
+            # Detail table: one row per shipment — Facility / Company / Month / Hit-Miss / Shipment search
+            _start_date_col_label = "Create shipment D&T"
             _status_col = "Status" if not is_return_tab else "HIT or MISS"
             detail_columns = [
                 "Facility Code",
+                "Company",
                 "Shipment_nbr",
                 _start_date_col_label,
                 "Received LPN D&T",
@@ -7123,14 +7178,26 @@ class UploadExcelViewRoche(View):
                     return "Miss"
                 return ""
 
+            def _ts_to_date_str(v):
+                if v is None or pd.isna(v):
+                    return ""
+                if hasattr(v, "date") and callable(getattr(v, "date", None)):
+                    try:
+                        return v.date().isoformat()
+                    except Exception:
+                        pass
+                s = str(v).strip()
+                return s[:10] if len(s) >= 10 else s
+
             detail_rows = []
             for fac in FACILITIES:
                 for r in facility_stats.get(fac, {}).get("rows", []):
                     detail_rows.append({
                         "Facility Code": fac,
+                        "Company": r.get("Company") or "",
                         "Shipment_nbr": r.get("Shipment_nbr"),
-                        _start_date_col_label: r.get("Create_shipment_DT"),
-                        "Received LPN D&T": r.get("Received_LPN_DT"),
+                        _start_date_col_label: _ts_to_date_str(r.get("Create_shipment_DT")),
+                        "Received LPN D&T": _ts_to_date_str(r.get("Received_LPN_DT")),
                         "Line Count": r.get("Line Count"),
                         "Item Count": r.get("Item Count"),
                         "Allowed Days": r.get("Allowed Days"),
@@ -7277,9 +7344,9 @@ class UploadExcelViewRoche(View):
                         {
                             "id": "sub-table-inbound-facilities-hit",
                             "title": (
-                                "Return KPI ≤ 2d (working days excl. Friday) — Hit by Facility"
-                                if is_return_tab
-                                else "On time inbound Receiving(1 day from offloading date)"
+                                "Return KPI ≤ 2d (working days excl. Fri, 22 Feb, Mar 19–24 Eid) — Hit by Facility"
+                            if is_return_tab
+                            else "On time inbound receiving (≤1 working day from Create shipment date; excl. Fri, 22 Feb, Mar 19–24 Eid)"
                             ),
                             "columns": pivot_cols,
                             "data": summary_rows,
@@ -7297,13 +7364,22 @@ class UploadExcelViewRoche(View):
                 aggregated_kpi_table["data"] = [
                     {"KPI": "Hit %", "2025": overall_hit_pct},
                     {"KPI": "Miss %", "2025": overall_miss_pct},
-                    {"KPI": "Hit (≤2d)", "2025": overall_hits},
-                    {"KPI": "Miss (>2d)", "2025": overall_miss},
+                    {"KPI": _hit_label, "2025": overall_hits},
+                    {"KPI": _miss_label, "2025": overall_miss},
                     {"KPI": "Total Shipments", "2025": overall_total},
                 ]
 
             facility_options = list(FACILITIES)
             month_options = sorted(set(r.get("Month") for r in detail_rows if r.get("Month")))
+            company_options_return = []
+            if is_return_tab:
+                company_options_return = sorted(
+                    {
+                        str(r.get("Company") or "").strip()
+                        for r in detail_rows
+                        if str(r.get("Company") or "").strip()
+                    }
+                )
             detail_table = {
                 "id": "sub-table-return-detail" if is_return_tab else "sub-table-inbound-detail",
                 "title": "Return Shipments Detail" if is_return_tab else "Inbound Shipments Detail",
@@ -7316,91 +7392,11 @@ class UploadExcelViewRoche(View):
                     "months": month_options,
                     "statuses": ["Hit", "Miss"],
                     **({"hit_miss": ["Hit", "Miss"]} if is_return_tab else {}),
+                    **({"companies": company_options_return} if company_options_return else {}),
                 },
             }
 
             sub_tables = [aggregated_kpi_table] + facility_tables + [detail_table]
-
-            # جدول بيانات الشيت كاملة تحت Inbound Shipments Detail (Inbound فقط، حد 1000 صف لتجنب بطء الصفحة)
-            if not is_return_tab and not df.empty:
-                _max_full_rows = 1000
-                _full_df = df.head(_max_full_rows)
-                _raw_columns = _full_df.columns.astype(str).tolist()
-                # ✅ أسماء أعمدة آمنة للقالب (تجنب TemplateSyntaxError من رموز مثل | أو ( )
-                _seen = {}
-                _full_columns = []
-                _safe_to_orig = {}
-                for _c in _raw_columns:
-                    _safe = self._sanitize_column_name_for_template(_c)
-                    if _safe in _seen:
-                        _seen[_safe] += 1
-                        _safe = f"{_safe}_{_seen[_safe]}"
-                    else:
-                        _seen[_safe] = 0
-                    _full_columns.append(_safe)
-                    _safe_to_orig[_safe] = _c
-                hm_by_ship_fac = {}
-                for r in detail_rows:
-                    _sn = str(r.get("Shipment_nbr", "")).strip()
-                    _fc = str(r.get("Facility Code", "")).strip()
-                    if _sn:
-                        hm_by_ship_fac[(_sn, _fc)] = (r.get(_status_col) or "").strip()
-
-                _full_data = []
-                for _, _row in _full_df.iterrows():
-                    _d = {}
-                    for _safe_c in _full_columns:
-                        _orig_c = _safe_to_orig.get(_safe_c, _safe_c)
-                        _v = _row.get(_orig_c)
-                        if _v is None or (_v is not None and pd.isna(_v)):
-                            _d[_safe_c] = ""
-                        elif hasattr(_v, "strftime"):
-                            try:
-                                _d[_safe_c] = _v.strftime("%Y-%m-%d %H:%M") if hasattr(_v, "strftime") else str(_v)
-                            except Exception:
-                                _d[_safe_c] = str(_v)
-                        else:
-                            _d[_safe_c] = _v
-                    _fnorm = ""
-                    if "_FacilityNorm" in _row.index and pd.notna(_row.get("_FacilityNorm")):
-                        _fnorm = str(_row["_FacilityNorm"]).strip()
-                    _sn = ""
-                    if "Shipment_nbr" in _row.index and pd.notna(_row.get("Shipment_nbr")):
-                        _sn = str(_row["Shipment_nbr"]).strip()
-                    _mv = ""
-                    if "Month" in _row.index and pd.notna(_row.get("Month")):
-                        _mv = str(_row["Month"]).strip()
-                    if not _mv or _mv.lower() == "nan":
-                        _cdt = _row.get("Create_shipment_DT")
-                        if _cdt is not None and pd.notna(_cdt) and hasattr(_cdt, "strftime"):
-                            _mv = _cdt.strftime("%b")
-                    _hm = hm_by_ship_fac.get((_sn, _fnorm), "")
-                    # نفس مفاتيح Inbound Shipments Detail للفلاتر (غير معروضة كأعمدة — فقط في الصف)
-                    _d["Facility Code"] = _fnorm
-                    _d["Month"] = _mv
-                    _d["Status"] = _hm
-                    _full_data.append(_d)
-                _full_title = "Inbound Report"
-                full_sheet_table = {
-                    "id": "sub-table-inbound-full-sheet",
-                    "title": _full_title,
-                    "columns": _full_columns,
-                    "data": _full_data,
-                    "chart_data": [],
-                    "full_width": True,
-                    "filter_options": {
-                        "facility_codes": list(detail_table["filter_options"]["facility_codes"]),
-                        "months": list(detail_table["filter_options"]["months"]),
-                        "statuses": list(detail_table["filter_options"]["statuses"]),
-                        **(
-                            {"hit_miss": list(detail_table["filter_options"]["hit_miss"])}
-                            if detail_table["filter_options"].get("hit_miss")
-                            else {}
-                        ),
-                    },
-                    "full_sheet_scroll": True,
-                }
-                sub_tables.append(full_sheet_table)
 
             from django.template.loader import render_to_string
 
