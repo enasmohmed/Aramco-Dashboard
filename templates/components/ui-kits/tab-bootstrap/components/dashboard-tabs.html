@@ -538,7 +538,7 @@
     let selectedTab = $("#dashboard-tabs button.nav-link.active").first().data("tab") || "dashboard";
     let selectedQuarter = "";
     const TAB_CACHE_PREFIX = "dashboard_tab_cache";
-    const TAB_CACHE_VERSION = "v10_transport_month_panel"; // bump when tab HTML / chart init changes
+    const TAB_CACHE_VERSION = "v11_transport_month_clean"; // bump when tab HTML / chart init changes
     const TAB_CACHE_TTL_MS = 60 * 60 * 1000; // 60 دقيقة — عشان لما ترجع تفتح الموقع التابات تبقى محمّلة
 
     window.transportationDetailFilters = window.transportationDetailFilters || {

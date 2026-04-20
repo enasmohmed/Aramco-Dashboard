@@ -764,10 +764,16 @@ def _read_inbound_data_from_excel(excel_path):
     return {"inbound_kpi": inbound_kpi, "pending_shipments": pending}
 
 
-def _read_outbound_data_from_excel(excel_path):
+def _read_outbound_data_from_excel(
+    excel_path,
+    selected_facility=None,
+    selected_company=None,
+    selected_order_nbr=None,
+):
     """
     يقرأ بيانات Outbound للداشبورد من نفس ملف التابات (all_sheet.xlsx).
-    - Released Orders: من شيت ARAMCO Outbound Report، عمود Order Nbr — عدد المميز (حذف المتكرر).
+    - Released Orders: من شيت ARAMCO Outbound Report، عمود Order Nbr — عدد المميز (حذف المتكرر)
+      بعد فلترة اختيارية: Facility -> Company -> Order Nbr.
     - Packed Qty: من شيت ARAMCO Outbound Report، عمود Packed Qty — مجموع كل القيم (نفس Total Quantity في Returns: جمع بالمتكرر).
     - Number of Pallets (LPNs): من شيت Outbound2، عمود LPN Nbr — عدد المميز (حذف المتكرر).
     """
@@ -790,6 +796,35 @@ def _read_outbound_data_from_excel(excel_path):
             if any(_norm(x) in cn for x in possible_names):
                 return col
         return None
+
+    def _apply_released_filters(df_local, facility_col, company_col, order_nbr_col):
+        fdf = df_local.copy()
+        fac_filter = str(selected_facility or "").strip()
+        comp_filter = str(selected_company or "").strip()
+        order_filter = str(selected_order_nbr or "").strip()
+
+        if fac_filter:
+            if facility_col and facility_col in fdf.columns:
+                fac_vals = fdf[facility_col].fillna("").astype(str).str.strip().str.lower()
+                fdf = fdf[fac_vals == fac_filter.lower()]
+            else:
+                fdf = fdf.iloc[0:0]
+
+        if comp_filter:
+            if company_col and company_col in fdf.columns:
+                comp_vals = fdf[company_col].fillna("").astype(str).str.strip().str.lower()
+                fdf = fdf[comp_vals == comp_filter.lower()]
+            else:
+                fdf = fdf.iloc[0:0]
+
+        if order_filter:
+            if order_nbr_col and order_nbr_col in fdf.columns:
+                ord_vals = fdf[order_nbr_col].fillna("").astype(str).str.strip().str.lower()
+                fdf = fdf[ord_vals.str.contains(order_filter.lower(), na=False, regex=False)]
+            else:
+                fdf = fdf.iloc[0:0]
+
+        return fdf
 
     released_orders = 0
     picked_orders = 0
@@ -841,10 +876,13 @@ def _read_outbound_data_from_excel(excel_path):
             df1.columns = [str(c).strip() for c in df1.columns]
 
             order_nbr_col = _find_col(df1, ["Order Nbr", "Order Nbr.", "Order Number", "Order No", "Order #", "Order_ID", "Order ID"])
+            facility_col = _find_col(df1, ["Facility Code", "Facility", "Site", "Region", "Location"])
+            company_col = _find_col(df1, ["Company", "Company Name", "Customer Name", "Customer"])
             packed_qty_col = _find_col(df1, ["Packed Qty", "Packed_Qty", "Packed Qty.", "Packed Quantity", "PackedQuantity"])
 
             if order_nbr_col:
-                order_series = df1[order_nbr_col].dropna().astype(str).str.strip()
+                released_df = _apply_released_filters(df1, facility_col, company_col, order_nbr_col)
+                order_series = released_df[order_nbr_col].dropna().astype(str).str.strip()
                 order_series = order_series[order_series != ""]
                 released_orders = int(order_series.nunique())
 
@@ -858,9 +896,12 @@ def _read_outbound_data_from_excel(excel_path):
             if df1 is not None and not df1.empty:
                 df1.columns = [str(c).strip() for c in df1.columns]
                 order_nbr_col = _find_col(df1, ["Order Nbr", "Order Nbr.", "Order Number", "Order No", "Order #", "Order_ID", "Order ID"])
+                facility_col = _find_col(df1, ["Facility Code", "Facility", "Site", "Region", "Location"])
+                company_col = _find_col(df1, ["Company", "Company Name", "Customer Name", "Customer"])
                 packed_qty_col = _find_col(df1, ["Packed Qty", "Packed_Qty", "Packed Qty.", "Packed Quantity", "PackedQuantity"])
                 if order_nbr_col:
-                    order_series = df1[order_nbr_col].dropna().astype(str).str.strip()
+                    released_df = _apply_released_filters(df1, facility_col, company_col, order_nbr_col)
+                    order_series = released_df[order_nbr_col].dropna().astype(str).str.strip()
                     order_series = order_series[order_series != ""]
                     released_orders = int(order_series.nunique())
                 if packed_qty_col:
@@ -5775,18 +5816,32 @@ class UploadExcelViewRoche(View):
                 hit_pct_all = (
                     round((hits_all / total_all) * 100, 2) if total_all else 0
                 )
-                # Order Fulfilment: عدد الطلبات التي Packed Qty >= Allocated Qty
-                fulfilment_count = sum(
-                    1 for r in rows_f
-                    if (pd.to_numeric(r.get("Packed Qty"), errors="coerce") or 0) >= (pd.to_numeric(r.get("Allocated Qty"), errors="coerce") or 0)
+                # Order Fulfilment (requested behavior):
+                # - المصدر: ARAMCO Outbound Report
+                # - الفلتر: Facility ثم Create Order month (بدون وقت)
+                # - القيمة المعروضة: مجموع Packed Qty لكل صف في نفس الشهر
+                # - الشارت: 100% عند وجود بيانات للشهر
+                packed_qty_by_month = {}
+                if "Packed Qty" in fdf.columns:
+                    packed_qty_by_month = (
+                        fdf.assign(
+                            _PackedQtyNum=pd.to_numeric(
+                                fdf["Packed Qty"], errors="coerce"
+                            ).fillna(0)
+                        )
+                        .groupby("Month")["_PackedQtyNum"]
+                        .sum()
+                        .to_dict()
+                    )
+                fulfilment_count = int(
+                    round(sum(float(v or 0) for v in packed_qty_by_month.values()))
                 )
-                fulfilment_pct_all = round((fulfilment_count / total_all) * 100, 2) if total_all else 0
+                fulfilment_pct_all = 100.0 if fulfilment_count > 0 else 0.0
                 for m in by_month:
-                    r_m = [r for r in rows_f if r.get("Month") == m]
-                    t_m = len(r_m)
-                    ful_m = sum(1 for r in r_m if (pd.to_numeric(r.get("Packed Qty"), errors="coerce") or 0) >= (pd.to_numeric(r.get("Allocated Qty"), errors="coerce") or 0))
-                    by_month[m]["fulfilment"] = ful_m
-                    by_month[m]["fulfilment_pct"] = round((ful_m / t_m) * 100, 2) if t_m else 0
+                    packed_sum_m = int(round(float(packed_qty_by_month.get(m, 0) or 0)))
+                    by_month[m]["packed_qty_sum"] = packed_sum_m
+                    by_month[m]["fulfilment"] = packed_sum_m
+                    by_month[m]["fulfilment_pct"] = 100.0 if packed_sum_m > 0 else 0.0
                 ordered_months = list(f_summary_df["Month"].tolist())
                 months_with_miss = [
                     m for m in ordered_months if by_month.get(m, {}).get("miss", 0) > 0
@@ -6015,11 +6070,10 @@ class UploadExcelViewRoche(View):
                     row_ful = {"KPI": f}
                     for m in ordered_months_overall_ob:
                         month_stats = by_month.get(m, {}) or {}
-                        total_m = month_stats.get("total", 0) or (month_stats.get("hit", 0) + month_stats.get("miss", 0))
-                        ful_m = month_stats.get("fulfilment", 0)
-                        # Hit = Fulfilled orders, Miss = not fulfilled
-                        row_ful[f"{m} Hit"] = ful_m
-                        row_ful[f"{m} Miss"] = total_m - ful_m if total_m else 0
+                        packed_sum_m = int(month_stats.get("packed_qty_sum", 0) or 0)
+                        # Hit عمود = مجموع Packed Qty الشهري للمنطقة، و Miss = 0 حسب المطلوب.
+                        row_ful[f"{m} Hit"] = packed_sum_m
+                        row_ful[f"{m} Miss"] = 0
                     fulfilment_summary_rows.append(row_ful)
                 order_fulfilment_table = {
                     "id": "sub-table-outbound-order-fulfilment",
@@ -8076,11 +8130,18 @@ class UploadExcelViewRoche(View):
                             errors="coerce",
                         ).fillna(0)
                         df["_achieved_num"] = df["_achieved_raw"].apply(lambda v: _achieved_to_pct_val(v))
+                def _is_valid_transport_month(val):
+                    ms = str(val).strip()
+                    if not ms:
+                        return False
+                    ms_low = ms.lower()
+                    # استبعاد صف/قيمة الهيدر "Month" من الشارت وفلاتر الشهور
+                    return ms_low not in ("nan", "none", "nat", "month")
                 month_filter_options = []
                 if "_month_str" in df.columns:
                     for m in df["_month_str"]:
                         ms = str(m).strip()
-                        if ms and ms.lower() != "nan" and ms not in month_filter_options:
+                        if _is_valid_transport_month(ms) and ms not in month_filter_options:
                             month_filter_options.append(ms)
                 region_filter_options = []
                 if region_col and region_col in df.columns:
@@ -8088,11 +8149,11 @@ class UploadExcelViewRoche(View):
                         if rv and rv.lower() != "nan" and rv not in region_filter_options:
                             region_filter_options.append(rv)
                     region_filter_options.sort(key=lambda x: str(x).lower())
-                fm_list = [x for x in (filter_months or []) if (str(x).strip())][:2]
+                fm_list = [x for x in (filter_months or []) if _is_valid_transport_month(x)][:2]
                 if fm_list and "_month_str" in df.columns:
                     def _row_matches_month(r):
                         raw = str(r.get("_month_str", "")).strip()
-                        if not raw or raw.lower() == "nan":
+                        if not _is_valid_transport_month(raw):
                             return False
                         for fm in fm_list:
                             nm = self.normalize_month_label(fm)
@@ -8138,7 +8199,7 @@ class UploadExcelViewRoche(View):
                         if m is None or (isinstance(m, float) and pd.isna(m)):
                             continue
                         ms = str(m).strip()
-                        if ms and ms.lower() != "nan" and ms not in seen_m:
+                        if _is_valid_transport_month(ms) and ms not in seen_m:
                             seen_m.add(ms)
                             uniq_months.append(ms)
                     if not uniq_months:
@@ -8180,7 +8241,8 @@ class UploadExcelViewRoche(View):
                     categories = []
                     values = []
                     if month_col and "_month_str" in df.columns:
-                        by_month = df.groupby("_month_str")["_achieved_num"].mean()
+                        valid_month_df = df[df["_month_str"].apply(_is_valid_transport_month)].copy()
+                        by_month = valid_month_df.groupby("_month_str")["_achieved_num"].mean()
                         categories = by_month.index.tolist()
                         values = [int(round(float(x))) if x == x else 0 for x in by_month.values]
                     else:
@@ -8190,7 +8252,8 @@ class UploadExcelViewRoche(View):
                     def _is_nan_label(c):
                         if c is None: return True
                         if isinstance(c, float) and pd.isna(c): return True
-                        return str(c).strip().lower() == "nan"
+                        cl = str(c).strip().lower()
+                        return cl in ("nan", "month")
                     points = [{"label": _chart_label(cat), "y": v} for cat, v in zip(categories, values) if not _is_nan_label(cat)]
                     chart_data = [{
                         "type": "column",
@@ -11086,11 +11149,33 @@ class UploadExcelViewRoche(View):
             return {"categories": categories_ob, "series": series_ob}
 
         if excel_path:
+            selected_outbound_facility = (request.GET.get("outbound_facility") or "").strip() if request and getattr(request, "GET", None) else ""
+            selected_outbound_company = (request.GET.get("outbound_company") or "").strip() if request and getattr(request, "GET", None) else ""
+            selected_outbound_order_nbr = (
+                (request.GET.get("outbound_order_checked") or request.GET.get("outbound_order_nbr") or "").strip()
+                if request and getattr(request, "GET", None)
+                else ""
+            )
+            try:
+                # Released Orders على الداشبورد يجب أن يتبع فلترة Facility -> Company -> Order Nbr حتى مع وجود كاش.
+                outbound_data_filtered = _read_outbound_data_from_excel(
+                    excel_path,
+                    selected_facility=selected_outbound_facility or None,
+                    selected_company=selected_outbound_company or None,
+                    selected_order_nbr=selected_outbound_order_nbr or None,
+                )
+                if outbound_data_filtered and "outbound_kpi" in outbound_data_filtered:
+                    context["outbound_kpi"] = outbound_data_filtered["outbound_kpi"]
+                    context["outbound_kpi_keys_from_sheet"] = outbound_data_filtered.get(
+                        "outbound_kpi_keys_from_sheet", []
+                    )
+            except Exception:
+                pass
             try:
                 outbound_result = self.filter_outbound_shipments(
                     request,
-                    selected_facility=(request.GET.get("outbound_facility") or "").strip() or None,
-                    selected_order_nbr=(request.GET.get("outbound_order_checked") or request.GET.get("outbound_order_nbr") or "").strip() or None,
+                    selected_facility=selected_outbound_facility or None,
+                    selected_order_nbr=selected_outbound_order_nbr or None,
                 )
                 ob_stats = outbound_result.get("stats") or {}
                 context["order_process_kpi"] = {
