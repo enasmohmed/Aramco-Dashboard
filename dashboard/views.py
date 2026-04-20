@@ -5672,11 +5672,25 @@ class UploadExcelViewRoche(View):
             summary_columns = pivot_cols
             summary_data = summary_data_pivot
 
-            # إحصائيات على مستوى الشحنة (Order checked / _OrderKey): Hit / Miss
-            orders_df = df1.drop_duplicates(subset=["_PerfKey"], keep="first")
-            overall_total = int(orders_df.shape[0])
-            overall_hits = int((orders_df["HIT or MISS"] == "Hit").sum())
-            overall_miss = int((orders_df["HIT or MISS"] == "Miss").sum())
+            # إحصائيات كروت Outbound (Total/Successful/Failed):
+            # نفس منطق Released Orders: عدد Order Nbr المميز بعد الفلاتر الحالية.
+            order_nbr_series = df1["Order Nbr"].fillna("").astype(str).str.strip()
+            valid_order_mask = ~order_nbr_series.str.lower().isin(["", "nan", "none", "nat"])
+            valid_orders_df = df1.loc[valid_order_mask].copy()
+            if not valid_orders_df.empty:
+                # لو ظهر الطلب بأكثر من صف، نعتبره Miss إذا أي صف فيه Miss، وإلا Hit.
+                order_status = valid_orders_df.groupby("Order Nbr")["HIT or MISS"].apply(
+                    lambda s: "Miss"
+                    if (s.fillna("").astype(str).str.strip().str.lower() == "miss").any()
+                    else "Hit"
+                )
+                overall_total = int(order_status.shape[0])
+                overall_hits = int((order_status == "Hit").sum())
+                overall_miss = int((order_status == "Miss").sum())
+            else:
+                overall_total = 0
+                overall_hits = 0
+                overall_miss = 0
             overall_failed = overall_miss
             overall_hit_pct = (
                 round((overall_hits / overall_total) * 100, 2) if overall_total else 0
