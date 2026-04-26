@@ -406,7 +406,7 @@
                 {% endif %}
               </thead>
               <tbody>
-                {% for row in sub.data %}
+                {% for row in sub.data|slice:":30" %}
                 <tr>
                   {% for col in sub.columns %}
                   <td class="text-nowrap" style="min-width: 4rem;">{{ row|get_item:col }}</td>
@@ -496,7 +496,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in sub.data %}
+                  {% for row in sub.data|slice:":30" %}
                   <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-company="{{ row|get_item:'Company'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}" data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
@@ -583,7 +583,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in sub.data %}
+                  {% for row in sub.data|slice:":30" %}
                   {% with rd=row|get_item:"Report Date" %}
                   <tr data-util-month="{{ rd|slice:":7" }}">
                     {% for col in sub.columns %}
@@ -637,7 +637,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in tab.raw_excel_table.data %}
+                  {% for row in tab.raw_excel_table.data|slice:":30" %}
                   {% with v=row|get_item:rdkey %}
                   <tr data-raw-report-month="{{ v|slice:":7" }}">
                     {% for col in tab.raw_excel_table.columns %}
@@ -741,7 +741,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in tab.soh_damages_table.data %}
+                  {% for row in tab.soh_damages_table.data|slice:":30" %}
                   <tr
                     data-facility="{{ row|get_item:'Facility'|default:'' }}"
                     data-create-month="{{ row|get_item:'Create Date'|slice:':7' }}"
@@ -860,7 +860,7 @@
               </tr>
             </thead>
             <tbody>
-              {% for row in sub.data %}
+              {% for row in sub.data|slice:":30" %}
               <tr data-facility="{{ row|get_item:'Facility'|default:'' }}"
                   data-company="{{ row|get_item:'Company'|default:'' }}"
                   data-status="{{ row|get_item:'Status'|default:'' }}"
@@ -945,7 +945,7 @@
                         </tr>
                       </thead>
                       <tbody>
-                        {% for row in sub.data %}
+                        {% for row in sub.data|slice:":30" %}
                         <tr>
                           {% for col in sub.columns %}
                           <td>{{ row|get_item:col }}</td>
@@ -1035,7 +1035,7 @@
                 {% endif %}
               </thead>
               <tbody>
-                {% for row in sub.data %}
+                {% for row in sub.data|slice:":30" %}
                 <tr>
                   {% for col in sub.columns %}
                   <td class="text-nowrap" style="min-width: 4rem;">{{ row|get_item:col }}</td>
@@ -1129,7 +1129,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in sub.data %}
+                  {% for row in sub.data|slice:":30" %}
                   <tr role="row" {% if sub.id == 'sub-table-inbound-detail' or sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-company="{{ row|get_item:'Company'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-status="{% with s=row|get_item:'Status' %}{% if s %}{{ s }}{% else %}{{ row|get_item:'HIT or MISS'|default:'' }}{% endif %}{% endwith %}" data-order-nbr="{% firstof row|get_item:'Shipment_nbr' row|get_item:'Order Nbr' '' %}" data-hit-miss="{% with s=row|get_item:'Status' %}{% if s %}{{ s|lower }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}{% endwith %}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
@@ -1271,7 +1271,7 @@
                 {% endif %}
               </thead>
               <tbody>
-                {% for row in sub.data %}
+                {% for row in sub.data|slice:":30" %}
                 <tr>
                   {% for col in sub.columns %}
                   <td class="text-nowrap" style="min-width: 4rem;">{{ row|get_item:col }}</td>
@@ -1361,7 +1361,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in sub.data %}
+                  {% for row in sub.data|slice:":30" %}
                   <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}" data-company="{{ row|get_item:'Company'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }} {{ row|get_item:'Order checked'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
@@ -1559,7 +1559,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in sub.data %}
+                  {% for row in sub.data|slice:":30" %}
                   <tr>
                     {% for col in sub.columns %}
                     {% if col|lower != 'status' and col|lower != 'hit or miss' and col|lower != 'hit/miss' %}
@@ -1726,7 +1726,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in sub.data %}
+                  {% for row in sub.data|slice:":30" %}
                   <tr role="row" {% if sub.filter_options %}data-facility="{{ row|get_item:sub.filter_options.facility_column|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-hit-miss="{{ row|get_item:'Status'|default:'' }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
@@ -1801,7 +1801,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {% for row in sub.data %}
+                    {% for row in sub.data|slice:":30" %}
                     <tr>
                       {% for col in sub.columns %}
                       <td>{{ row|get_item:col }}</td>
@@ -1932,7 +1932,7 @@
                 </tr>
               </thead>
               <tbody>
-                {% for row in sub.data %}
+                {% for row in sub.data|slice:":30" %}
                 {% with month_marker=row|get_item:'Month'|default_if_none:''|trim|lower %}
                 {% if month_marker == 'month' and not forloop.first %}
                 <tr class="transport-group-spacer" aria-hidden="true">
@@ -2105,7 +2105,7 @@
                 </tr>
               </thead>
               <tbody>
-                {% for row in tbl.data %}
+                {% for row in tbl.data|slice:":30" %}
                 <tr>
                   {% for col in tbl.columns %}
                   <td class="px-2 py-2">{{ row|get_item:col }}</td>
@@ -2141,7 +2141,7 @@
                 </tr>
               </thead>
               <tbody>
-                {% for row in tbl.data %}
+                {% for row in tbl.data|slice:":30" %}
                 <tr>
                   {% for col in tbl.columns %}
                   <td class="px-2 py-2">{{ row|get_item:col }}</td>
@@ -2187,7 +2187,7 @@
                 </tr>
               </thead>
               <tbody>
-                {% for row in sub.data %}
+                {% for row in sub.data|slice:":30" %}
                 <tr>
                   {% for col in sub.columns %}
                   <td>{{ row|get_item:col }}</td>
@@ -2369,7 +2369,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in sub.data %}
+                  {% for row in sub.data|slice:":30" %}
                   <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-company="{{ row|get_item:'Company'|default:'' }}" {% if sub.id == 'sub-table-outbound-detail' %}data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }} {{ row|get_item:'Order checked'|default:'' }}"{% endif %} data-status="{% if sub.id == 'sub-table-inbound-detail' %}{% with s=row|get_item:'Status' %}{% if s %}{{ s }}{% else %}{{ row|get_item:'HIT or MISS'|default:'' }}{% endif %}{% endwith %}{% elif sub.id == 'sub-table-outbound-detail' or sub.id == 'sub-table-return-detail' %}{{ row|get_item:'HIT or MISS'|default:'' }}{% else %}{{ row|get_item:'Status'|default:'' }}{% endif %}" data-month="{{ row|get_item:'Month'|default:'' }}" {% if sub.id == 'sub-table-return-detail' %}data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %} {% if sub.filter_options.customer_cities %}data-city="{{ row|get_item:'Customer City'|default:'' }}"{% endif %}{% if sub.filter_options.hit_miss %} data-hit-miss="{% if sub.id == 'sub-table-inventory-detail' %}{{ row|get_item:'Status'|default:'' }}{% elif sub.id == 'sub-table-inbound-detail' %}{% with s=row|get_item:'Status' %}{% if s %}{{ s|lower }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}{% endwith %}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}"{% endif %}{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
@@ -2576,7 +2576,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in tab.raw_excel_table.data %}
+                  {% for row in tab.raw_excel_table.data|slice:":30" %}
                   <tr>
                     {% for col in tab.raw_excel_table.columns %}
                     <td>{{ row|get_item:col }}</td>
@@ -2614,7 +2614,7 @@
               </tr>
             </thead>
             <tbody>
-              {% for row in tab.data %}
+              {% for row in tab.data|slice:":30" %}
               <tr>
                 {% for col in tab.columns %}
                 <td>{{ row|get_item:col }}</td>
@@ -3186,5 +3186,63 @@
             rs.tr.setAttribute('data-hit-miss', (status || '').toLowerCase());
           }
         }, true);
+      })();
+
+      (function limitInitialVisibleRows() {
+        var MAX_VISIBLE_ROWS = 60;
+        function isDataRow(tr) {
+          if (!tr) return false;
+          if (tr.getAttribute('data-row-limited') === '1') return true;
+          var td = tr.querySelector('td');
+          if (!td) return true;
+          var colspan = parseInt(td.getAttribute('colspan') || '0', 10);
+          if (colspan > 1 && tr.children.length === 1) {
+            return false;
+          }
+          return true;
+        }
+
+        function restorePreviouslyLimitedRows(tbody) {
+          var limited = tbody.querySelectorAll('tr[data-row-limited="1"]');
+          for (var i = 0; i < limited.length; i++) {
+            limited[i].style.display = '';
+            limited[i].removeAttribute('data-row-limited');
+          }
+        }
+
+        function applyLimit() {
+          var bodies = document.querySelectorAll('table tbody');
+          for (var b = 0; b < bodies.length; b++) {
+            var tbody = bodies[b];
+            restorePreviouslyLimitedRows(tbody);
+            var rows = tbody.querySelectorAll('tr');
+            var visibleDataRows = [];
+            for (var i = 0; i < rows.length; i++) {
+              var tr = rows[i];
+              if (!isDataRow(tr)) continue;
+              if (tr.style.display === 'none') continue;
+              visibleDataRows.push(tr);
+            }
+            for (var r = MAX_VISIBLE_ROWS; r < visibleDataRows.length; r++) {
+              visibleDataRows[r].style.display = 'none';
+              visibleDataRows[r].setAttribute('data-row-limited', '1');
+            }
+          }
+        }
+
+        var timer;
+        function scheduleApply() {
+          clearTimeout(timer);
+          timer = setTimeout(applyLimit, 60);
+        }
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', scheduleApply);
+        } else {
+          scheduleApply();
+        }
+        document.addEventListener('change', scheduleApply, true);
+        document.addEventListener('input', scheduleApply, true);
+        document.addEventListener('shown.bs.tab', scheduleApply, true);
       })();
 </script>

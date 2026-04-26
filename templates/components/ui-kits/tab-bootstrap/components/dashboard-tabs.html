@@ -188,6 +188,33 @@
   .gap-3 {
     gap: 1rem !important; /* زيادة المسافة بين الفلاتر */
   }
+
+  .dashboard-password-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.98);
+    padding: 16px;
+  }
+
+  .dashboard-password-card {
+    width: 100%;
+    max-width: 420px;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.15);
+    padding: 18px;
+  }
+
+  .dashboard-password-error {
+    color: #dc3545;
+    min-height: 20px;
+    font-size: 0.9rem;
+  }
 </style>
 <!-- Container-fluid starts  -->
 <div class="container-fluid mt-5">
@@ -389,6 +416,15 @@
           {% include 'components/ui-kits/alert/components/alert.html' %} 
           {% endif %}
           <div id="filter-message"></div>
+          <div id="dashboard-password-overlay" class="dashboard-password-overlay">
+            <div class="dashboard-password-card">
+              <h5 class="mb-2">Protected Dashboard</h5>
+              <p class="text-muted mb-3">Enter password to show tabs and data.</p>
+              <input id="dashboard-password-input" type="password" class="form-control mb-2" placeholder="Password" autocomplete="off" />
+              <button id="dashboard-password-submit" type="button" class="btn btn-primary w-100 mb-2">Unlock</button>
+              <div id="dashboard-password-error" class="dashboard-password-error"></div>
+            </div>
+          </div>
           <!-- 🔹 تبويبات علوية بشكل أنيق -->
           <!-- 🔹 تبويبات علوية -->
           <ul
@@ -449,6 +485,52 @@
 <!-- Bootstrap JS (Bundle includes Popper) -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  (function initDashboardPasswordGate() {
+    var expectedPassword = 'Tamer@97335';
+    var gateSessionKey = 'dashboard_password_unlocked';
+    function bind() {
+      var overlay = document.getElementById('dashboard-password-overlay');
+      var input = document.getElementById('dashboard-password-input');
+      var submit = document.getElementById('dashboard-password-submit');
+      var error = document.getElementById('dashboard-password-error');
+      if (!overlay || !input || !submit) return;
+
+      // Prompt only once per browser tab/session.
+      if (sessionStorage.getItem(gateSessionKey) === '1') {
+        overlay.style.display = 'none';
+        return;
+      }
+
+      function unlock() {
+        var typed = String(input.value || '').trim();
+        if (typed === expectedPassword) {
+          sessionStorage.setItem(gateSessionKey, '1');
+          overlay.style.display = 'none';
+          return;
+        }
+        if (error) error.textContent = 'Wrong password, please try again.';
+        input.value = '';
+        input.focus();
+      }
+
+      submit.addEventListener('click', unlock);
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          unlock();
+        }
+      });
+      input.focus();
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', bind);
+    } else {
+      bind();
+    }
+  })();
+</script>
 <script>
   $(document).ready(function () {
     const uploadBtn = $('#uploadBtn');
