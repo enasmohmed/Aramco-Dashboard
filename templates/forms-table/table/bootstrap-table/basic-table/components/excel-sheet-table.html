@@ -496,7 +496,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in sub.data|slice:":30" %}
+                  {% for row in sub.data %}
                   <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-company="{{ row|get_item:'Company'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}" data-shipment-nbr="{{ row|get_item:'Shipment_nbr'|default:'' }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
@@ -1129,7 +1129,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in sub.data|slice:":30" %}
+                  {% for row in sub.data %}
                   <tr role="row" {% if sub.id == 'sub-table-inbound-detail' or sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-company="{{ row|get_item:'Company'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-status="{% with s=row|get_item:'Status' %}{% if s %}{{ s }}{% else %}{{ row|get_item:'HIT or MISS'|default:'' }}{% endif %}{% endwith %}" data-order-nbr="{% firstof row|get_item:'Shipment_nbr' row|get_item:'Order Nbr' '' %}" data-hit-miss="{% with s=row|get_item:'Status' %}{% if s %}{{ s|lower }}{% else %}{{ row|get_item:'HIT or MISS'|default:''|lower }}{% endif %}{% endwith %}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
@@ -1361,7 +1361,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {% for row in sub.data|slice:":30" %}
+                  {% for row in sub.data|detail_table_rows:sub.id %}
                   <tr role="row" class="even" {% if sub.filter_options %}data-facility="{{ row|get_item:'Facility Code'|default:'' }}" data-facility-code="{{ row|get_item:'Facility Code'|default:'' }}" data-company="{{ row|get_item:'Company'|default:'' }}" data-month="{{ row|get_item:'Month'|default:'' }}" data-order-nbr="{{ row|get_item:'Order Nbr'|default:'' }} {{ row|get_item:'Order checked'|default:'' }}" data-hit-miss="{{ row|get_item:'HIT or MISS'|default:''|lower }}"{% endif %}>
                     {% for col in sub.columns %}
                     {% with value=row|get_item:col %}
@@ -3131,7 +3131,8 @@
         }
         var saveUrl = '{% url "dashboard:save_remark_status" %}';
         if (!saveUrl || saveUrl === '') return;
-        function sendSave(payload) {
+        function sendSave(payload, opts) {
+          var refreshTab = opts && opts.refreshTab;
           var xhr = new XMLHttpRequest();
           xhr.open('POST', saveUrl, true);
           xhr.setRequestHeader('Content-Type', 'application/json');
@@ -3139,7 +3140,24 @@
           xhr.setRequestHeader('Accept', 'application/json');
           xhr.onload = function() {
             if (xhr.status >= 200 && xhr.status < 300) {
-              try { var r = JSON.parse(xhr.responseText); if (r.success) return; } catch(e) {}
+              try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.success) {
+                  if (
+                    refreshTab &&
+                    (payload.tab === 'inbound' || payload.tab === 'return' || payload.tab === 'outbound') &&
+                    (payload.status || '').trim()
+                  ) {
+                    if (typeof window.invalidateCurrentTabCache === 'function') {
+                      window.invalidateCurrentTabCache();
+                    }
+                    if (typeof window.loadTabData === 'function') {
+                      window.loadTabData();
+                    }
+                  }
+                  return;
+                }
+              } catch (e) {}
             }
             console.warn('save-remark-status failed', xhr.status, xhr.responseText);
           };
@@ -3167,7 +3185,7 @@
           if (!tab || !key || !fac) return;
           var rs = findRowRemarkAndStatus(inp);
           // لو فيه dropdown للحالة في نفس الصف، ابعته مع الـremark عشان ينعكس فوراً
-          sendSave({ tab: tab, key: key, facility: fac, remark: remark, status: rs.status || '' });
+          sendSave({ tab: tab, key: key, facility: fac, remark: remark, status: rs.status || '' }, { refreshTab: false });
         }, true);
 
         document.addEventListener('change', function(e) {
@@ -3179,7 +3197,7 @@
           var status = (sel.value || '').trim();
           if (!tab || !key || !fac) return;
           var rs = findRowRemarkAndStatus(sel);
-          sendSave({ tab: tab, key: key, facility: fac, remark: rs.remark || '', status: status });
+          sendSave({ tab: tab, key: key, facility: fac, remark: rs.remark || '', status: status }, { refreshTab: true });
           // تحديث داتا-attributes للفلاتر بدون إعادة تحميل
           if (rs.tr) {
             rs.tr.setAttribute('data-status', status);
@@ -3212,8 +3230,19 @@
 
         function applyLimit() {
           var bodies = document.querySelectorAll('table tbody');
+          var skipLimitIds = {
+            'inbound-shipments-detail-table': true,
+            'return-shipments-detail-table': true,
+            'outbound-shipments-detail-table': true,
+          };
           for (var b = 0; b < bodies.length; b++) {
             var tbody = bodies[b];
+            var tbl = tbody.closest('table');
+            var tid = tbl && tbl.id ? tbl.id : '';
+            if (tid && skipLimitIds[tid]) {
+              restorePreviouslyLimitedRows(tbody);
+              continue;
+            }
             restorePreviouslyLimitedRows(tbody);
             var rows = tbody.querySelectorAll('tr');
             var visibleDataRows = [];

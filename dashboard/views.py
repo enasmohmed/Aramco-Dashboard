@@ -16,7 +16,6 @@ from django.views import View
 from .forms import ExcelUploadForm
 from django.core.cache import cache
 
-from django.views.decorators.cache import cache_control
 import json, traceback, os
 from datetime import date, timedelta
 from django.db.models import Q
@@ -2793,7 +2792,6 @@ class UploadExcelViewRoche(View):
             tab_data["selected_month"] = month_filters[0]
             return month_filters[0]
 
-    @method_decorator(cache_control(max_age=3600, public=True), name="get")
     def get(self, request):
         print("🟢 [GET] Loading main dashboard with Overview/All-in-One tabs")
         cache.clear()  # Clear cache on each load
@@ -2954,17 +2952,27 @@ class UploadExcelViewRoche(View):
                     )
                 return f"tab_resp:{norm}:{mtime}:{selected_tab}:{effective_month or ''}:{q}:{ts}"
 
+            # لا نخزّن كاش Inbound / Return / Outbound: Hit/Miss يُحدَّث من DB من غير ما يتغير ملف الإكسل أو mtime.
+            _tab_lc = (selected_tab or "").lower()
+            skip_tab_response_cache = _tab_lc in (
+                "inbound",
+                "return & refusal",
+                "outbound",
+                "total lead time performance",
+            ) or "outbound" in _tab_lc
+
             for key, func in tab_filter_map.items():
                 if key in selected_tab:
                     print(f"📂 Executing tab filter: {key}")
                     try:
                         cache_key = _tab_response_cache_key()
-                        try:
-                            cached = cache.get(cache_key)
-                            if cached is not None:
-                                return JsonResponse(cached, safe=False)
-                        except Exception:
-                            pass
+                        if not skip_tab_response_cache:
+                            try:
+                                cached = cache.get(cache_key)
+                                if cached is not None:
+                                    return JsonResponse(cached, safe=False)
+                            except Exception:
+                                pass
                         result = func()
 
                         if isinstance(result, HttpResponse):
@@ -2980,10 +2988,11 @@ class UploadExcelViewRoche(View):
                             payload = {"detail_html": result}
                         else:
                             payload = {"detail_html": str(result)}
-                        try:
-                            cache.set(cache_key, payload, timeout=86400)
-                        except Exception:
-                            pass
+                        if not skip_tab_response_cache:
+                            try:
+                                cache.set(cache_key, payload, timeout=86400)
+                            except Exception:
+                                pass
                         return JsonResponse(payload, safe=False)
 
                     except Exception as e:
@@ -5990,49 +5999,240 @@ class UploadExcelViewRoche(View):
                         "Remark": "",
                     })
 
-            # ربط ملاحظات Outbound من الأدمن (OutboundOrderRemark) حسب Order checked/Order Nbr + Facility
+            # ربط ملاحظات Outbound من الأدمن (OutboundOrderRemark) — مطابقة مرنة + * لكل المناطق؛ ثم إعادة KPI/الشارت من الصفوف النهائية (مثل Inbound).
             if detail_rows_ob:
-                unique_pairs_ob = list(
-                    dict.fromkeys(
-                        [
-                            (str(k).strip(), r.get("Facility Code"))
-                            for r in detail_rows_ob
-                            for k in (r.get("Order Nbr"), r.get("Order checked"))
-                            if k and str(k).strip() and r.get("Facility Code")
-                        ]
-                    )
-                )
-                if unique_pairs_ob:
-                    remarks_qs_ob = OutboundOrderRemark.objects.filter(
-                        order_nbr__in=[p[0] for p in unique_pairs_ob],
-                        facility__in=[p[1] for p in unique_pairs_ob],
-                    )
-                    remarks_map_ob = {
-                        (obj.order_nbr.strip(), obj.facility.strip()): (obj.remark or "", obj.status_override)
-                        for obj in remarks_qs_ob
-                    }
-                else:
-                    remarks_map_ob = {}
+                def _norm_ob_override(val):
+                    t = (str(val or "").strip().lower())
+                    return "Hit" if t == "hit" else ("Miss" if t == "miss" else "")
+
+                def _remark_fac_norm_ob(val):
+                    raw = str(val or "").strip()
+                    if not raw:
+                        return ""
+                    mapped = _norm_facility(raw)
+                    return str(mapped).strip().lower() if mapped else raw.lower()
+
+                def _is_global_facility_token_ob(val):
+                    t = str(val or "").strip().lower()
+                    return t in ("*", "all", "any", "global", "كل", "الكل")
+
+                order_keys_ob = []
+                for r in detail_rows_ob:
+                    for k in (r.get("Order Nbr"), r.get("Order checked")):
+                        ks = str(k or "").strip()
+                        if ks and ks.lower() not in ("nan", "none", "nat", ""):
+                            order_keys_ob.append(ks)
+                order_keys_ob = list(dict.fromkeys(order_keys_ob))
+
+                remarks_by_order_ob = {}
+                if order_keys_ob:
+                    for obj in OutboundOrderRemark.objects.filter(order_nbr__in=order_keys_ob).order_by(
+                        "-updated_at"
+                    ):
+                        remarks_by_order_ob.setdefault(obj.order_nbr.strip(), []).append(obj)
 
                 for row in detail_rows_ob:
-                    fc = row.get("Facility Code", "")
-                    remark_and_status = ("", None)
-                    if fc:
-                        for key in (
+                    row.setdefault("Remark", "")
+                    fc = str(row.get("Facility Code", "") or "").strip()
+                    if not fc:
+                        continue
+                    fc_key = _remark_fac_norm_ob(fc)
+                    matched_ob = None
+                    for key_try in (
+                        str(row.get("Order Nbr", "") or "").strip(),
+                        str(row.get("Order checked", "") or "").strip(),
+                    ):
+                        if not key_try or key_try.lower() in ("nan", "none", "nat", ""):
+                            continue
+                        for obj in remarks_by_order_ob.get(key_try, []):
+                            if _is_global_facility_token_ob(obj.facility):
+                                continue
+                            if _remark_fac_norm_ob(obj.facility) == fc_key:
+                                matched_ob = obj
+                                break
+                        if matched_ob:
+                            break
+                    if not matched_ob:
+                        for key_try in (
                             str(row.get("Order Nbr", "") or "").strip(),
                             str(row.get("Order checked", "") or "").strip(),
                         ):
-                            if key and key.lower() not in ("nan", "none", ""):
-                                t = remarks_map_ob.get((key, fc))
-                                if t:
-                                    remark_and_status = t
+                            if not key_try or key_try.lower() in ("nan", "none", "nat", ""):
+                                continue
+                            for obj in remarks_by_order_ob.get(key_try, []):
+                                if _is_global_facility_token_ob(obj.facility):
+                                    matched_ob = obj
                                     break
-                    if isinstance(remark_and_status, tuple):
-                        row["Remark"] = remark_and_status[0] if len(remark_and_status) > 0 else ""
-                        if len(remark_and_status) > 1 and remark_and_status[1]:
-                            row["HIT or MISS"] = (remark_and_status[1] or "").strip() or row.get("HIT or MISS", "Miss")
-                    else:
-                        row["Remark"] = remark_and_status or ""
+                            if matched_ob:
+                                break
+                    if not matched_ob:
+                        cands = []
+                        for key_try in (
+                            str(row.get("Order Nbr", "") or "").strip(),
+                            str(row.get("Order checked", "") or "").strip(),
+                        ):
+                            if not key_try:
+                                continue
+                            cands = remarks_by_order_ob.get(key_try, [])
+                            if len(cands) == 1:
+                                matched_ob = cands[0]
+                                break
+                    if not matched_ob:
+                        continue
+                    row["Remark"] = matched_ob.remark or ""
+                    ov = _norm_ob_override(matched_ob.status_override)
+                    if ov:
+                        row["HIT or MISS"] = ov
+
+                # إعادة تجميع KPI والشارت من detail_rows بعد التعديل (كان الجدول التفصيلي يتغير والملخص يبقى من الحساب القديم)
+                packed_backup_ob = {}
+                for _f in FACILITIES_OB:
+                    for _m, _d in (facility_stats.get(_f, {}).get("by_month") or {}).items():
+                        packed_backup_ob[(_f, _m)] = int((_d or {}).get("packed_qty_sum", 0) or 0)
+
+                def _row_hm_ob(r):
+                    t = (str(r.get("HIT or MISS") or "").strip().lower())
+                    return t if t in ("hit", "miss") else ""
+
+                by_fac_m_ob = {f: {} for f in FACILITIES_OB}
+                for r in detail_rows_ob:
+                    fac = str(r.get("Facility Code") or "").strip()
+                    if fac not in by_fac_m_ob:
+                        continue
+                    m = str(r.get("Month") or "").strip()
+                    if not m:
+                        continue
+                    hm = _row_hm_ob(r)
+                    if hm not in ("hit", "miss"):
+                        continue
+                    slot = by_fac_m_ob[fac].setdefault(m, {"hit": 0, "miss": 0})
+                    slot["hit" if hm == "hit" else "miss"] += 1
+
+                all_m_ob = set()
+                for f in FACILITIES_OB:
+                    all_m_ob.update(by_fac_m_ob[f].keys())
+                ordered_months_overall_ob = sorted(all_m_ob, key=lambda x: month_order_value(x))
+
+                for f in FACILITIES_OB:
+                    months_f = sorted(by_fac_m_ob[f].keys(), key=lambda x: month_order_value(x))
+                    new_by_month = {}
+                    hits_f = misses_f = 0
+                    for m in months_f:
+                        cts = by_fac_m_ob[f][m]
+                        hv = int(cts.get("hit", 0))
+                        mv = int(cts.get("miss", 0))
+                        tv = hv + mv
+                        hits_f += hv
+                        misses_f += mv
+                        hp = int(round((hv / tv) * 100)) if tv else 0
+                        pk = packed_backup_ob.get((f, m), 0)
+                        new_by_month[m] = {
+                            "total": tv,
+                            "hit": hv,
+                            "miss": mv,
+                            "hit_pct": hp,
+                            "packed_qty_sum": pk,
+                            "fulfilment": pk,
+                            "fulfilment_pct": 100.0 if pk > 0 else 0.0,
+                        }
+                    mwm = [mx for mx in months_f if new_by_month.get(mx, {}).get("miss", 0) > 0]
+                    tot_orders = hits_f + misses_f
+                    facility_stats[f] = {
+                        "total": tot_orders,
+                        "hit": hits_f,
+                        "miss": misses_f,
+                        "hit_pct": int(round((hits_f / tot_orders) * 100)) if tot_orders else 0,
+                        "fulfilment": int(
+                            round(sum(float(new_by_month[mx].get("packed_qty_sum", 0) or 0) for mx in new_by_month))
+                        ),
+                        "fulfilment_pct": 100.0
+                        if any(int(new_by_month[mx].get("packed_qty_sum", 0) or 0) > 0 for mx in new_by_month)
+                        else 0.0,
+                        "by_month": new_by_month,
+                        "ordered_months": months_f,
+                        "months_with_miss": mwm,
+                        "rows": [x for x in detail_rows_ob if str(x.get("Facility Code", "")).strip() == f],
+                    }
+
+                overall_hits = sum(
+                    1 for r in detail_rows_ob if str(r.get("HIT or MISS") or "").strip().lower() == "hit"
+                )
+                overall_miss = sum(
+                    1 for r in detail_rows_ob if str(r.get("HIT or MISS") or "").strip().lower() == "miss"
+                )
+                overall_total = overall_hits + overall_miss
+                overall_failed = overall_miss
+                overall_hit_pct = (
+                    round((overall_hits / overall_total) * 100, 2) if overall_total else 0
+                )
+                overall_miss_pct = (
+                    round((overall_miss / overall_total) * 100, 2) if overall_total else 0
+                )
+                overall_failed_pct = overall_miss_pct
+
+                chart_data = []
+                chart_data_on_time = []
+                chart_data_order_fulfilment = []
+                if ordered_months_overall_ob:
+                    for f in FACILITIES_OB:
+                        stats_f = facility_stats.get(f, {})
+                        by_month = stats_f.get("by_month", {}) or {}
+                        data_points = [
+                            {"label": m, "y": by_month.get(m, {}).get("hit_pct", 0)}
+                            for m in ordered_months_overall_ob
+                        ]
+                        ds_on_time = {
+                            "type": "column",
+                            "name": f"{f} On time (≤1d) %",
+                            "color": facility_colors_ob.get(f, "#007fa3"),
+                            "valueSuffix": "%",
+                            "related_table": "sub-table-outbound-facilities-hit",
+                            "dataPoints": data_points,
+                        }
+                        chart_data.append(ds_on_time)
+                        chart_data_on_time.append(ds_on_time)
+                        data_points_ful = [
+                            {"label": m, "y": by_month.get(m, {}).get("fulfilment_pct", 0)}
+                            for m in ordered_months_overall_ob
+                        ]
+                        ds_fulfilment = {
+                            "type": "column",
+                            "name": f"{f} Order Fulfilment %",
+                            "color": facility_colors_ob.get(f, "#28a745"),
+                            "valueSuffix": "%",
+                            "related_table": "sub-table-outbound-facilities-hit",
+                            "dataPoints": data_points_ful,
+                        }
+                        chart_data.append(ds_fulfilment)
+                        chart_data_order_fulfilment.append(ds_fulfilment)
+
+                if ordered_months_overall_ob:
+                    pivot_cols_ob = ["KPI"]
+                    for m in ordered_months_overall_ob:
+                        pivot_cols_ob.append(f"{m} Hit")
+                        pivot_cols_ob.append(f"{m} Miss")
+                    summary_rows_ob = []
+                    for f in FACILITIES_OB:
+                        stats_f = facility_stats.get(f, {})
+                        by_month = stats_f.get("by_month", {}) or {}
+                        row_p = {"KPI": f}
+                        for m in ordered_months_overall_ob:
+                            b = by_month.get(m, {}) or {}
+                            row_p[f"{m} Hit"] = b.get("hit", 0)
+                            row_p[f"{m} Miss"] = b.get("miss", 0)
+                        summary_rows_ob.append(row_p)
+                    facility_tables = [
+                        {
+                            "id": "sub-table-outbound-facilities-hit",
+                            "title": "On time outbound (≤1d; excl. Fri, 22 Feb, Mar 19–24 Eid)",
+                            "columns": pivot_cols_ob,
+                            "data": summary_rows_ob,
+                            "chart_data": [],
+                            "full_width": False,
+                            "facility_name": "All Facilities",
+                        }
+                    ]
+
             facility_code_options = sorted(
                 set(str(row.get("Facility Code", "")).strip() for row in detail_rows_ob if row.get("Facility Code") and str(row.get("Facility Code", "")).strip())
             )
@@ -7285,6 +7485,11 @@ class UploadExcelViewRoche(View):
                         return str(mapped).strip().lower()
                     return raw.lower()
 
+                def _is_global_facility_token(val):
+                    """* أو ALL = تطبيق التعديل على رقم الشحنة في كل المناطق (ثابت بعد كل رفع إكسل)."""
+                    t = str(val or "").strip().lower()
+                    return t in ("*", "all", "any", "global", "كل", "الكل")
+
                 shipment_nbrs = list(
                     dict.fromkeys(
                         str(r.get("Shipment_nbr", "")).strip()
@@ -7294,7 +7499,9 @@ class UploadExcelViewRoche(View):
                 )
                 remarks_by_shipment = {}
                 if shipment_nbrs:
-                    for obj in InboundShipmentRemark.objects.filter(shipment_nbr__in=shipment_nbrs):
+                    for obj in InboundShipmentRemark.objects.filter(shipment_nbr__in=shipment_nbrs).order_by(
+                        "-updated_at"
+                    ):
                         remarks_by_shipment.setdefault(obj.shipment_nbr.strip(), []).append(obj)
                 for row in detail_rows:
                     sn = str(row.get("Shipment_nbr", "")).strip()
@@ -7304,12 +7511,20 @@ class UploadExcelViewRoche(View):
                         continue
                     fc_key = _remark_facility_norm(fc)
                     matched = None
+                    # 1) مطابقة منطقة الصف (أولوية على القاعدة العامة)
                     for obj in remarks_by_shipment.get(sn, []):
+                        if _is_global_facility_token(obj.facility):
+                            continue
                         if _remark_facility_norm(obj.facility) == fc_key:
                             matched = obj
                             break
-                    # Fallback: if only one admin record exists for this shipment, apply it
-                    # (helps when facility label format changes between uploads).
+                    # 2) قاعدة عامة: facility = * أو ALL → نفس الرقم في كل المناطق
+                    if not matched:
+                        for obj in remarks_by_shipment.get(sn, []):
+                            if _is_global_facility_token(obj.facility):
+                                matched = obj
+                                break
+                    # 3) لو سجل واحد فقط للشحنة (لا يوجد تضارب مناطق)
                     if not matched:
                         candidates = remarks_by_shipment.get(sn, [])
                         if len(candidates) == 1:
@@ -11673,6 +11888,11 @@ def save_remark_status(request):
                     obj.save(update_fields=["remark", "status_override", "updated_at"])
                 else:
                     obj.save(update_fields=["remark", "updated_at"])
+            if status:
+                try:
+                    cache.clear()
+                except Exception:
+                    pass
             return JsonResponse({"success": True})
         if tab == "outbound":
             obj, created = OutboundOrderRemark.objects.get_or_create(
@@ -11687,6 +11907,11 @@ def save_remark_status(request):
                     obj.save(update_fields=["remark", "status_override", "updated_at"])
                 else:
                     obj.save(update_fields=["remark", "updated_at"])
+            if status:
+                try:
+                    cache.clear()
+                except Exception:
+                    pass
             return JsonResponse({"success": True})
         return JsonResponse({"success": False, "error": "tab must be inbound, outbound, or return"}, status=400)
     except Exception as e:

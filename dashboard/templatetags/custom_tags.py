@@ -483,3 +483,26 @@ def normalize(value):
     if not value:
         return ""
     return value.strip().lower()
+
+
+# جداول Outbound التفصيلية: عرض كل الصفوف؛ باقي جداول full_width تبقى بمعاينة 30 صف
+_DETAIL_TABLE_SHOW_ALL_IDS = frozenset(
+    {"sub-table-outbound-detail", "sub-table-outbound-full-sheet"}
+)
+
+
+@register.filter
+def detail_table_rows(data, sub_id):
+    """
+    يحدد صفوف جدول التفاصيل للعرض: Outbound Shipments Detail يعرض كل المناطق دون حد 30 صف.
+    """
+    if not data:
+        return []
+    sid = str(sub_id or "").strip()
+    if sid in _DETAIL_TABLE_SHOW_ALL_IDS:
+        return list(data) if not isinstance(data, list) else data
+    try:
+        return data[:30]
+    except TypeError:
+        seq = list(data)
+        return seq[:30]

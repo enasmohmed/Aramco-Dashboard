@@ -1099,6 +1099,7 @@
       $.ajax({
         url: "{% url 'dashboard:upload_excel' %}",
         method: "GET",
+        cache: false,
         headers: { "X-Requested-With": "XMLHttpRequest" },
         data: ajaxData,
         beforeSend: function () {
@@ -1146,6 +1147,7 @@
         $.ajax({
           url: "{% url 'dashboard:upload_excel' %}",
           method: "GET",
+          cache: false,
           headers: { "X-Requested-With": "XMLHttpRequest" },
           data: preloadData,
           success: function (data) {
@@ -1156,6 +1158,14 @@
     }
 
     window.loadTabData = loadTabData;
+    window.invalidateCurrentTabCache = function () {
+      try {
+        const month = $("#month-select").val() || "";
+        const quarter = selectedQuarter || "";
+        const key = buildTabCacheKey(selectedTab, month, quarter);
+        localStorage.removeItem(key);
+      } catch (e) {}
+    };
     window.reinitializeScripts = reinitializeScripts;
 
     // 🔹 التعامل مع ضغط التاب

@@ -18,6 +18,8 @@ class InboundShipmentRemarkAdmin(admin.ModelAdmin):
     list_filter = ("facility",)
     search_fields = ("shipment_nbr", "facility", "remark")
     ordering = ("-updated_at",)
+    fieldsets = ((None, {"fields": ("shipment_nbr", "facility", "remark", "status_override", "updated_at")}),)
+    readonly_fields = ("updated_at",)
 
     def remark_short(self, obj):
         return (obj.remark[:50] + "…") if obj.remark and len(obj.remark) > 50 else (obj.remark or "")
@@ -32,6 +34,8 @@ class OutboundOrderRemarkAdmin(admin.ModelAdmin):
     list_filter = ("facility",)
     search_fields = ("order_nbr", "facility", "remark")
     ordering = ("-updated_at",)
+    fieldsets = ((None, {"fields": ("order_nbr", "facility", "remark", "status_override", "updated_at")}),)
+    readonly_fields = ("updated_at",)
 
     def remark_short(self, obj):
         return (obj.remark[:50] + "…") if obj.remark and len(obj.remark) > 50 else (obj.remark or "")
