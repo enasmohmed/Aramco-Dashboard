@@ -359,6 +359,9 @@
               <button id="export-excel-btn" class="btn btn-download-excel ms-3">
                 📥 Download Excel
               </button>
+              <button id="export-pdf-btn" class="btn btn-download-excel ms-2" title="Download current tab as PDF">
+                📄 Download PDF
+              </button>
 <!--              <a href="?action=clear_excel" class="btn btn-outline-secondary ms-2" title="Clear data to see upload message again">-->
 <!--                🗑️ Clear Data-->
 <!--              </a>-->
@@ -485,6 +488,9 @@
 <!-- Bootstrap JS (Bundle includes Popper) -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<!-- مكتبات تحويل التاب إلى PDF -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
   (function initDashboardPasswordGate() {
     var expectedPassword = 'Tamer@97335';
@@ -1466,6 +1472,95 @@
       var url = window.location.pathname + "?" + params.toString();
       window.open(url, "_blank", "noopener,noreferrer");
     });
+  })();
+</script>
+
+<!-- 📄 تنزيل التاب الحالي كـ PDF -->
+<script>
+  (function () {
+    var pdfBtn = document.getElementById("export-pdf-btn");
+    if (!pdfBtn) return;
+
+    function getActiveTabName() {
+      var activeBtn = document.querySelector('#dashboard-tabs button.nav-link.active');
+      var name = activeBtn ? (activeBtn.textContent || '').trim() : 'dashboard';
+      return name || 'dashboard';
+    }
+
+    function sanitizeFileName(name) {
+      // اسمح بالحروف العربية/الإنجليزية والأرقام والشرطة، واستبدل غيرها بشرطة سفلية
+      try {
+        return name.replace(/[^\p{L}\p{N}_\-]+/gu, '_').replace(/^_+|_+$/g, '') || 'tab';
+      } catch (e) {
+        return name.replace(/[^A-Za-z0-9_\-]+/g, '_') || 'tab';
+      }
+    }
+
+    async function downloadCurrentTabAsPdf() {
+      if (typeof html2canvas === 'undefined' || !window.jspdf) {
+        alert('PDF libraries are still loading, please try again in a moment.');
+        return;
+      }
+
+      var content = document.getElementById('tab-content');
+      if (!content) {
+        alert('No tab content to export.');
+        return;
+      }
+
+      var originalHtml = pdfBtn.innerHTML;
+      pdfBtn.disabled = true;
+      pdfBtn.innerHTML = '⏳ Generating PDF...';
+
+      try {
+        // اسمح للـ DOM/الرسوم بإنهاء الرسم قبل اللقطة
+        await new Promise(function (r) { setTimeout(r, 150); });
+
+        var canvas = await html2canvas(content, {
+          scale: 2,
+          useCORS: true,
+          allowTaint: false,
+          backgroundColor: '#ffffff',
+          scrollX: 0,
+          scrollY: -window.scrollY,
+          windowWidth: content.scrollWidth,
+          windowHeight: content.scrollHeight
+        });
+
+        var jsPDF = window.jspdf.jsPDF;
+        var pdf = new jsPDF('p', 'mm', 'a4');
+        var pageWidth = pdf.internal.pageSize.getWidth();
+        var pageHeight = pdf.internal.pageSize.getHeight();
+
+        var imgWidth = pageWidth;
+        var imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+        var imgData = canvas.toDataURL('image/png');
+        var heightLeft = imgHeight;
+        var position = 0;
+
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+
+        while (heightLeft > 0) {
+          position = heightLeft - imgHeight; // قيمة سالبة لإكمال الصورة في صفحة جديدة
+          pdf.addPage();
+          pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+          heightLeft -= pageHeight;
+        }
+
+        var fileName = sanitizeFileName(getActiveTabName()) + '.pdf';
+        pdf.save(fileName);
+      } catch (err) {
+        console.error('PDF export error:', err);
+        alert('Failed to generate PDF: ' + (err && err.message ? err.message : err));
+      } finally {
+        pdfBtn.disabled = false;
+        pdfBtn.innerHTML = originalHtml;
+      }
+    }
+
+    pdfBtn.addEventListener('click', downloadCurrentTabAsPdf);
   })();
 </script>
 

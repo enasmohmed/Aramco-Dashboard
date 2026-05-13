@@ -2,16 +2,16 @@
   "/media/enas/01DCA27B13BCF520/Data/projects/Data Anlysis/aramco_project/media/excel_uploads/latest.xlsx": {
     "inbound_kpi": {
       "number_of_vehicles": 0,
-      "number_of_shipments": 195,
-      "number_of_pallets": 4709,
-      "total_quantity": 60239,
-      "total_quantity_display": "60.2k",
+      "number_of_shipments": 207,
+      "number_of_pallets": 4990,
+      "total_quantity": 66646,
+      "total_quantity_display": "66.6k",
       "number_of_return_shipments": 12
     },
     "pending_shipments": [],
     "outbound_kpi": {
-      "released_orders": 473,
-      "picked_orders": 31146,
+      "released_orders": 574,
+      "picked_orders": 36914,
       "number_of_pallets": 0
     },
     "outbound_kpi_keys_from_sheet": [
@@ -33,6 +33,6 @@
       "total_lpns": 0,
       "utilization_pct": ""
     },
-    "_file_mtime": 1777879773.8577373
+    "_file_mtime": 1778686631.762701
   }
 }
